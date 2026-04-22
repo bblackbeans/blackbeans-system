@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 
 RUN addgroup --system django && adduser --system --ingroup django django
 COPY --from=builder --chown=django:django /app /app
+RUN mkdir -p /app/staticfiles /app/blackbeans_api/media \
+  && chown -R django:django /app
 USER django
 
 EXPOSE 5000
