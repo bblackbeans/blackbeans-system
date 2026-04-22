@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BlackBeans - UX Design Directions</title>
+  <style>
+    :root {
+      --brand: #da9330;
+      --neutral-900: #141312;
+      --neutral-500: #b1b0b1;
+      --neutral-50: #f4f0ed;
+      --surface: #ffffff;
+      --success: #2e7d32;
+      --warning: #da9330;
+      --error: #c62828;
+      --info: #1565c0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Roboto, Arial, sans-serif;
+      color: var(--neutral-900);
+      background: var(--neutral-50);
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    h1, h2, h3 { margin: 0; }
+    .header {
+      padding: 16px;
+      border: 1px solid #ddd;
+      background: var(--surface);
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .d1 .card-head { background: linear-gradient(90deg, #141312 0%, #2b2622 100%); color: #f4f0ed; }
+    .d2 .card-head { background: linear-gradient(90deg, #f4f0ed 0%, #ece4de 100%); color: #141312; }
+    .d3 .card-head { background: linear-gradient(90deg, #da9330 0%, #c17f23 100%); color: #141312; }
+    .d4 .card-head { background: linear-gradient(90deg, #ffffff 0%, #f5f5f5 100%); color: #141312; }
+    .d5 .card-head { background: linear-gradient(90deg, #2a241f 0%, #141312 100%); color: #f4f0ed; }
+    .d6 .card-head { background: linear-gradient(90deg, #141312 0%, #3a2d1d 100%); color: #f4f0ed; }
+    .card-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .tag {
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: #f0f0f0;
+    }
+    .mock {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 12px;
+      min-height: 220px;
+    }
+    .sidebar {
+      background: #1f1d1b;
+      color: #eee;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .content {
+      border: 1px solid #eee;
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #f3f3f3;
+    }
+    .pill.brand { background: #f8ede0; color: #915f15; }
+    .pill.ok { background: #e8f4ea; color: #2e7d32; }
+    .pill.warn { background: #f8ede0; color: #915f15; }
+    .pill.err { background: #fbeaea; color: #a42323; }
+    .rows { display: grid; gap: 6px; }
+    .row {
+      border: 1px solid #eee;
+      border-radius: 6px;
+      padding: 6px;
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+    }
+    .caption { padding: 0 16px 14px; font-size: 12px; color: #555; line-height: 1.4; }
+    .legend {
+      margin-top: 14px;
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      color: #444;
+    }
+    .palette {
+      margin: 14px 0 18px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .swatch {
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      overflow: hidden;
+      background: #fff;
+      font-size: 11px;
+    }
+    .swatch .tone {
+      height: 28px;
+    }
+    .swatch .meta {
+      padding: 6px 8px;
+      line-height: 1.3;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>BlackBeans - Design Directions (Step 9)</h1>
+      <p>Exploracao visual para interface enterprise densa com painel de tarefa como interacao principal.</p>
+    </div>
+
+    <div class="palette">
+      <div class="swatch"><div class="tone" style="background:#DA9330"></div><div class="meta"><strong>Brand Primary</strong><br>#DA9330</div></div>
+      <div class="swatch"><div class="tone" style="background:#141312"></div><div class="meta"><strong>Neutral 900</strong><br>#141312</div></div>
+      <div class="swatch"><div class="tone" style="background:#B1B0B1"></div><div class="meta"><strong>Neutral 500</strong><br>#B1B0B1</div></div>
+      <div class="swatch"><div class="tone" style="background:#F4F0ED"></div><div class="meta"><strong>Neutral 50</strong><br>#F4F0ED</div></div>
+    </div>
+
+    <div class="grid">
+      <section class="card d1">
+        <div class="card-head"><h2>Direcao 1 - Focused Ops</h2><span class="tag">Densa / Equilibrada</span></div>
+        <div class="mock">
+          <div class="sidebar">Navegacao<br>Dashboard<br>Projetos<br>Tarefas<br>Capacidade<br>Alertas</div>
+          <div class="content">
+            <div class="top"><strong>Projeto ACME / Board Producao</strong><span class="pill brand">Risk +2</span></div>
+            <div class="rows">
+              <div class="row"><span>Task 121 - Ajustar cronograma</span><span class="pill warn">Atrasado</span></div>
+              <div class="row"><span>Task 143 - Revisar briefing</span><span class="pill ok">Em dia</span></div>
+              <div class="row"><span>Task 156 - Validar entrega</span><span class="pill err">Bloqueada</span></div>
+              <div class="row"><span>Assistente</span><span class="pill">Sugerir redistribuicao</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Muita legibilidade operacional, foco em priorizacao por risco e status, com recomendacoes explicitas de assistente.</div>
+      </section>
+
+      <section class="card d2">
+        <div class="card-head"><h2>Direcao 2 - Analitica Modular</h2><span class="tag">Dados primeiro</span></div>
+        <div class="mock">
+          <div class="sidebar">KPI<br>Prazos<br>Tempo<br>Retrabalho<br>Times</div>
+          <div class="content">
+            <div class="top"><strong>Painel operacional</strong><span class="pill">Semana atual</span></div>
+            <div class="rows">
+              <div class="row"><span>On-time</span><span class="pill ok">78%</span></div>
+              <div class="row"><span>Capacidade livre</span><span class="pill">14h</span></div>
+              <div class="row"><span>Tarefas criticas</span><span class="pill err">9</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Excelente para coordenador; maximiza decisao rapida por metricas.</div>
+      </section>
+
+      <section class="card d3">
+        <div class="card-head"><h2>Direcao 3 - Task Drawer Pro</h2><span class="tag">Painel de tarefa central</span></div>
+        <div class="mock">
+          <div class="sidebar">Lista<br>Kanban<br>Timeline<br>Notificacoes</div>
+          <div class="content">
+            <div class="top"><strong>Drawer: Task 156</strong><span class="pill brand">Alta prioridade</span></div>
+            <div class="rows">
+              <div class="row"><span>Status</span><span class="pill warn">Em revisao</span></div>
+              <div class="row"><span>Timer</span><span class="pill">02:31:12</span></div>
+              <div class="row"><span>Regras</span><span class="pill err">Bloqueio critico ativo</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Alinha diretamente com o momento principal de UX definido no Step 7.</div>
+      </section>
+
+      <section class="card d4">
+        <div class="card-head"><h2>Direcao 4 - Minimal Enterprise</h2><span class="tag">Baixo ruido</span></div>
+        <div class="mock">
+          <div class="sidebar">Home<br>Operacao<br>Governanca<br>Config</div>
+          <div class="content">
+            <div class="top"><strong>Fila de tarefas</strong><span class="pill">Compact mode</span></div>
+            <div class="rows">
+              <div class="row"><span>Campanha Maio</span><span class="pill warn">Risco medio</span></div>
+              <div class="row"><span>Assets Semana 17</span><span class="pill ok">OK</span></div>
+              <div class="row"><span>Relatorio cliente</span><span class="pill">Aguardando</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Visual mais limpo; reduz fadiga cognitiva sem perder densidade.</div>
+      </section>
+
+      <section class="card d5">
+        <div class="card-head"><h2>Direcao 5 - Alert-Driven Ops</h2><span class="tag">Assistente explicito</span></div>
+        <div class="mock">
+          <div class="sidebar">Inbox<br>Alertas<br>Acoes<br>Historico</div>
+          <div class="content">
+            <div class="top"><strong>Central de alertas</strong><span class="pill brand">12 nao lidos</span></div>
+            <div class="rows">
+              <div class="row"><span>Tarefa atrasada + dependente</span><span class="pill err">Agir agora</span></div>
+              <div class="row"><span>WIP excedido</span><span class="pill warn">Rebalancear</span></div>
+              <div class="row"><span>Permissao alterada</span><span class="pill">Auditar</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Prioriza notificacao acionavel e orientacao de proximo passo.</div>
+      </section>
+
+      <section class="card d6">
+        <div class="card-head"><h2>Direcao 6 - Board-Centric</h2><span class="tag">Kanban forte</span></div>
+        <div class="mock">
+          <div class="sidebar">Boards<br>Grupos<br>Filtros<br>Views</div>
+          <div class="content">
+            <div class="top"><strong>Kanban de execucao</strong><span class="pill">WIP por grupo</span></div>
+            <div class="rows">
+              <div class="row"><span>Backlog</span><span class="pill">14</span></div>
+              <div class="row"><span>Doing</span><span class="pill warn">7 / lim 6</span></div>
+              <div class="row"><span>Done</span><span class="pill ok">22</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Mais familiar para times de entrega, com agilidade de movimentacao.</div>
+      </section>
+    </div>
+
+    <div class="legend">
+      <strong>Como avaliar:</strong>
+      <span>1) Qual direcao apoia melhor o painel de tarefa como centro da operacao?</span>
+      <span>2) Qual equilibra melhor densidade enterprise e clareza?</span>
+      <span>3) Qual expressa melhor a marca (preto/caramelo/cinza) sem perder contraste funcional?</span>
+    </div>
+  </div>
+</body>
+</html>

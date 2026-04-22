@@ -1,0 +1,7 @@
+# PostgreSQL
+# ------------------------------------------------------------------------------
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=blackbeans_api
+POSTGRES_USER=hvvsYPqDiIEGUHEWGLpbuSxMBEMIavCV
+POSTGRES_PASSWORD=X1Q4I3RKu56unkvCpveaFFfszza9rBuGST4uxle5SmRcIlS6ifqXst2ccnGW4YkH

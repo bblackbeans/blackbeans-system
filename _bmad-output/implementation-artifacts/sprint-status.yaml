@@ -1,0 +1,120 @@
+# generated: 2026-04-15T00:00:00Z
+# last_updated: 2026-04-15T00:00:00Z
+# project: blackbeans-system
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/kaue-ronald/Área de trabalho/blackbeans-system/_bmad-output/implementation-artifacts
+#
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-15T00:00:00Z
+last_updated: 2026-04-21T01:45:00Z
+project: blackbeans-system
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/kaue-ronald/Área de trabalho/blackbeans-system/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: done
+  1-1-setup-inicial-do-projeto-a-partir-de-starter-template: done
+  1-2-login-do-administrador-com-jwt-access-refresh: done
+  1-3-verificacao-de-2fa-obrigatoria-para-admins: done
+  1-4-gestao-de-usuarios-e-vinculo-com-colaborador: done
+  1-5-gestao-de-colaborador-departamento-e-perfil-proprio: done
+  1-6-painel-rbac-por-escopo-com-resolucao-de-conflitos: done
+  1-7-aplicacao-de-permissoes-em-lote-com-auditoria-completa: done
+  epic-1-retrospective: optional
+
+  epic-2: done
+  2-1-crud-de-clientes-com-listagem-e-filtros-por-status: done
+  2-2-detalhe-de-cliente-com-estatisticas-consolidadas: done
+  2-3-crud-de-workspaces-com-associacao-opcional-a-cliente: done
+  2-4-crud-de-portfolios-vinculados-a-workspace: done
+  2-5-crud-de-projetos-vinculados-a-cliente-e-ou-portfolio: done
+  2-6-atualizacao-de-status-e-cronograma-real-de-projetos: done
+  2-7-calculo-e-exibicao-de-progresso-e-risco-de-projeto: done
+  2-8-alternancia-rapida-de-status-de-cliente-por-endpoint-dedicado: done
+  epic-2-retrospective: optional
+
+  epic-3: done
+  3-1-criacao-de-board-vinculado-ao-projeto: done
+  3-2-gestao-de-grupos-no-board-criar-editar-excluir-reordenar-e-wip: done
+  3-3-visualizacao-de-board-em-lista-kanban-e-timeline: done
+  3-4-criacao-e-edicao-de-tarefas-com-atributos-operacionais: done
+  3-5-atribuicao-de-responsavel-e-filtro-de-minhas-tarefas: done
+  3-6-dependencias-entre-tarefas-e-recalculo-de-datas: done
+  3-7-atualizacao-de-status-pelo-taskdrawerpanel-com-bloqueios-claros: done
+  3-8-comentarios-contextuais-e-anexos-na-tarefa: done
+  3-9-historico-de-atividade-e-progresso-do-board: done
+  epic-3-retrospective: optional
+
+  epic-4: done
+  4-1-iniciar-pausar-e-retomar-cronometro-de-tarefa: done
+  4-2-concluir-tarefa-com-encerramento-de-apontamento: done
+  4-3-editar-e-excluir-logs-de-sessao-de-tempo: done
+  4-4-consolidacao-de-tempo-por-tarefa-para-analise-operacional: done
+  epic-4-retrospective: optional
+
+  epic-5: done
+  5-1-notificacao-por-designacao-de-responsavel: done
+  5-2-notificacao-de-conclusao-para-usuarios-relevantes: done
+  5-3-notificacoes-assincronas-de-atraso-e-prazo-proximo: done
+  5-4-central-de-notificacoes-com-marcacao-de-leitura: done
+  5-5-contador-de-notificacoes-nao-lidas: done
+  epic-5-retrospective: optional
+
+  epic-6: done
+  6-1-registro-de-eventos-crud-criticos: done
+  6-2-registro-de-eventos-de-autenticacao: done
+  6-3-registro-de-eventos-de-controle-de-tempo: done
+  6-4-dashboard-e-listagem-filtravel-de-logs: done
+  6-5-endpoints-crud-e-de-acoes-especificas-para-entidades-principais: done
+  6-6-endpoints-de-estatisticas-para-projeto-portfolio-e-workspace: done
+  6-7-endpoint-de-health-check-para-monitoramento: done
+  epic-6-retrospective: done
+
+  epic-7: done
+  7-1-fundacao-visual-do-frontend-com-ant-design-e-app-shell: done
+  7-2-login-jwt-e-verificacao-2fa-no-frontend: done
+  7-3-dashboard-operacional-com-filtros-e-kpis: done
+  7-4-lista-de-tarefas-com-filtros-e-acoes-rapidas: done
+  7-5-task-drawer-panel-com-status-tempo-e-comentarios: done
+  7-6-central-de-notificacoes-e-contador-nao-lido: done
+  7-7-modulo-de-governanca-com-matriz-e-conflitos: done
+  7-8-modulo-de-auditoria-dashboard-e-listagem: done
+  7-9-telas-de-estatisticas-por-workspace-portfolio-e-projeto: done
+  7-10-hardening-responsivo-e-acessibilidade-wcag-aa: done
+  7-11-integracao-operacional-com-kanban-e-cruds-assistidos: done
+  7-12-crud-visual-com-edicao-e-remocao-de-entidades-operacionais: done
+  7-13-taskdrawer-avancado-e-tratamento-global-de-erros-no-front: done
+  7-14-hardening-final-com-filtros-persistentes-e-checklist-de-homologacao: done
+  7-15-modais-padrao-e-ativacao-2fa-com-qr-no-perfil: done
+  7-16-kanban-drag-and-drop-e-eliminacao-de-prompts-nativos: done
+  epic-7-retrospective: optional

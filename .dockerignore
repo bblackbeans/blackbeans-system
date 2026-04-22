@@ -1,0 +1,15 @@
+.git
+.venv
+.venv-tools
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/.next
+**/dist
+**/build
+_bmad
+_bmad-output
+docs
+*.log
