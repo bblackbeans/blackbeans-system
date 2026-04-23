@@ -22,6 +22,8 @@ WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 ENV DJANGO_SETTINGS_MODULE="config.settings.production"
 ENV PYTHONUNBUFFERED=1
+ENV HOME="/tmp"
+ENV XDG_CACHE_HOME="/tmp/.cache"
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
   libpq-dev \
