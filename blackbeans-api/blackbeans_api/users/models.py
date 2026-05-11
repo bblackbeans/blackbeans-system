@@ -110,6 +110,28 @@ class CollaboratorDepartmentLink(models.Model):
         return f"{self.collaborator_id} -> {self.department_id}"
 
 
+class UserWorkspaceAccess(models.Model):
+    """Areas de trabalho explicitamente liberadas para um usuario (tipicamente colaborador)."""
+
+    user = ForeignKey(User, on_delete=CASCADE, related_name="workspace_access_entries")
+    workspace = ForeignKey(
+        "governance.Workspace",
+        on_delete=CASCADE,
+        related_name="user_access_entries",
+    )
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("User workspace access")
+        verbose_name_plural = _("User workspace accesses")
+        constraints = [
+            UniqueConstraint(fields=["user", "workspace"], name="uniq_user_workspace_access"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} -> {self.workspace_id}"
+
+
 class UserCollaboratorLink(models.Model):
     """Vinculo ativo/inativo entre usuario Django e colaborador (1:1 ativo por lado)."""
 
