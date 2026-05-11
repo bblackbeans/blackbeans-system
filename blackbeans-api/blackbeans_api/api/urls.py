@@ -119,12 +119,12 @@ urlpatterns = [
         MeCollaboratorProfileView.as_view(),
         name="me-collaborator-profile",
     ),
-    path("me", MeView.as_view(), name="me"),
     path(
         "me/workspace-access",
         MeWorkspaceAccessView.as_view(),
         name="me-workspace-access",
     ),
+    path("me", MeView.as_view(), name="me"),
     path(
         "permissions/bulk/preview",
         PermissionBulkPreviewView.as_view(),

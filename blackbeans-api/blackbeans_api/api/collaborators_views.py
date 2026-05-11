@@ -236,13 +236,7 @@ class MeCollaboratorProfileView(APIView):
         correlation_id = get_correlation_id(request)
         ulink = self._active_link(request)
         if ulink is None:
-            return error_response(
-                correlation_id=correlation_id,
-                code="collaborator_profile_not_found",
-                message="Nenhum perfil de colaborador vinculado a este usuario.",
-                details={},
-                http_status=status.HTTP_404_NOT_FOUND,
-            )
+            return success_response(correlation_id=correlation_id, data={"profile": None})
 
         collaborator = ulink.collaborator
         dept = _active_department_for(collaborator)
