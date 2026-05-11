@@ -31,6 +31,7 @@ from blackbeans_api.api.operations_views import TaskAssigneeView
 from blackbeans_api.api.operations_views import TaskAttachmentsView
 from blackbeans_api.api.operations_views import TaskCompleteView
 from blackbeans_api.api.operations_views import TaskCommentsView
+from blackbeans_api.api.operations_views import TaskCommentDetailView
 from blackbeans_api.api.operations_views import TaskDependenciesView
 from blackbeans_api.api.operations_views import TaskDetailView
 from blackbeans_api.api.operations_views import TaskListCreateView
@@ -53,6 +54,7 @@ from blackbeans_api.api.operations_views import WorkspaceStatsView
 from blackbeans_api.api.operations_views import WorkspaceDetailView
 from blackbeans_api.api.operations_views import WorkspaceListCreateView
 from blackbeans_api.api.collaborators_views import MeCollaboratorProfileView
+from blackbeans_api.api.collaborators_views import MeView
 from blackbeans_api.api.permissions_views import PermissionAssignmentsView
 from blackbeans_api.api.permissions_views import PermissionBulkApplyView
 from blackbeans_api.api.permissions_views import PermissionBulkPreviewView
@@ -64,6 +66,8 @@ from blackbeans_api.api.users_views import AdminUserCollaboratorLinkDetailView
 from blackbeans_api.api.users_views import AdminUserCollaboratorLinkView
 from blackbeans_api.api.users_views import AdminUserDetailView
 from blackbeans_api.api.users_views import AdminUserListCreateView
+from blackbeans_api.api.users_views import AdminUserWorkspaceAccessView
+from blackbeans_api.api.users_views import MeWorkspaceAccessView
 
 urlpatterns = [
     path("clients", ClientsListCreateView.as_view(), name="clients-list-create"),
@@ -92,6 +96,7 @@ urlpatterns = [
     path("tasks/<uuid:task_id>/complete", TaskCompleteView.as_view(), name="tasks-complete"),
     path("tasks/<uuid:task_id>/time-summary", TaskTimeSummaryView.as_view(), name="tasks-time-summary"),
     path("tasks/<uuid:task_id>/comments", TaskCommentsView.as_view(), name="tasks-comments"),
+    path("tasks/<uuid:task_id>/comments/<uuid:comment_id>", TaskCommentDetailView.as_view(), name="tasks-comments-detail"),
     path("tasks/<uuid:task_id>/attachments", TaskAttachmentsView.as_view(), name="tasks-attachments"),
     path("tasks/<uuid:task_id>/activity", TaskActivityView.as_view(), name="tasks-activity"),
     path("time-logs", TimeLogsListView.as_view(), name="time-logs-list"),
@@ -113,6 +118,12 @@ urlpatterns = [
         "me/collaborator-profile",
         MeCollaboratorProfileView.as_view(),
         name="me-collaborator-profile",
+    ),
+    path("me", MeView.as_view(), name="me"),
+    path(
+        "me/workspace-access",
+        MeWorkspaceAccessView.as_view(),
+        name="me-workspace-access",
     ),
     path(
         "permissions/bulk/preview",
@@ -173,6 +184,11 @@ urlpatterns = [
         "collaborators",
         AdminCollaboratorListCreateView.as_view(),
         name="collaborators-list-create",
+    ),
+    path(
+        "users/<int:user_id>/workspace-access",
+        AdminUserWorkspaceAccessView.as_view(),
+        name="users-workspace-access",
     ),
     path(
         "users/<int:user_id>/collaborator-links/<uuid:collaborator_id>",

@@ -23,14 +23,17 @@ from blackbeans_api.api.operations_serializers import TaskWriteSerializer
 from blackbeans_api.api.operations_serializers import TaskAssigneeSerializer
 from blackbeans_api.api.operations_serializers import TaskAttachmentCreateSerializer
 from blackbeans_api.api.operations_serializers import TaskCommentCreateSerializer
+from blackbeans_api.api.operations_serializers import TaskCommentUpdateSerializer
 from blackbeans_api.api.operations_serializers import TaskDependencyCreateSerializer
 from blackbeans_api.api.operations_serializers import notification_to_representation
 from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.operations_serializers import TimeLogUpdateSerializer
 from blackbeans_api.api.operations_serializers import time_log_to_representation
+from blackbeans_api.api.operations_serializers import task_comment_to_representation
 from blackbeans_api.api.operations_serializers import portfolio_to_representation
 from blackbeans_api.api.operations_serializers import project_to_representation
 from blackbeans_api.api.operations_serializers import workspace_to_representation
+from blackbeans_api.api.permissions import IsAuthenticatedReadElseStaff
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.permissions import IsSuperuser
 from blackbeans_api.api.responses import error_response
@@ -85,8 +88,34 @@ def _recalculate_dependents(task: Task) -> None:
             dependent.save(update_fields=["start_date", "end_date", "updated_at"])
 
 
+def _has_in_progress_tasks_workspace(*, workspace_id: UUID) -> bool:
+    return Task.objects.filter(
+        board__project__portfolio__workspace_id=workspace_id,
+        status=Task.Status.IN_PROGRESS,
+    ).exists()
+
+
+def _has_in_progress_tasks_portfolio(*, portfolio_id: UUID) -> bool:
+    return Task.objects.filter(
+        board__project__portfolio_id=portfolio_id,
+        status=Task.Status.IN_PROGRESS,
+    ).exists()
+
+
+def _has_in_progress_tasks_project(*, project_id: UUID) -> bool:
+    return Task.objects.filter(board__project_id=project_id, status=Task.Status.IN_PROGRESS).exists()
+
+
+def _has_in_progress_tasks_board(*, board_id: UUID) -> bool:
+    return Task.objects.filter(board_id=board_id, status=Task.Status.IN_PROGRESS).exists()
+
+
+def _has_in_progress_tasks_group(*, group_id: UUID) -> bool:
+    return Task.objects.filter(group_id=group_id, status=Task.Status.IN_PROGRESS).exists()
+
+
 class WorkspaceListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -125,7 +154,7 @@ class WorkspaceListCreateView(APIView):
 
 
 class WorkspaceDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, workspace_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -173,6 +202,15 @@ class WorkspaceDetailView(APIView):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        if _has_in_progress_tasks_workspace(workspace_id=workspace_id):
+            return error_response(
+                correlation_id=correlation_id,
+                code="workspace_has_tasks_in_progress",
+                message="Nao e possivel excluir: existem tarefas em progresso nesta area de trabalho.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+
         if Portfolio.objects.filter(workspace=workspace).exists():
             return error_response(
                 correlation_id=correlation_id,
@@ -197,7 +235,7 @@ class WorkspaceDetailView(APIView):
 
 
 class PortfolioListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -227,7 +265,7 @@ class PortfolioListCreateView(APIView):
 
 
 class PortfolioDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, portfolio_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -261,6 +299,14 @@ class PortfolioDetailView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if _has_in_progress_tasks_portfolio(portfolio_id=portfolio_id):
+            return error_response(
+                correlation_id=correlation_id,
+                code="portfolio_has_tasks_in_progress",
+                message="Nao e possivel excluir: existem tarefas em progresso neste portfolio.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
         if Project.objects.filter(portfolio=portfolio).exists():
             return error_response(
                 correlation_id=correlation_id,
@@ -274,7 +320,7 @@ class PortfolioDetailView(APIView):
 
 
 class ProjectListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -305,7 +351,7 @@ class ProjectListCreateView(APIView):
 
 
 class ProjectDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -339,6 +385,14 @@ class ProjectDetailView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if _has_in_progress_tasks_project(project_id=project_id):
+            return error_response(
+                correlation_id=correlation_id,
+                code="project_has_tasks_in_progress",
+                message="Nao e possivel excluir: existem tarefas em progresso neste projeto.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
         if Board.objects.filter(project=project).exists():
             return error_response(
                 correlation_id=correlation_id,
@@ -352,7 +406,7 @@ class ProjectDetailView(APIView):
 
 
 class ProjectStatusView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -393,7 +447,7 @@ class ProjectStatusView(APIView):
 
 
 class ProjectScheduleView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -427,7 +481,7 @@ class ProjectScheduleView(APIView):
 
 
 class ProjectMetricsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -464,7 +518,7 @@ class ProjectMetricsView(APIView):
 
 
 class WorkspaceStatsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, workspace_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -493,7 +547,7 @@ class WorkspaceStatsView(APIView):
 
 
 class PortfolioStatsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, portfolio_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -523,7 +577,7 @@ class PortfolioStatsView(APIView):
 
 
 class ProjectStatsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -553,7 +607,7 @@ class ProjectStatsView(APIView):
 
 
 class BoardListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -587,7 +641,7 @@ class BoardListCreateView(APIView):
 
 
 class BoardGroupListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -640,7 +694,7 @@ class BoardGroupListCreateView(APIView):
 
 
 class BoardGroupDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, group_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -681,9 +735,36 @@ class BoardGroupDetailView(APIView):
             data={"group": board_group_to_representation(group)},
         )
 
+    def delete(self, request: Request, group_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            group = BoardGroup.objects.select_related("board").get(pk=group_id)
+        except BoardGroup.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="group_not_found",
+                message="Grupo nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if _has_in_progress_tasks_group(group_id=group_id):
+            return error_response(
+                correlation_id=correlation_id,
+                code="group_has_tasks_in_progress",
+                message="Nao e possivel excluir: existem tarefas em progresso nesta coluna.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+        board_id = group.board_id
+        group.delete()
+        return success_response(
+            correlation_id=correlation_id,
+            data={"deleted": True, "board_id": str(board_id)},
+        )
+
 
 class BoardDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -735,9 +816,36 @@ class BoardDetailView(APIView):
 
         return success_response(correlation_id=correlation_id, data={"board": board_to_representation(board), **payload})
 
+    def delete(self, request: Request, board_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            board = Board.objects.get(pk=board_id)
+        except Board.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_not_found",
+                message="Board nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if _has_in_progress_tasks_board(board_id=board_id):
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_has_tasks_in_progress",
+                message="Nao e possivel excluir: existem tarefas em progresso neste quadro.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+        project_id = str(board.project_id)
+        board.delete()
+        return success_response(
+            correlation_id=correlation_id,
+            data={"deleted": True, "project_id": project_id},
+        )
+
 
 class TaskListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -780,7 +888,7 @@ class TaskListCreateView(APIView):
 
 
 class TaskDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -805,6 +913,36 @@ class TaskDetailView(APIView):
         )
         _recalculate_dependents(task)
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
+
+    def delete(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            task = Task.objects.get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if TimeLog.objects.filter(task=task, status=TimeLog.Status.ACTIVE).exists():
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_time_active",
+                message="Pare ou pause o cronometro desta tarefa antes de excluir.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+        task_pk = str(task.pk)
+        logger.info(
+            "ops.task.deleted actor_id=%s correlation_id=%s task_id=%s",
+            _actor_id(request),
+            correlation_id,
+            task_pk,
+        )
+        task.delete()
+        return success_response(correlation_id=correlation_id, data={"deleted": True, "task_id": task_pk})
 
 
 class TaskAssigneeView(APIView):
@@ -842,7 +980,7 @@ class TaskAssigneeView(APIView):
 
 
 class MyTasksView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -920,10 +1058,11 @@ class TaskDependenciesView(APIView):
 
 
 class TaskStatusView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
         try:
             task = Task.objects.get(pk=task_id)
         except Task.DoesNotExist:
@@ -933,6 +1072,14 @@ class TaskStatusView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not is_admin and task.assignee_id != request.user.id:
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Voce so pode alterar status das tarefas atribuidas a voce.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         new_status = request.data.get("status")
         if new_status not in dict(Task.Status.choices):
@@ -965,7 +1112,7 @@ class TaskStatusView(APIView):
 
 
 class TaskTimeStartView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1020,7 +1167,7 @@ class TaskTimeStartView(APIView):
 
 
 class TaskTimePauseView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1074,7 +1221,7 @@ class TaskTimePauseView(APIView):
 
 
 class TaskTimeResumeView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1126,7 +1273,7 @@ class TaskTimeResumeView(APIView):
 
 
 class TaskCompleteView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1288,10 +1435,11 @@ class TimeLogDetailView(APIView):
 
 
 class TaskTimeSummaryView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
         try:
             task = Task.objects.get(pk=task_id)
         except Task.DoesNotExist:
@@ -1302,7 +1450,10 @@ class TaskTimeSummaryView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        logs = TimeLog.objects.filter(task=task).exclude(status=TimeLog.Status.DELETED).order_by("-created_at")
+        logs = TimeLog.objects.filter(task=task).exclude(status=TimeLog.Status.DELETED)
+        if not is_admin:
+            logs = logs.filter(user=request.user)
+        logs = logs.order_by("-created_at")
         total_seconds = 0
         for log in logs:
             total_seconds += time_log_to_representation(log)["total_seconds"]
@@ -1318,10 +1469,11 @@ class TaskTimeSummaryView(APIView):
 
 
 class TimeLogsListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
         qs = TimeLog.objects.select_related("task__board__project__portfolio__workspace", "user").exclude(
             status=TimeLog.Status.DELETED,
         )
@@ -1337,6 +1489,8 @@ class TimeLogsListView(APIView):
             qs = qs.filter(started_at__date__gte=from_date)
         if to_date:
             qs = qs.filter(started_at__date__lte=to_date)
+        if not is_admin:
+            qs = qs.filter(user=request.user)
 
         total = qs.count()
         start = (page - 1) * page_size
@@ -1358,7 +1512,7 @@ class TimeLogsListView(APIView):
 
 
 class NotificationsListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -1384,7 +1538,7 @@ class NotificationsListView(APIView):
 
 
 class NotificationReadView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, notification_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1409,7 +1563,7 @@ class NotificationReadView(APIView):
 
 
 class NotificationsUnreadCountView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -1433,7 +1587,26 @@ class NotificationsDeadlineScanView(APIView):
 
 
 class TaskCommentsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            task = Task.objects.get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        comments = TaskComment.objects.filter(task=task).order_by("created_at")
+        return success_response(
+            correlation_id=correlation_id,
+            data={"comments": [task_comment_to_representation(item) for item in comments]},
+            meta={"total": comments.count()},
+        )
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1458,21 +1631,80 @@ class TaskCommentsView(APIView):
         )
         return success_response(
             correlation_id=correlation_id,
-            data={
-                "comment": {
-                    "id": str(comment.pk),
-                    "task_id": str(task.pk),
-                    "author_id": comment.author_id,
-                    "content": comment.content,
-                    "created_at": comment.created_at.isoformat().replace("+00:00", "Z"),
-                },
-            },
+            data={"comment": task_comment_to_representation(comment)},
             http_status=status.HTTP_201_CREATED,
         )
 
 
+class TaskCommentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request: Request, task_id: UUID, comment_id: UUID):
+        correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
+        try:
+            comment = TaskComment.objects.select_related("task").get(pk=comment_id, task_id=task_id)
+        except TaskComment.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="comment_not_found",
+                message="Comentario nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not is_admin and comment.author_id != request.user.id:
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Voce so pode editar comentarios criados por voce.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = TaskCommentUpdateSerializer(comment, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        _log_task_activity(
+            task=comment.task,
+            actor_id=request.user.pk,
+            event_type="task.comment_edited",
+            summary=f"Comentario {comment.pk} editado.",
+        )
+        return success_response(correlation_id=correlation_id, data={"comment": task_comment_to_representation(comment)})
+
+    def delete(self, request: Request, task_id: UUID, comment_id: UUID):
+        correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
+        try:
+            comment = TaskComment.objects.select_related("task").get(pk=comment_id, task_id=task_id)
+        except TaskComment.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="comment_not_found",
+                message="Comentario nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not is_admin and comment.author_id != request.user.id:
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Voce so pode excluir comentarios criados por voce.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        task = comment.task
+        comment.delete()
+        _log_task_activity(
+            task=task,
+            actor_id=request.user.pk,
+            event_type="task.comment_deleted",
+            summary=f"Comentario {comment_id} removido.",
+        )
+        return success_response(correlation_id=correlation_id, data={"deleted": True, "comment_id": str(comment_id)})
+
+
 class TaskAttachmentsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1513,7 +1745,7 @@ class TaskAttachmentsView(APIView):
 
 
 class TaskActivityView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1548,7 +1780,7 @@ class TaskActivityView(APIView):
 
 
 class BoardProgressView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)

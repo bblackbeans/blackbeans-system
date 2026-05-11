@@ -6,14 +6,14 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 
-def authenticate_admin_user(*, username: str | None, password: str | None, request):
+def authenticate_user(*, username: str | None, password: str | None, request):
     user = authenticate(
         request=request,
         username=username,
         password=password,
     )
 
-    if not user or not user.is_active or not (user.is_staff or user.is_superuser):
+    if not user or not user.is_active:
         raise serializers.ValidationError(
             {
                 "code": "invalid_credentials",
@@ -23,6 +23,9 @@ def authenticate_admin_user(*, username: str | None, password: str | None, reque
         )
 
     return user
+
+
+authenticate_admin_user = authenticate_user
 
 
 class AdminTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -55,4 +58,10 @@ class AdminTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super().get_token(user)
         token["actor_id"] = str(user.id)
+        token["user_id"] = user.id
+        token["is_staff"] = bool(getattr(user, "is_staff", False))
+        token["is_superuser"] = bool(getattr(user, "is_superuser", False))
+        token["role"] = "admin" if (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)) else "collaborator"
+        token["username"] = getattr(user, "username", "")
+        token["email"] = getattr(user, "email", "")
         return token

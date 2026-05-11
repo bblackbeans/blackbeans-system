@@ -362,6 +362,25 @@ class TaskCommentCreateSerializer(serializers.ModelSerializer):
         fields = ("content",)
 
 
+class TaskCommentUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskComment
+        fields = ("content",)
+
+
+def task_comment_to_representation(comment: TaskComment) -> dict:
+    payload = {
+        "id": str(comment.pk),
+        "task_id": str(comment.task_id),
+        "author_id": comment.author_id,
+        "content": comment.content,
+        "created_at": comment.created_at.isoformat().replace("+00:00", "Z"),
+    }
+    # Compatibilidade: modelo antigo nao possui updated_at.
+    payload["updated_at"] = payload["created_at"]
+    return payload
+
+
 class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskAttachment

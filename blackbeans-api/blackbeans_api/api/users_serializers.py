@@ -5,6 +5,7 @@ import re
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from blackbeans_api.governance.models import Workspace
 from blackbeans_api.users.models import Collaborator
 
 User = get_user_model()
@@ -109,6 +110,25 @@ class AdminUserUpdateSerializer(serializers.Serializer):
             instance.set_password(validated_data["password"])
         instance.save()
         return instance
+
+
+class UserWorkspaceAccessWriteSerializer(serializers.Serializer):
+    workspace_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=True,
+        required=True,
+    )
+
+    def validate_workspace_ids(self, value: list) -> list:
+        if not value:
+            return value
+        existing = set(
+            Workspace.objects.filter(pk__in=value).values_list("pk", flat=True),
+        )
+        missing = [str(wid) for wid in value if wid not in existing]
+        if missing:
+            raise serializers.ValidationError(f"Workspaces inexistentes: {', '.join(missing)}.")
+        return value
 
 
 class CollaboratorLinkCreateSerializer(serializers.Serializer):

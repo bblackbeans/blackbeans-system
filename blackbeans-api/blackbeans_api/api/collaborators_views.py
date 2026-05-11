@@ -222,9 +222,8 @@ class AdminCollaboratorDepartmentLinkView(APIView):
 class MeCollaboratorProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request: Request):
-        correlation_id = get_correlation_id(request)
-        ulink = (
+    def _active_link(self, request: Request):
+        return (
             UserCollaboratorLink.objects.filter(
                 user=request.user,
                 is_active=True,
@@ -232,6 +231,10 @@ class MeCollaboratorProfileView(APIView):
             .select_related("collaborator")
             .first()
         )
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        ulink = self._active_link(request)
         if ulink is None:
             return error_response(
                 correlation_id=correlation_id,
@@ -250,5 +253,63 @@ class MeCollaboratorProfileView(APIView):
                     collaborator,
                     active_department=dept,
                 ),
+            },
+        )
+
+    def patch(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        ulink = self._active_link(request)
+        if ulink is None:
+            return error_response(
+                correlation_id=correlation_id,
+                code="collaborator_profile_not_found",
+                message="Nenhum perfil de colaborador vinculado a este usuario.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        collaborator = ulink.collaborator
+        serializer = CollaboratorUpdateSerializer(
+            instance=collaborator,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data:
+            serializer.save()
+            collaborator.refresh_from_db()
+
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "profile": collaborator_to_representation(
+                    collaborator,
+                    active_department=_active_department_for(collaborator),
+                ),
+            },
+        )
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        user = request.user
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "user": {
+                    "id": user.pk,
+                    "username": getattr(user, "username", ""),
+                    "email": getattr(user, "email", ""),
+                    "name": getattr(user, "first_name", "") or getattr(user, "username", ""),
+                    "is_staff": bool(getattr(user, "is_staff", False)),
+                    "is_superuser": bool(getattr(user, "is_superuser", False)),
+                    "is_active": bool(getattr(user, "is_active", True)),
+                    "role": "admin"
+                    if (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+                    else "collaborator",
+                },
             },
         )

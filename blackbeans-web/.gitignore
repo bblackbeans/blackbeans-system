@@ -16,6 +16,8 @@
 # next.js
 /.next/
 /.next-e2e/
+# Backups locais do Next (Tailwind v4 escaneia tudo que nao esta no gitignore)
+/.next_backup*/
 /out/
 
 # production
