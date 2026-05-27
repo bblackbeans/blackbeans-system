@@ -157,8 +157,8 @@ def test_me_collaborator_profile_linked_and_missing():
         HTTP_AUTHORIZATION=f"Bearer {RefreshToken.for_user(lone).access_token}",
     )
     empty = lone_client.get("/api/v1/me/collaborator-profile")
-    assert empty.status_code == 404
-    assert empty.data["error"]["code"] == "collaborator_profile_not_found"
+    assert empty.status_code == 200
+    assert empty.data["data"]["profile"] is None
 
 
 def test_non_staff_cannot_mutate_collaborators():

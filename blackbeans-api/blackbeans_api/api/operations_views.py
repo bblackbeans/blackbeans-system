@@ -890,6 +890,20 @@ class TaskListCreateView(APIView):
 class TaskDetailView(APIView):
     permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
+    def get(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            task = Task.objects.get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
+
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
         try:

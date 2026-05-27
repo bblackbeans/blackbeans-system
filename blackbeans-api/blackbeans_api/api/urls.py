@@ -15,6 +15,13 @@ from blackbeans_api.api.collaborators_views import AdminCollaboratorListCreateVi
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
+from blackbeans_api.api.bpo_views import ContractCancelView
+from blackbeans_api.api.bpo_views import ContractConfirmView
+from blackbeans_api.api.bpo_views import ContractReactivateView
+from blackbeans_api.api.bpo_views import ContractDetailView
+from blackbeans_api.api.bpo_views import ContractListCreateView
+from blackbeans_api.api.bpo_views import ServiceCatalogDetailView
+from blackbeans_api.api.bpo_views import ServiceCatalogListCreateView
 from blackbeans_api.api.operations_views import PortfolioDetailView
 from blackbeans_api.api.operations_views import PortfolioListCreateView
 from blackbeans_api.api.operations_views import BoardListCreateView
@@ -70,6 +77,13 @@ from blackbeans_api.api.users_views import AdminUserWorkspaceAccessView
 from blackbeans_api.api.users_views import MeWorkspaceAccessView
 
 urlpatterns = [
+    path("services", ServiceCatalogListCreateView.as_view(), name="services-list-create"),
+    path("services/<uuid:service_id>", ServiceCatalogDetailView.as_view(), name="services-detail"),
+    path("contracts", ContractListCreateView.as_view(), name="contracts-list-create"),
+    path("contracts/<uuid:contract_id>", ContractDetailView.as_view(), name="contracts-detail"),
+    path("contracts/<uuid:contract_id>/confirm", ContractConfirmView.as_view(), name="contracts-confirm"),
+    path("contracts/<uuid:contract_id>/cancel", ContractCancelView.as_view(), name="contracts-cancel"),
+    path("contracts/<uuid:contract_id>/reactivate", ContractReactivateView.as_view(), name="contracts-reactivate"),
     path("clients", ClientsListCreateView.as_view(), name="clients-list-create"),
     path("clients/<uuid:client_id>/status-toggle", ClientStatusToggleView.as_view(), name="clients-status-toggle"),
     path("clients/<uuid:client_id>", ClientDetailView.as_view(), name="clients-detail"),
@@ -119,12 +133,12 @@ urlpatterns = [
         MeCollaboratorProfileView.as_view(),
         name="me-collaborator-profile",
     ),
-    path("me", MeView.as_view(), name="me"),
     path(
         "me/workspace-access",
         MeWorkspaceAccessView.as_view(),
         name="me-workspace-access",
     ),
+    path("me", MeView.as_view(), name="me"),
     path(
         "permissions/bulk/preview",
         PermissionBulkPreviewView.as_view(),

@@ -2,9 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND_BASE_URL = process.env.INTERNAL_API_URL ?? "http://api:8000";
 
+/** Raiz do host da API (sem barra final); remove sufixo duplicado `/api/v1` se vier na env. */
+function normalizeBackendBaseUrl(raw: string): string {
+  let s = raw.trim().replace(/\/+$/, "");
+  if (s.endsWith("/api/v1")) {
+    s = s.slice(0, -"/api/v1".length).replace(/\/+$/, "");
+  }
+  return s;
+}
+
 async function proxy(request: NextRequest, path: string[]) {
   const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
-  const candidates = Array.from(new Set([BACKEND_BASE_URL, "http://api:8000", "http://localhost:18000"]));
+  const candidates = Array.from(
+    new Set(
+      [BACKEND_BASE_URL, "http://api:8000", "http://localhost:18000"].map(normalizeBackendBaseUrl).filter(Boolean),
+    ),
+  );
   let response: Response | null = null;
   let lastError: unknown;
   for (const base of candidates) {

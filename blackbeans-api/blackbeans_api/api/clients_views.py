@@ -4,6 +4,7 @@ import logging
 import math
 from uuid import UUID
 
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -18,6 +19,7 @@ from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.clients.models import Client
 from blackbeans_api.governance.models import Portfolio
+from blackbeans_api.governance.models import ClientContract
 from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import Workspace
 
@@ -75,7 +77,7 @@ class ClientsListCreateView(APIView):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         if search:
-            queryset = queryset.filter(name__icontains=search)
+            queryset = queryset.filter(Q(name__icontains=search) | Q(cnpj__icontains=search))
 
         total = queryset.count()
         pages = max(1, math.ceil(total / page_size)) if total else 1
@@ -152,6 +154,24 @@ class ClientDetailView(APIView):
                     "completed_projects_count": completed_count,
                     "at_risk_projects_count": at_risk_count,
                 },
+                "contracts": [
+                    {
+                        "id": str(contract.pk),
+                        "status": contract.status,
+                        "payment_method": contract.payment_method,
+                        "created_at": contract.created_at.isoformat().replace("+00:00", "Z"),
+                    }
+                    for contract in ClientContract.objects.filter(client=client).order_by("-created_at")[:20]
+                ],
+                "projects": [
+                    {
+                        "id": str(project.pk),
+                        "name": project.name,
+                        "status": project.status,
+                        "contract_line_id": str(project.contract_line_id) if project.contract_line_id else None,
+                    }
+                    for project in projects.select_related("contract_line").order_by("-created_at")[:30]
+                ],
             },
         )
 
@@ -183,6 +203,43 @@ class ClientDetailView(APIView):
             correlation_id=correlation_id,
             data={"client": client_to_representation(client)},
         )
+
+    def delete(self, request: Request, client_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            client = Client.objects.get(pk=client_id)
+        except Client.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="client_not_found",
+                message="Cliente nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if ClientContract.objects.filter(client=client).exists():
+            return error_response(
+                correlation_id=correlation_id,
+                code="client_has_contracts",
+                message="Cliente possui contratos e nao pode ser excluido.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+        if Workspace.objects.filter(client=client).exists() or Project.objects.filter(client=client).exists():
+            return error_response(
+                correlation_id=correlation_id,
+                code="client_has_dependencies",
+                message="Cliente possui dependencias operacionais.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+        client.delete()
+        logger.info(
+            "crm.client.deleted actor_id=%s correlation_id=%s client_id=%s",
+            _actor_id(request),
+            correlation_id,
+            str(client_id),
+        )
+        return success_response(correlation_id=correlation_id, data={"deleted": True})
 
 
 class ClientStatusToggleView(APIView):

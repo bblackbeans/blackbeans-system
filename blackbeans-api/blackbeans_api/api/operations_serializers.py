@@ -6,6 +6,7 @@ from rest_framework import serializers
 from blackbeans_api.clients.models import Client
 from blackbeans_api.governance.models import Portfolio
 from blackbeans_api.governance.models import Project
+from blackbeans_api.governance.models import ContractServiceLine
 from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.models import Board
 from blackbeans_api.governance.models import BoardGroup
@@ -97,6 +98,7 @@ def portfolio_to_representation(portfolio: Portfolio) -> dict:
 class ProjectWriteSerializer(serializers.ModelSerializer):
     portfolio_id = serializers.UUIDField(required=False)
     client_id = serializers.UUIDField(required=False, allow_null=True)
+    contract_line_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Project
@@ -106,6 +108,7 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "status",
+            "contract_line_id",
             "start_date",
             "end_date",
             "actual_start_date",
@@ -132,6 +135,13 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Cliente nao encontrado.")
         return value
 
+    def validate_contract_line_id(self, value):
+        if value is None:
+            return None
+        if not ContractServiceLine.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Linha de contrato nao encontrada.")
+        return value
+
     def validate(self, attrs):
         if attrs.get("actual_start_date") and attrs.get("actual_end_date"):
             if attrs["actual_end_date"] < attrs["actual_start_date"]:
@@ -148,9 +158,11 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         portfolio_id = validated_data.pop("portfolio_id")
         client_id = validated_data.pop("client_id", None)
+        contract_line_id = validated_data.pop("contract_line_id", None)
         return Project.objects.create(
             portfolio_id=portfolio_id,
             client_id=client_id,
+            contract_line_id=contract_line_id,
             **validated_data,
         )
 
@@ -159,6 +171,8 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
             instance.portfolio_id = validated_data.pop("portfolio_id")
         if "client_id" in validated_data:
             instance.client_id = validated_data.pop("client_id")
+        if "contract_line_id" in validated_data:
+            instance.contract_line_id = validated_data.pop("contract_line_id")
         for key, value in validated_data.items():
             setattr(instance, key, value)
         instance.save()
@@ -174,6 +188,7 @@ def project_to_representation(project: Project) -> dict:
         "portfolio_id": str(project.portfolio_id),
         "workspace_id": str(project.portfolio.workspace_id),
         "client_id": str(project.client_id) if project.client_id else None,
+        "contract_line_id": str(project.contract_line_id) if project.contract_line_id else None,
         "name": project.name,
         "description": project.description,
         "status": project.status,
