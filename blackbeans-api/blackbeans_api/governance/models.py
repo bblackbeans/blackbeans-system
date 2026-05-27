@@ -5,6 +5,8 @@ from django.db import models
 from django.db.models import CASCADE
 from django.db.models import CharField
 from django.db.models import DateTimeField
+from django.db.models import DateField
+from django.db.models import DecimalField
 from django.db.models import ForeignKey
 from django.db.models import JSONField
 from django.db.models import TextField
@@ -52,6 +54,100 @@ class Portfolio(models.Model):
         return self.name or str(self.pk)
 
 
+class ServiceCatalog(models.Model):
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = CharField(max_length=255, unique=True)
+    description = TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=100)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Service Catalog")
+        verbose_name_plural = _("Service Catalog")
+        indexes = [models.Index(fields=["is_active", "display_order"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class ClientContract(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", _("Draft")
+        SUBMITTED = "submitted", _("Submitted")
+        ACTIVE = "active", _("Active")
+        CLOSED = "closed", _("Closed")
+        CANCELLED = "cancelled", _("Cancelled")
+
+    class PaymentMethod(models.TextChoices):
+        BOLETO = "boleto", _("Boleto")
+        TRANSFER = "transfer", _("Transfer")
+        PIX = "pix", _("Pix")
+        OTHER = "other", _("Other")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = ForeignKey("clients.Client", on_delete=CASCADE, related_name="contracts")
+    emits_invoice = models.BooleanField(default=True)
+    has_iss_retention = models.BooleanField(default=False)
+    has_inss_retention = models.BooleanField(default=False)
+    payment_method = CharField(max_length=24, choices=PaymentMethod.choices, default=PaymentMethod.BOLETO)
+    payment_other = CharField(max_length=255, blank=True, default="")
+    status = CharField(max_length=24, choices=Status.choices, default=Status.DRAFT)
+    notes = TextField(blank=True, default="")
+    created_by = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_contracts",
+    )
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Client Contract")
+        verbose_name_plural = _("Client Contracts")
+        indexes = [models.Index(fields=["status", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.client.name} - {self.created_at:%Y-%m-%d}"
+
+
+class ContractServiceLine(models.Model):
+    class ServiceType(models.TextChoices):
+        ONE_OFF = "one_off", _("One-off")
+        RECURRING = "recurring", _("Recurring")
+
+    class Recurrence(models.TextChoices):
+        MONTHLY = "monthly", _("Monthly")
+        BIMONTHLY = "bimonthly", _("Bimonthly")
+        QUARTERLY = "quarterly", _("Quarterly")
+        SEMIANNUAL = "semiannual", _("Semiannual")
+        OTHER = "other", _("Other")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = ForeignKey(ClientContract, on_delete=CASCADE, related_name="service_lines")
+    service = ForeignKey(ServiceCatalog, on_delete=models.PROTECT, related_name="contract_lines")
+    service_type = CharField(max_length=16, choices=ServiceType.choices, default=ServiceType.ONE_OFF)
+    recurrence = CharField(max_length=24, choices=Recurrence.choices, blank=True, default="")
+    recurrence_other = CharField(max_length=255, blank=True, default="")
+    amount = DecimalField(max_digits=12, decimal_places=2)
+    starts_on = DateField(null=True, blank=True)
+    ends_on = DateField(null=True, blank=True)
+    notes = TextField(blank=True, default="")
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Contract Service Line")
+        verbose_name_plural = _("Contract Service Lines")
+        indexes = [models.Index(fields=["service_type", "recurrence"])]
+
+    def __str__(self) -> str:
+        return f"{self.contract_id} - {self.service.name}"
+
+
 class Project(models.Model):
     class Status(models.TextChoices):
         PLANNED = "planned", _("Planned")
@@ -64,6 +160,13 @@ class Project(models.Model):
     portfolio = ForeignKey(Portfolio, on_delete=CASCADE, related_name="projects")
     client = ForeignKey(
         "clients.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="projects",
+    )
+    contract_line = ForeignKey(
+        ContractServiceLine,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

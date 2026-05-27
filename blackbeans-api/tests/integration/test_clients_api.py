@@ -6,7 +6,6 @@ from rest_framework.test import APIClient
 from blackbeans_api.clients.models import Client
 from blackbeans_api.clients.tests.factories import ClientFactory
 from blackbeans_api.users.tests.factories import UserFactory
-from tests.integration.auth_helpers import obtain_admin_access_token
 
 pytestmark = pytest.mark.django_db
 
@@ -18,8 +17,7 @@ def admin_client():
     password = STRONG_PASSWORD
     admin = UserFactory.create(password=password, is_staff=True, is_active=True, is_superuser=True)
     client = APIClient()
-    token = obtain_admin_access_token(client, username=admin.username, password=password)
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+    client.force_authenticate(user=admin)
     return client, admin
 
 
@@ -29,6 +27,9 @@ def test_create_client_returns_201(admin_client):
         "/api/v1/clients",
         {
             "name": "Acme Corp",
+            "cnpj": "12345678000195",
+            "contact_name": "Ana Financeiro",
+            "financial_emails": "financeiro@acme.local",
             "description": "Cliente enterprise",
         },
         format="json",
@@ -43,7 +44,7 @@ def test_create_client_invalid_payload_returns_400(admin_client):
     client, _admin = admin_client
     response = client.post(
         "/api/v1/clients",
-        {"description": "Sem nome"},
+        {"description": "Sem nome", "cnpj": "123"},
         format="json",
     )
     assert response.status_code == 400
@@ -76,12 +77,13 @@ def test_patch_client_returns_200(admin_client):
     target = ClientFactory.create(name="Cliente Antigo", status=Client.Status.ACTIVE)
     response = client.patch(
         f"/api/v1/clients/{target.pk}",
-        {"name": "Cliente Atualizado", "status": "inactive"},
+        {"name": "Cliente Atualizado", "status": "inactive", "cnpj": "22345678000195"},
         format="json",
     )
     assert response.status_code == 200
     assert response.data["data"]["client"]["name"] == "Cliente Atualizado"
     assert response.data["data"]["client"]["status"] == Client.Status.INACTIVE
+    assert response.data["data"]["client"]["cnpj"] == "22345678000195"
 
 
 def test_patch_unknown_client_returns_404(admin_client):

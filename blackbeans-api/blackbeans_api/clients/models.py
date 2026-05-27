@@ -16,6 +16,9 @@ class Client(models.Model):
 
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = CharField(max_length=255)
+    cnpj = CharField(max_length=18, unique=True, null=True, blank=True)
+    contact_name = CharField(max_length=255, blank=True, default="")
+    financial_emails = TextField(blank=True, default="")
     status = CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     description = TextField(blank=True, default="")
     created_at = DateTimeField(auto_now_add=True)
@@ -27,6 +30,7 @@ class Client(models.Model):
         indexes = [
             Index(fields=["status"]),
             Index(fields=["name"]),
+            Index(fields=["cnpj"]),
         ]
 
     def __str__(self) -> str:

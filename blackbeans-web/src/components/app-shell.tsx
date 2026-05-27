@@ -8,8 +8,8 @@ import {
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
+  EyeOutlined,
   FolderOpenOutlined,
-  HistoryOutlined,
   LoginOutlined,
   LogoutOutlined,
   MenuOutlined,
@@ -17,8 +17,10 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   RightOutlined,
-  SafetyOutlined,
   SettingOutlined,
+  ShopOutlined,
+  ShoppingCartOutlined,
+  TagsOutlined,
   StockOutlined,
   TeamOutlined,
   UnorderedListOutlined,
@@ -48,6 +50,7 @@ import {
   Space,
   Spin,
   Table,
+  Steps,
   Tabs,
   Tag,
   Typography,
@@ -154,6 +157,44 @@ type TimeLog = {
   task_id?: string;
 };
 
+type ServiceCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  display_order: number;
+};
+
+type ContractServiceLineItem = {
+  id?: string;
+  service_id?: string;
+  service?: string;
+  service_name?: string;
+  service_type: "one_off" | "recurring";
+  recurrence?: string;
+  recurrence_other?: string;
+  amount: string;
+  starts_on?: string | null;
+  ends_on?: string | null;
+  notes?: string;
+};
+
+type ContractItem = {
+  id: string;
+  client_id: string;
+  client_name?: string;
+  status: string;
+  payment_method: string;
+  payment_other?: string;
+  emits_invoice: boolean;
+  has_iss_retention: boolean;
+  has_inss_retention: boolean;
+  notes?: string;
+  service_lines: ContractServiceLineItem[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 type AuthStep = "credentials" | "2fa";
 type TwoFactorMethod = "challenge" | "totp";
 type BoardItem = { id: string; name: string; project_id: string; workspace_id: string };
@@ -166,18 +207,44 @@ type MenuKey =
   | "my-work"
   | "tasks"
   | "users"
+  | "clients"
+  | "services"
+  | "sales"
   | "admin-ops"
   | "status-config"
   | "admin-settings"
   | "profile"
   | "notifications"
-  | "governance"
-  | "audit"
   | "stats"
   | "projects";
 
-const MENU_KEYS: MenuKey[] = ["dashboard", "my-work", "tasks", "users", "admin-ops", "status-config", "admin-settings", "profile", "notifications", "governance", "audit", "stats", "projects"];
-const RESTRICTED_ADMIN_KEYS: MenuKey[] = ["tasks", "users", "admin-ops", "status-config", "admin-settings", "governance", "audit", "stats"];
+const MENU_KEYS: MenuKey[] = [
+  "dashboard",
+  "my-work",
+  "tasks",
+  "users",
+  "clients",
+  "services",
+  "sales",
+  "admin-ops",
+  "status-config",
+  "admin-settings",
+  "profile",
+  "notifications",
+  "stats",
+  "projects",
+];
+const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
+  "tasks",
+  "users",
+  "clients",
+  "services",
+  "sales",
+  "admin-ops",
+  "status-config",
+  "admin-settings",
+  "stats",
+];
 
 const DEFAULT_STATUS_META: Record<string, { label: string; color: string }> = {
   todo: { label: "A fazer", color: "default" },
@@ -284,6 +351,278 @@ function maskBirthDateInput(value: string | null | undefined): string {
   if (digits.length <= 2) return digits;
   if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function maskCnpjInput(value: string | null | undefined): string {
+  const digits = String(value ?? "").replace(/\D/g, "").slice(0, 14);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+}
+
+function normalizeFinancialEmailsInput(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/,/g, ";")
+    .split(";")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+    .join(";");
+}
+
+function extractApiErrorMessage(
+  error: { message?: string; details?: unknown } | undefined,
+  fallback: string,
+): string {
+  if (!error) return fallback;
+  const baseMessage = String(error.message ?? "").trim();
+  if (typeof error.details === "string" && error.details.trim()) {
+    return `${baseMessage || fallback} (${error.details.trim()})`;
+  }
+  const pickFirstMessage = (value: unknown, prefix = ""): string | null => {
+    if (typeof value === "string" && value.trim()) {
+      return prefix ? `${prefix}: ${value.trim()}` : value.trim();
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = pickFirstMessage(item, prefix);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        const nextPrefix = prefix ? `${prefix}.${key}` : key;
+        const nested = pickFirstMessage(nestedValue, nextPrefix);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  };
+  if (error.details && typeof error.details === "object") {
+    const detailMessage = pickFirstMessage(error.details);
+    if (detailMessage) {
+      return `${baseMessage || fallback} (${detailMessage})`;
+    }
+  }
+  return baseMessage || fallback;
+}
+
+function normalizeCurrencyValue(value: unknown): string {
+  const raw = String(value ?? "0").trim();
+  if (!raw) return "0";
+  const normalized = raw.replace(/\s/g, "");
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    const decimalSeparator = lastComma > lastDot ? "," : ".";
+    const thousandSeparator = decimalSeparator === "," ? "." : ",";
+    const withoutThousands = normalized.split(thousandSeparator).join("");
+    return decimalSeparator === "," ? withoutThousands.replace(",", ".") : withoutThousands;
+  }
+  if (hasComma) {
+    const parts = normalized.split(",");
+    if (parts.length === 2) {
+      return `${parts[0].replace(/\./g, "")}.${parts[1]}`;
+    }
+    return normalized.replace(/,/g, "");
+  }
+  return normalized.replace(/,/g, "");
+}
+
+function isUseExistingClient(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+function paymentMethodLabel(value: string): string {
+  const labels: Record<string, string> = {
+    boleto: "Boleto",
+    transfer: "Transferencia",
+    pix: "PIX",
+    other: "Outro",
+  };
+  return labels[value] ?? value;
+}
+
+function contractToEditFormValues(contract: ContractItem) {
+  return {
+    emits_invoice: contract.emits_invoice,
+    has_iss_retention: contract.has_iss_retention,
+    has_inss_retention: contract.has_inss_retention,
+    payment_method: contract.payment_method,
+    payment_other: contract.payment_other ?? "",
+    notes: contract.notes ?? "",
+    service_lines: (contract.service_lines ?? []).map((line) => ({
+      service: line.service_id ?? line.service ?? "",
+      service_type: line.service_type,
+      amount: line.amount,
+      starts_on: line.starts_on ?? undefined,
+      ends_on: line.ends_on ?? undefined,
+      recurrence: line.recurrence ?? undefined,
+      recurrence_other: line.recurrence_other ?? undefined,
+      notes: line.notes ?? "",
+    })),
+  };
+}
+
+function contractServiceLineRowKey(line: ContractServiceLineItem): string {
+  if (line.id) return line.id;
+  const serviceRef = line.service_id ?? line.service ?? "svc";
+  return `${serviceRef}-${line.service_type}-${line.amount}-${line.starts_on ?? ""}-${line.ends_on ?? ""}`;
+}
+
+function buildContractPatchBody(values: Record<string, unknown>) {
+  const paymentMethod = String(values.payment_method ?? "").trim();
+  const rawLines = Array.isArray(values.service_lines) ? values.service_lines : [];
+  const serviceLines = rawLines.map((line) => {
+    const record = (line ?? {}) as Record<string, unknown>;
+    const serviceType = String(record.service_type ?? "one_off");
+    const normalizedAmount = normalizeCurrencyValue(String(record.amount ?? "0"));
+    const payload: Record<string, unknown> = {
+      service: String(record.service ?? "").trim(),
+      service_type: serviceType,
+      amount: normalizedAmount,
+      notes: String(record.notes ?? "").trim(),
+    };
+    if (serviceType === "recurring") {
+      payload.recurrence = String(record.recurrence ?? "").trim();
+      payload.recurrence_other = String(record.recurrence_other ?? "").trim();
+      payload.starts_on = String(record.starts_on ?? "").trim() || null;
+      payload.ends_on = String(record.ends_on ?? "").trim() || null;
+    }
+    return payload;
+  });
+  return {
+    emits_invoice: Boolean(values.emits_invoice),
+    has_iss_retention: Boolean(values.has_iss_retention),
+    has_inss_retention: Boolean(values.has_inss_retention),
+    payment_method: paymentMethod,
+    payment_other: paymentMethod === "other" ? String(values.payment_other ?? "").trim() : "",
+    notes: String(values.notes ?? "").trim(),
+    service_lines: serviceLines,
+  };
+}
+
+type NewSaleWizardValidation = {
+  ok: boolean;
+  errors: string[];
+  useExistingClient: boolean;
+  clientId: string;
+  clientLabel: string;
+  paymentMethod: string;
+  paymentLabel: string;
+  serviceSummaries: Array<{ name: string; type: string; amount: string }>;
+  lines: Array<Record<string, unknown>>;
+};
+
+function buildNewSaleWizardValidation(
+  values: Record<string, unknown>,
+  clients: Record<string, unknown>[],
+  serviceCatalog: ServiceCatalogItem[],
+): NewSaleWizardValidation {
+  const errors: string[] = [];
+  const useExistingClient = isUseExistingClient(values.use_existing_client);
+  let clientId = "";
+  let clientLabel = "-";
+
+  if (useExistingClient) {
+    clientId = String(values.existing_client_id ?? "").trim();
+    if (!clientId) {
+      errors.push("Selecione um cliente existente.");
+    }
+    const client = clients.find((row) => String(row.id) === clientId);
+    clientLabel = client ? String(client.name ?? clientId) : clientId || "-";
+  } else {
+    const name = String(values.name ?? "").trim();
+    const cnpjDigits = String(values.cnpj ?? "").replace(/\D/g, "");
+    const contactName = String(values.contact_name ?? "").trim();
+    const financialEmails = String(values.financial_emails ?? "").trim();
+    if (!name) errors.push("Nome fantasia do cliente e obrigatorio.");
+    if (cnpjDigits.length !== 14) errors.push("CNPJ do cliente deve ter 14 digitos.");
+    if (!contactName) errors.push("Nome para contato e obrigatorio.");
+    if (!financialEmails) errors.push("E-mail financeiro e obrigatorio.");
+    clientLabel = name || "-";
+  }
+
+  const serviceById = serviceCatalog.reduce<Record<string, string>>((acc, item) => {
+    acc[item.id] = item.name;
+    return acc;
+  }, {});
+  const linesRaw = Array.isArray(values.service_lines) ? values.service_lines : [];
+  const serviceSummaries: NewSaleWizardValidation["serviceSummaries"] = [];
+  const lines = linesRaw
+    .map((row) => {
+      const record = row as Record<string, unknown>;
+      const service = String(record?.service ?? "").trim();
+      const serviceType = String(record?.service_type ?? "one_off");
+      const amount = normalizeCurrencyValue(record?.amount);
+      const payload: Record<string, unknown> = {
+        service,
+        service_type: serviceType,
+        amount,
+      };
+      const notes = String(record?.notes ?? "").trim();
+      if (notes) payload.notes = notes;
+      if (serviceType === "recurring") {
+        payload.recurrence = String(record?.recurrence ?? "").trim();
+        const recurrenceOther = String(record?.recurrence_other ?? "").trim();
+        if (recurrenceOther) payload.recurrence_other = recurrenceOther;
+        const startsOn = String(record?.starts_on ?? "").trim();
+        if (startsOn) payload.starts_on = startsOn;
+        const endsOn = String(record?.ends_on ?? "").trim();
+        if (endsOn) payload.ends_on = endsOn;
+      }
+      if (service) {
+        serviceSummaries.push({
+          name: serviceById[service] ?? service,
+          type: serviceType === "recurring" ? "Recorrente" : "Avulso",
+          amount,
+        });
+      }
+      return payload;
+    })
+    .filter((row) => String(row.service ?? "").trim().length > 0);
+
+  if (lines.length === 0) {
+    errors.push("Selecione ao menos um servico.");
+  }
+  lines.forEach((line, index) => {
+    if (!String(line.service_type ?? "").trim() || !String(line.amount ?? "").trim()) {
+      errors.push(`Servico ${index + 1}: preencha tipo e valor.`);
+    }
+    if (String(line.service_type ?? "") === "recurring") {
+      if (!String(line.recurrence ?? "").trim()) {
+        errors.push(`Servico ${index + 1}: informe a periodicidade.`);
+      }
+      if (!String(line.starts_on ?? "").trim()) {
+        errors.push(`Servico ${index + 1}: informe o inicio da vigencia.`);
+      }
+    }
+  });
+
+  const paymentMethod = String(values.payment_method ?? "").trim();
+  if (!["boleto", "transfer", "pix", "other"].includes(paymentMethod)) {
+    errors.push("Forma de pagamento e obrigatoria.");
+  }
+  if (paymentMethod === "other" && !String(values.payment_other ?? "").trim()) {
+    errors.push("Descreva a forma de pagamento quando selecionar 'Outro'.");
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    useExistingClient,
+    clientId,
+    clientLabel,
+    paymentMethod,
+    paymentLabel: paymentMethodLabel(paymentMethod),
+    serviceSummaries,
+    lines,
+  };
 }
 
 function parseCommentReplyMeta(content: string): { replyToId: string | null; cleanContent: string } {
@@ -697,6 +1036,9 @@ export function AppShell() {
   } | null>(null);
   const [profileResult, setProfileResult] = useState<Record<string, unknown> | null>(null);
   const [clients, setClients] = useState<Record<string, unknown>[]>([]);
+  const [clientDetailData, setClientDetailData] = useState<Record<string, unknown> | null>(null);
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
+  const [contracts, setContracts] = useState<ContractItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Record<string, unknown>[]>([]);
   const [portfolios, setPortfolios] = useState<Record<string, unknown>[]>([]);
   const [projects, setProjects] = useState<Record<string, unknown>[]>([]);
@@ -716,6 +1058,9 @@ export function AppShell() {
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [editWorkspaceOpen, setEditWorkspaceOpen] = useState(false);
   const [createClientOpen, setCreateClientOpen] = useState(false);
+  const [newSaleWizardOpen, setNewSaleWizardOpen] = useState(false);
+  const [newSaleWizardStep, setNewSaleWizardStep] = useState(0);
+  const newSaleWizardValuesRef = useRef<Record<string, unknown>>({});
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [createBoardOpen, setCreateBoardOpen] = useState(false);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
@@ -723,6 +1068,19 @@ export function AppShell() {
   const [createWorkspaceForm] = Form.useForm();
   const [editWorkspaceForm] = Form.useForm();
   const [createClientForm] = Form.useForm();
+  const [manageClientForm] = Form.useForm();
+  const [manageServiceForm] = Form.useForm();
+  const [manageClientModal, setManageClientModal] = useState<{ mode: "create" | "edit"; clientId?: string } | null>(
+    null,
+  );
+  const [manageServiceModal, setManageServiceModal] = useState<{ mode: "create" | "edit"; serviceId?: string } | null>(
+    null,
+  );
+  const [clientListSearch, setClientListSearch] = useState("");
+  const [newSaleWizardForm] = Form.useForm();
+  const [editContractForm] = Form.useForm();
+  const [viewContractData, setViewContractData] = useState<ContractItem | null>(null);
+  const [editContractId, setEditContractId] = useState<string | null>(null);
   const [createProjectForm] = Form.useForm();
   const [createBoardForm] = Form.useForm();
   const [createGroupForm] = Form.useForm();
@@ -793,12 +1151,11 @@ export function AppShell() {
           icon: <SettingOutlined />,
           label: "Administracao",
           children: [
+            { key: "clients", icon: <ShopOutlined />, label: "Clientes" },
+            { key: "services", icon: <TagsOutlined />, label: "Servicos" },
+            { key: "sales", icon: <ShoppingCartOutlined />, label: "Venda" },
             { key: "users", icon: <TeamOutlined />, label: "Usuarios" },
-            { key: "admin-settings", icon: <SettingOutlined />, label: "Configuracoes admin" },
             { key: "status-config", icon: <CheckCircleOutlined />, label: "Status globais" },
-            { key: "admin-ops", icon: <SettingOutlined />, label: "Operacoes admin" },
-            { key: "governance", icon: <SafetyOutlined />, label: "Governanca" },
-            { key: "audit", icon: <HistoryOutlined />, label: "Auditoria" },
             { key: "stats", icon: <StockOutlined />, label: "Estatisticas" },
           ],
         },
@@ -827,6 +1184,26 @@ export function AppShell() {
       }, {}),
     [projects],
   );
+  const filteredClientsManage = useMemo(() => {
+    const query = clientListSearch.trim().toLowerCase();
+    if (!query) return clients;
+    return clients.filter((row) => {
+      const name = String(row.name ?? "").toLowerCase();
+      const cnpj = String(row.cnpj ?? "").replace(/\D/g, "");
+      const contact = String(row.contact_name ?? "").toLowerCase();
+      return name.includes(query) || cnpj.includes(query.replace(/\D/g, "")) || contact.includes(query);
+    });
+  }, [clientListSearch, clients]);
+
+  const contractLineById = useMemo(() => {
+    const index: Record<string, ContractServiceLineItem> = {};
+    contracts.forEach((contract) => {
+      (contract.service_lines ?? []).forEach((line) => {
+        if (line.id) index[String(line.id)] = line;
+      });
+    });
+    return index;
+  }, [contracts]);
   const activeTimeLog = useMemo(
     () => taskSummary.logs.find((log) => String(log.status).toLowerCase() === "active") ?? null,
     [taskSummary.logs],
@@ -956,22 +1333,28 @@ export function AppShell() {
                 onClick: () => navigateTo("status-config"),
               },
               {
+                key: "clients",
+                icon: <ShopOutlined />,
+                label: "Clientes",
+                onClick: () => navigateTo("clients"),
+              },
+              {
+                key: "services",
+                icon: <TagsOutlined />,
+                label: "Servicos",
+                onClick: () => navigateTo("services"),
+              },
+              {
+                key: "sales",
+                icon: <ShoppingCartOutlined />,
+                label: "Venda",
+                onClick: () => navigateTo("sales"),
+              },
+              {
                 key: "admin-ops",
                 icon: <SettingOutlined />,
                 label: "Operacoes admin",
                 onClick: () => navigateTo("admin-ops"),
-              },
-              {
-                key: "governance",
-                icon: <SafetyOutlined />,
-                label: "Governanca",
-                onClick: () => navigateTo("governance"),
-              },
-              {
-                key: "audit",
-                icon: <HistoryOutlined />,
-                label: "Auditoria",
-                onClick: () => navigateTo("audit"),
               },
               {
                 key: "stats",
@@ -1613,17 +1996,34 @@ export function AppShell() {
   }, [token]);
 
   const fetchCrudData = useCallback(async () => {
-    const [clientsResp, workspacesResp, portfoliosResp, projectsResp] = await Promise.all([
+    const [clientsResp, servicesResp, contractsResp, workspacesResp, portfoliosResp, projectsResp] = await Promise.all([
       apiRequest<{ clients: Record<string, unknown>[] }>("/clients?page=1&page_size=50", { token }),
+      apiRequest<{ services: ServiceCatalogItem[] }>("/services", { token }),
+      apiRequest<{ contracts: ContractItem[] }>("/contracts", { token }),
       apiRequest<{ workspaces: Record<string, unknown>[] }>("/workspaces", { token }),
       apiRequest<{ portfolios: Record<string, unknown>[] }>("/portfolios", { token }),
       apiRequest<{ projects: Record<string, unknown>[] }>("/projects", { token }),
     ]);
     if (clientsResp.ok) setClients(clientsResp.data?.clients ?? []);
+    if (servicesResp.ok) setServiceCatalog(servicesResp.data?.services ?? []);
+    if (contractsResp.ok) setContracts(contractsResp.data?.contracts ?? []);
     if (workspacesResp.ok) setWorkspaces(workspacesResp.data?.workspaces ?? []);
     if (portfoliosResp.ok) setPortfolios(portfoliosResp.data?.portfolios ?? []);
     if (projectsResp.ok) setProjects(projectsResp.data?.projects ?? []);
   }, [token]);
+
+  const fetchClientDetail = useCallback(
+    async (clientId: string) => {
+      if (!clientId) return;
+      const response = await apiRequest<Record<string, unknown>>(`/clients/${clientId}`, { token });
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao carregar detalhe do cliente.");
+        return;
+      }
+      setClientDetailData(response.data ?? null);
+    },
+    [apiMessage, token],
+  );
   const fetchBoardGroupsIndex = useCallback(
     async (currentBoards: BoardItem[]) => {
       if (!currentBoards.length) {
@@ -1821,6 +2221,13 @@ export function AppShell() {
     }
     return true;
   }, [refreshToken]);
+
+  useEffect(() => {
+    if (!token || !isAdmin) return;
+    if (activeKey === "clients" || activeKey === "services" || activeKey === "sales") {
+      fetchCrudData().catch(() => undefined);
+    }
+  }, [activeKey, fetchCrudData, isAdmin, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -3747,34 +4154,65 @@ export function AppShell() {
                                       {
                                         title: "Acoes",
                                         render: (record: { id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string }) => (
-                                          <Button
-                                            size="small"
-                                            onClick={() => {
-                                              void (async () => {
-                                                manageUserProfileForm.setFieldsValue({
-                                                  user_id: record.id,
-                                                  name: record.name,
-                                                  email: record.email,
-                                                  is_staff: record.type === "admin",
-                                                  birth_date: record.birth_date,
-                                                  workspace_ids: [] as string[],
-                                                });
-                                                const wsResp = await apiRequest<{
-                                                  is_staff?: boolean;
-                                                  workspace_ids?: string[];
-                                                }>(`/users/${record.id}/workspace-access`, { token });
-                                                if (wsResp.ok && wsResp.data && !wsResp.data.is_staff) {
-                                                  manageUserProfileForm.setFieldValue(
-                                                    "workspace_ids",
-                                                    (wsResp.data.workspace_ids ?? []).map(String),
-                                                  );
-                                                }
-                                                setUsersTabKey("u-update-page");
-                                              })();
-                                            }}
-                                          >
-                                            Editar
-                                          </Button>
+                                          <Space>
+                                            <Button
+                                              size="small"
+                                              icon={<EditOutlined />}
+                                              onClick={() => {
+                                                void (async () => {
+                                                  manageUserProfileForm.setFieldsValue({
+                                                    user_id: record.id,
+                                                    name: record.name,
+                                                    email: record.email,
+                                                    is_staff: record.type === "admin",
+                                                    birth_date: record.birth_date,
+                                                    workspace_ids: [] as string[],
+                                                    is_active: true,
+                                                  });
+                                                  const wsResp = await apiRequest<{
+                                                    is_staff?: boolean;
+                                                    workspace_ids?: string[];
+                                                  }>(`/users/${record.id}/workspace-access`, { token });
+                                                  if (wsResp.ok && wsResp.data && !wsResp.data.is_staff) {
+                                                    manageUserProfileForm.setFieldValue(
+                                                      "workspace_ids",
+                                                      (wsResp.data.workspace_ids ?? []).map(String),
+                                                    );
+                                                  }
+                                                  setUsersTabKey("u-update-page");
+                                                })();
+                                              }}
+                                            >
+                                              Editar
+                                            </Button>
+                                            <Button
+                                              size="small"
+                                              danger
+                                              icon={<DeleteOutlined />}
+                                              onClick={() =>
+                                                openDeleteConfirmModal({
+                                                  title: `Excluir usuario "${record.name || record.email}"? (inativacao logica)`,
+                                                  onConfirm: async () => {
+                                                    const response = await apiRequest(`/users/${record.id}`, {
+                                                      method: "PATCH",
+                                                      token,
+                                                      body: { is_active: false },
+                                                    });
+                                                    if (!response.ok) {
+                                                      apiMessage.error(
+                                                        extractApiErrorMessage(response.error, "Falha ao excluir usuario."),
+                                                      );
+                                                      throw new Error("user_delete_failed");
+                                                    }
+                                                    setAdminUsersCache((prev) => prev.filter((row) => row.id !== record.id));
+                                                    apiMessage.success("Usuario excluido (inativado).");
+                                                  },
+                                                })
+                                              }
+                                            >
+                                              Excluir
+                                            </Button>
+                                          </Space>
                                         ),
                                       },
                                     ]}
@@ -4337,6 +4775,387 @@ export function AppShell() {
                       </Card>
                     </Col>
                   </Row>
+                )}
+                {activeKey === "clients" && isAdmin && (
+                  <Card
+                    title="Clientes"
+                    extra={
+                      <Space wrap>
+                        <Input
+                          allowClear
+                          placeholder="Buscar por nome, CNPJ ou contato"
+                          value={clientListSearch}
+                          onChange={(event) => setClientListSearch(event.target.value)}
+                          style={{ width: 280 }}
+                        />
+                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
+                        <Button
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            manageClientForm.resetFields();
+                            setManageClientModal({ mode: "create" });
+                          }}
+                        >
+                          Novo cliente
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Table
+                      rowKey="id"
+                      dataSource={filteredClientsManage}
+                      pagination={{ pageSize: 10 }}
+                      columns={[
+                        { title: "Nome", dataIndex: "name" },
+                        { title: "CNPJ", dataIndex: "cnpj", render: (v: string) => v || "-" },
+                        { title: "Contato", dataIndex: "contact_name", render: (v: string) => v || "-" },
+                        {
+                          title: "Status",
+                          dataIndex: "status",
+                          render: (v: string) => (
+                            <Tag color={v === "active" ? "success" : "default"}>{v === "active" ? "Ativo" : v ?? "-"}</Tag>
+                          ),
+                        },
+                        {
+                          title: "Acoes",
+                          render: (row: Record<string, unknown>) => {
+                            const clientId = String(row.id ?? "");
+                            return (
+                              <Space>
+                                <Button
+                                  size="small"
+                                  icon={<EditOutlined />}
+                                  onClick={() => {
+                                    manageClientForm.setFieldsValue({
+                                      name: String(row.name ?? ""),
+                                      cnpj: String(row.cnpj ?? ""),
+                                      contact_name: String(row.contact_name ?? ""),
+                                      financial_emails: String(row.financial_emails ?? ""),
+                                      description: String(row.description ?? ""),
+                                    });
+                                    setManageClientModal({ mode: "edit", clientId });
+                                  }}
+                                >
+                                  Editar
+                                </Button>
+                                <Button
+                                  size="small"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  onClick={() =>
+                                    openDeleteConfirmModal({
+                                      title: `Excluir cliente "${String(row.name ?? "")}"?`,
+                                      onConfirm: async () => {
+                                        const response = await apiRequest(`/clients/${clientId}`, {
+                                          method: "DELETE",
+                                          token,
+                                        });
+                                        if (!response.ok) {
+                                          apiMessage.error(response.error?.message ?? "Falha ao excluir cliente.");
+                                          throw new Error("client_delete_failed");
+                                        }
+                                        apiMessage.success("Cliente excluido.");
+                                        await fetchCrudData();
+                                      },
+                                    })
+                                  }
+                                >
+                                  Excluir
+                                </Button>
+                              </Space>
+                            );
+                          },
+                        },
+                      ]}
+                    />
+                  </Card>
+                )}
+                {activeKey === "services" && isAdmin && (
+                  <Card
+                    title="Servicos"
+                    extra={
+                      <Space wrap>
+                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
+                        <Button
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            manageServiceForm.resetFields();
+                            manageServiceForm.setFieldsValue({ is_active: true, display_order: 100 });
+                            setManageServiceModal({ mode: "create" });
+                          }}
+                        >
+                          Novo servico
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Table<ServiceCatalogItem>
+                      rowKey="id"
+                      dataSource={serviceCatalog}
+                      pagination={{ pageSize: 10 }}
+                      columns={[
+                        { title: "Nome", dataIndex: "name" },
+                        { title: "Descricao", dataIndex: "description", ellipsis: true },
+                        { title: "Ordem", dataIndex: "display_order" },
+                        {
+                          title: "Ativo",
+                          dataIndex: "is_active",
+                          render: (v: boolean) => <Tag color={v ? "success" : "default"}>{v ? "Sim" : "Nao"}</Tag>,
+                        },
+                        {
+                          title: "Acoes",
+                          render: (row) => (
+                            <Space>
+                              <Button
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  manageServiceForm.setFieldsValue({
+                                    name: row.name,
+                                    description: row.description,
+                                    display_order: row.display_order,
+                                    is_active: row.is_active,
+                                  });
+                                  setManageServiceModal({ mode: "edit", serviceId: row.id });
+                                }}
+                              >
+                                Editar
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() =>
+                                  openDeleteConfirmModal({
+                                    title: `Excluir servico "${row.name}"?`,
+                                    onConfirm: async () => {
+                                      const response = await apiRequest(`/services/${row.id}`, {
+                                        method: "DELETE",
+                                        token,
+                                      });
+                                      if (!response.ok) {
+                                        apiMessage.error(response.error?.message ?? "Falha ao excluir servico.");
+                                        throw new Error("service_delete_failed");
+                                      }
+                                      apiMessage.success("Servico excluido.");
+                                      await fetchCrudData();
+                                    },
+                                  })
+                                }
+                              >
+                                Excluir
+                              </Button>
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Card>
+                )}
+                {activeKey === "sales" && isAdmin && (
+                  <Card
+                    title="Vendas e contratos"
+                    extra={
+                      <Space wrap>
+                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
+                        <Button
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            setNewSaleWizardStep(0);
+                            newSaleWizardForm.resetFields();
+                            const initialWizardValues = {
+                              use_existing_client: false,
+                              emits_invoice: true,
+                              has_iss_retention: false,
+                              has_inss_retention: false,
+                              payment_method: "boleto",
+                              service_lines: [{ service_type: "one_off", amount: "0.00" }],
+                            };
+                            newSaleWizardForm.setFieldsValue(initialWizardValues);
+                            newSaleWizardValuesRef.current = initialWizardValues;
+                            setNewSaleWizardOpen(true);
+                          }}
+                        >
+                          Nova venda
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Table<ContractItem>
+                      rowKey="id"
+                      dataSource={contracts}
+                      pagination={{ pageSize: 10 }}
+                      columns={[
+                        { title: "Cliente", render: (row) => row.client_name ?? row.client_id },
+                        {
+                          title: "Status",
+                          dataIndex: "status",
+                          render: (v: string) => <Tag color={v === "active" ? "success" : "default"}>{v}</Tag>,
+                        },
+                        { title: "Pagamento", dataIndex: "payment_method" },
+                        { title: "NF", render: (row) => (row.emits_invoice ? "Sim" : "Nao") },
+                        { title: "ISS", render: (row) => (row.has_iss_retention ? "Sim" : "Nao") },
+                        { title: "INSS", render: (row) => (row.has_inss_retention ? "Sim" : "Nao") },
+                        { title: "Servicos", render: (row) => row.service_lines?.length ?? 0 },
+                        {
+                          title: "Criado em",
+                          dataIndex: "created_at",
+                          render: (v: string | undefined) => (v ? formatDate(v) : "-"),
+                        },
+                        {
+                          title: "Acoes",
+                          render: (row) => (
+                            <Space wrap>
+                              <Button
+                                size="small"
+                                icon={<EyeOutlined />}
+                                onClick={() => {
+                                  void (async () => {
+                                    const response = await apiRequest<{ contract: ContractItem }>(
+                                      `/contracts/${row.id}`,
+                                      { token },
+                                    );
+                                    if (!response.ok || !response.data?.contract) {
+                                      apiMessage.error(
+                                        extractApiErrorMessage(response.error, "Falha ao carregar venda."),
+                                      );
+                                      return;
+                                    }
+                                    setViewContractData(response.data.contract);
+                                  })();
+                                }}
+                              >
+                                Visualizar
+                              </Button>
+                              <Button
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  void (async () => {
+                                    const response = await apiRequest<{ contract: ContractItem }>(
+                                      `/contracts/${row.id}`,
+                                      { token },
+                                    );
+                                    if (!response.ok || !response.data?.contract) {
+                                      apiMessage.error(
+                                        extractApiErrorMessage(response.error, "Falha ao carregar venda."),
+                                      );
+                                      return;
+                                    }
+                                    const contract = response.data.contract;
+                                    editContractForm.setFieldsValue(contractToEditFormValues(contract));
+                                    setEditContractId(contract.id);
+                                  })();
+                                }}
+                              >
+                                Editar
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                icon={<DeleteOutlined />}
+                                disabled={row.status === "active"}
+                                onClick={() =>
+                                  openDeleteConfirmModal({
+                                    title: `Excluir venda de "${row.client_name ?? row.client_id}"?`,
+                                    onConfirm: async () => {
+                                      const response = await apiRequest(`/contracts/${row.id}`, {
+                                        method: "DELETE",
+                                        token,
+                                      });
+                                      if (!response.ok) {
+                                        apiMessage.error(
+                                          extractApiErrorMessage(response.error, "Falha ao excluir venda."),
+                                        );
+                                        throw new Error("contract_delete_failed");
+                                      }
+                                      apiMessage.success("Venda excluida.");
+                                      await fetchCrudData();
+                                    },
+                                  })
+                                }
+                              >
+                                Excluir
+                              </Button>
+                              {row.status !== "active" && row.status !== "cancelled" ? (
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  onClick={async () => {
+                                    const response = await apiRequest(`/contracts/${row.id}/confirm`, {
+                                      method: "POST",
+                                      token,
+                                      body: {},
+                                    });
+                                    if (!response.ok) {
+                                      apiMessage.error(response.error?.message ?? "Falha ao confirmar contrato.");
+                                      return;
+                                    }
+                                    apiMessage.success("Contrato confirmado e projetos criados.");
+                                    await fetchCrudData();
+                                  }}
+                                >
+                                  Confirmar
+                                </Button>
+                              ) : null}
+                              {row.status === "cancelled" ? (
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  icon={<PlayCircleOutlined />}
+                                  onClick={async () => {
+                                    const response = await apiRequest<{ contract: ContractItem }>(
+                                      `/contracts/${row.id}/reactivate`,
+                                      { method: "POST", token, body: {} },
+                                    );
+                                    if (!response.ok) {
+                                      apiMessage.error(
+                                        extractApiErrorMessage(response.error, "Falha ao reativar contrato."),
+                                      );
+                                      return;
+                                    }
+                                    const nextStatus = response.data?.contract?.status ?? "submitted";
+                                    apiMessage.success(
+                                      nextStatus === "active"
+                                        ? "Contrato reativado (ativo)."
+                                        : "Contrato reativado. Confirme novamente se necessario.",
+                                    );
+                                    await fetchCrudData();
+                                  }}
+                                >
+                                  Reativar
+                                </Button>
+                              ) : null}
+                              {row.status !== "cancelled" ? (
+                                <Button
+                                  size="small"
+                                  danger
+                                  onClick={async () => {
+                                    const response = await apiRequest(`/contracts/${row.id}/cancel`, {
+                                      method: "POST",
+                                      token,
+                                      body: {},
+                                    });
+                                    if (!response.ok) {
+                                      apiMessage.error(response.error?.message ?? "Falha ao cancelar contrato.");
+                                      return;
+                                    }
+                                    apiMessage.success("Contrato cancelado.");
+                                    await fetchCrudData();
+                                  }}
+                                >
+                                  Cancelar
+                                </Button>
+                              ) : null}
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Card>
                 )}
                 {activeKey === "admin-ops" && isAdmin && (
                   <Row gutter={[16, 16]}>
@@ -5527,354 +6346,6 @@ export function AppShell() {
                   </Card>
                 )}
 
-                {activeKey === "governance" && isAdmin && (
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={12}>
-                      <Card title="Matriz de permissoes">
-                        <Form
-                          layout="vertical"
-                          onFinish={async (values) => {
-                            const response = await apiRequest<Record<string, unknown>>(
-                              `/permissions/matrix?workspace_id=${values.workspace_id}`,
-                              { token },
-                            );
-                            if (!response.ok) {
-                              apiMessage.error(response.error?.message ?? "Erro ao consultar matriz.");
-                              return;
-                            }
-                            setGovernanceResult(response.data ?? null);
-                          }}
-                        >
-                          <Form.Item name="workspace_id" label="Workspace" rules={[{ required: true }]}>
-                            <Select
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder="Selecione o workspace"
-                              options={workspaces.map((row) => ({
-                                value: String(row.id),
-                                label: String(row.name ?? row.id),
-                              }))}
-                            />
-                          </Form.Item>
-                          <Button htmlType="submit" type="primary">
-                            Consultar matriz
-                          </Button>
-                        </Form>
-                      </Card>
-                    </Col>
-                    <Col xs={24} lg={12}>
-                      <Card title="Permissao pontual (assignment)">
-                        <Form
-                          layout="vertical"
-                          initialValues={{ effect: "allow", scope_type: "workspace" }}
-                          onFinish={async (values) => {
-                            const response = await apiRequest<Record<string, unknown>>("/permissions/assignments", {
-                              method: "POST",
-                              token,
-                              body: {
-                                workspace_id: values.workspace_id,
-                                subject_type: "user",
-                                subject_id: values.subject_id,
-                                scope_type: values.scope_type,
-                                scope_id: values.scope_id,
-                                permission_key: values.permission_key,
-                                effect: values.effect,
-                              },
-                            });
-                            if (!response.ok) {
-                              apiMessage.error(response.error?.message ?? "Falha ao criar/atualizar permissao.");
-                              return;
-                            }
-                            setGovernanceResult(response.data ?? null);
-                            apiMessage.success("Permissao aplicada.");
-                          }}
-                        >
-                          <Form.Item name="workspace_id" label="Workspace" rules={[{ required: true }]}>
-                            <Select
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder="Workspace"
-                              options={workspaces.map((row) => ({
-                                value: String(row.id),
-                                label: String(row.name ?? row.id),
-                              }))}
-                            />
-                          </Form.Item>
-                          <Form.Item name="subject_id" label="Usuario (ID)" rules={[{ required: true }]}>
-                            <InputNumber min={1} style={{ width: "100%" }} />
-                          </Form.Item>
-                          <Form.Item name="scope_type" label="Tipo de escopo" rules={[{ required: true }]}>
-                            <Select options={SCOPE_TYPE_OPTIONS} />
-                          </Form.Item>
-                          <Form.Item name="scope_id" label="ID do escopo (UUID)" rules={[{ required: true }]}>
-                            <Input />
-                          </Form.Item>
-                          <Form.Item name="permission_key" label="Permissao" rules={[{ required: true }]}>
-                            <Select options={PERMISSION_KEY_OPTIONS} />
-                          </Form.Item>
-                          <Form.Item name="effect" label="Efeito" rules={[{ required: true }]}>
-                            <Select
-                              options={[
-                                { value: "allow", label: "allow" },
-                                { value: "deny", label: "deny" },
-                              ]}
-                            />
-                          </Form.Item>
-                          <Button htmlType="submit" type="primary">
-                            Aplicar permissao
-                          </Button>
-                        </Form>
-                      </Card>
-                    </Col>
-                    <Col xs={24} lg={12}>
-                      <Card title="Resultado">
-                        <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                          {governanceResult ? JSON.stringify(governanceResult, null, 2) : "Sem dados"}
-                        </pre>
-                      </Card>
-                    </Col>
-                    <Col xs={24} lg={12}>
-                      <Card title="Permissoes em lote (preview/apply)">
-                        <Form
-                          layout="vertical"
-                          onFinish={async (values) => {
-                            const items = safeJsonArrayParse(bulkPermissionItemsText);
-                            if (!items) {
-                              apiMessage.error("JSON de itens invalido. Envie uma lista de objetos.");
-                              return;
-                            }
-                            const response = await apiRequest<Record<string, unknown>>("/permissions/bulk/preview", {
-                              method: "POST",
-                              token,
-                              body: {
-                                workspace_id: values.workspace_id,
-                                items,
-                              },
-                            });
-                            if (!response.ok) {
-                              apiMessage.error(response.error?.message ?? "Falha ao gerar preview em lote.");
-                              return;
-                            }
-                            const previewId = String((response.data?.preview_id as string | undefined) ?? "");
-                            setBulkPreviewId(previewId || null);
-                            setGovernanceResult(response.data ?? null);
-                            apiMessage.success("Preview de lote gerado.");
-                          }}
-                        >
-                          <Form.Item name="workspace_id" label="Workspace" rules={[{ required: true }]}>
-                            <Select
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder="Workspace"
-                              options={workspaces.map((row) => ({
-                                value: String(row.id),
-                                label: String(row.name ?? row.id),
-                              }))}
-                            />
-                          </Form.Item>
-                          <Form.Item label="Itens (JSON array)">
-                            <Input.TextArea
-                              rows={9}
-                              value={bulkPermissionItemsText}
-                              onChange={(event) => setBulkPermissionItemsText(event.target.value)}
-                            />
-                          </Form.Item>
-                          <Space wrap>
-                            <Button type="primary" htmlType="submit">
-                              Gerar preview
-                            </Button>
-                            <Button
-                              onClick={async () => {
-                                if (!bulkPreviewId) {
-                                  apiMessage.warning("Gere um preview antes de aplicar.");
-                                  return;
-                                }
-                                const response = await apiRequest<Record<string, unknown>>("/permissions/bulk/apply", {
-                                  method: "POST",
-                                  token,
-                                  body: { preview_id: bulkPreviewId, mode: "partial" },
-                                });
-                                if (!response.ok) {
-                                  apiMessage.error(response.error?.message ?? "Falha ao aplicar lote.");
-                                  return;
-                                }
-                                setGovernanceResult(response.data ?? null);
-                                apiMessage.success("Lote aplicado.");
-                              }}
-                            >
-                              Aplicar preview
-                            </Button>
-                          </Space>
-                          <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-                            O apply aceita apenas o preview gerado pelo proprio usuario logado.
-                          </Typography.Paragraph>
-                        </Form>
-                      </Card>
-                    </Col>
-                    <Col xs={24}>
-                      <Card title="Conflitos de permissao (preview e resolucao)">
-                        <Form
-                          layout="vertical"
-                          initialValues={{ proposed_effect: "allow", scope_type: "workspace" }}
-                          onFinish={async (values) => {
-                            const body = {
-                              workspace_id: values.workspace_id,
-                              context: {
-                                subject_type: "user" as const,
-                                subject_id: values.subject_id,
-                                scope_type: values.scope_type,
-                                scope_id: values.scope_id,
-                                permission_key: values.permission_key,
-                              },
-                              proposed: { effect: values.proposed_effect },
-                            };
-                            const response = await apiRequest<Record<string, unknown>>(
-                              "/permissions/conflicts/resolve-preview",
-                              { method: "POST", token, body },
-                            );
-                            if (!response.ok) {
-                              apiMessage.error(response.error?.message ?? "Erro no preview de conflito.");
-                              setConflictPreviewResult(null);
-                              lastConflictRequestRef.current = null;
-                              return;
-                            }
-                            lastConflictRequestRef.current = body;
-                            setConflictPreviewResult(response.data ?? null);
-                            apiMessage.success("Preview calculado.");
-                          }}
-                        >
-                          <Form.Item name="workspace_id" label="Workspace" rules={[{ required: true }]}>
-                            <Select
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder="Workspace"
-                              options={workspaces.map((row) => ({
-                                value: String(row.id),
-                                label: String(row.name ?? row.id),
-                              }))}
-                            />
-                          </Form.Item>
-                          <Form.Item name="subject_id" label="Usuario (ID)" rules={[{ required: true }]}>
-                            <InputNumber min={1} style={{ width: "100%" }} placeholder="Ex.: 1" />
-                          </Form.Item>
-                          <Form.Item name="scope_type" label="Tipo de escopo" rules={[{ required: true }]}>
-                            <Select options={SCOPE_TYPE_OPTIONS} placeholder="Escopo" />
-                          </Form.Item>
-                          <Form.Item name="scope_id" label="ID do escopo (UUID)" rules={[{ required: true }]}>
-                            <Input placeholder="UUID do portfolio, projeto, grupo ou workspace" />
-                          </Form.Item>
-                          <Form.Item name="permission_key" label="Permissao" rules={[{ required: true }]}>
-                            <Select options={PERMISSION_KEY_OPTIONS} placeholder="Chave" />
-                          </Form.Item>
-                          <Form.Item name="proposed_effect" label="Efeito proposto" rules={[{ required: true }]}>
-                            <Select
-                              options={[
-                                { value: "allow", label: "allow" },
-                                { value: "deny", label: "deny" },
-                              ]}
-                            />
-                          </Form.Item>
-                          <Space wrap>
-                            <Button htmlType="submit" type="primary">
-                              Preview de conflito
-                            </Button>
-                            <Button onClick={() => openConflictResolveModal()}>Resolver (superuser)</Button>
-                          </Space>
-                        </Form>
-                        <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 8 }}>
-                          A resolucao exige perfil superuser na API. Use o mesmo formulario: preencha os campos, gere o
-                          preview e confirme a resolucao.
-                        </Typography.Paragraph>
-                        <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                          {conflictPreviewResult ? JSON.stringify(conflictPreviewResult, null, 2) : "Sem preview"}
-                        </pre>
-                      </Card>
-                    </Col>
-                  </Row>
-                )}
-
-                {activeKey === "audit" && isAdmin && (
-                  <Row gutter={[16, 16]}>
-                    <Col span={24}>
-                      <Card title="Dashboard de auditoria">
-                        <Space wrap style={{ marginBottom: 12 }}>
-                          <Button onClick={() => fetchAuditOverview().catch(() => undefined)}>Atualizar visao geral</Button>
-                        </Space>
-                        <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{JSON.stringify(auditOverview, null, 2)}</pre>
-                      </Card>
-                    </Col>
-                    <Col span={24}>
-                      <Card title="Logs">
-                        <Form
-                          form={auditLogFilterForm}
-                          layout="vertical"
-                          onFinish={async (values) => {
-                            const sp = new URLSearchParams({ page: "1", page_size: "20" });
-                            if (values.workspace_id) sp.set("workspace_id", values.workspace_id);
-                            if (values.event_type?.trim()) sp.set("event_type", values.event_type.trim());
-                            if (values.actor_id?.trim()) sp.set("actor_id", values.actor_id.trim());
-                            await fetchAuditLogs(sp.toString());
-                            apiMessage.success("Logs atualizados.");
-                          }}
-                          initialValues={{ event_type: "", actor_id: "" }}
-                        >
-                          <Row gutter={16}>
-                            <Col xs={24} md={8}>
-                              <Form.Item name="workspace_id" label="Workspace">
-                                <Select
-                                  allowClear
-                                  showSearch
-                                  optionFilterProp="label"
-                                  placeholder="Todos"
-                                  options={workspaces.map((row) => ({
-                                    value: String(row.id),
-                                    label: String(row.name ?? row.id),
-                                  }))}
-                                />
-                              </Form.Item>
-                            </Col>
-                            <Col xs={24} md={8}>
-                              <Form.Item name="event_type" label="Tipo de evento (exato)">
-                                <Input placeholder="Ex.: workspace.created" allowClear />
-                              </Form.Item>
-                            </Col>
-                            <Col xs={24} md={8}>
-                              <Form.Item name="actor_id" label="ID do ator">
-                                <Input placeholder="ID numerico do usuario" allowClear />
-                              </Form.Item>
-                            </Col>
-                          </Row>
-                          <Space wrap>
-                            <Button type="primary" htmlType="submit">
-                              Filtrar logs
-                            </Button>
-                            <Button
-                              onClick={() => {
-                                auditLogFilterForm.resetFields();
-                                fetchAuditLogs().catch(() => undefined);
-                              }}
-                            >
-                              Limpar filtros
-                            </Button>
-                          </Space>
-                        </Form>
-                        <Table<Record<string, unknown>>
-                          style={{ marginTop: 16 }}
-                          rowKey={(record) => String(record.id)}
-                          dataSource={auditLogs}
-                          pagination={{ pageSize: 8 }}
-                          columns={[
-                            { title: "Evento", dataIndex: "event_type" },
-                            { title: "Acao", dataIndex: "action" },
-                            { title: "Entidade", dataIndex: "entity_type" },
-                            { title: "Criado em", dataIndex: "created_at", render: (v: string) => formatDate(v) },
-                          ]}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
-                )}
-
                 {activeKey === "stats" && isAdmin && (
                   <Row gutter={[16, 16]}>
                     <Col xs={24} lg={8}>
@@ -6369,6 +6840,8 @@ export function AppShell() {
                             {projectsForClient(selectedWorkspaceId, selectedClientId).map((project) => {
                               const projectId = String(project.id);
                               const projectBoards = boardsForProject(projectId).length;
+                              const contractLineId = String(project.contract_line_id ?? "");
+                              const contractLine = contractLineId ? contractLineById[contractLineId] : undefined;
                               return (
                                 <Col xs={24} sm={12} lg={8} xl={6} key={projectId}>
                                   <Card
@@ -6448,6 +6921,19 @@ export function AppShell() {
                                     <Space orientation="vertical" size={4}>
                                       <Tag color="processing">{projectBoards} grupos</Tag>
                                       <Typography.Text type="secondary">Status: {String(project.status ?? "-")}</Typography.Text>
+                                      {contractLine ? (
+                                        <>
+                                          <Typography.Text type="secondary">
+                                            Servico: {String(contractLine.service_name ?? contractLine.service_id ?? "-")}
+                                          </Typography.Text>
+                                          <Typography.Text type="secondary">
+                                            Tipo: {contractLine.service_type === "recurring" ? "Recorrente" : "Avulso"} | Valor:{" "}
+                                            {String(contractLine.amount ?? "-")}
+                                          </Typography.Text>
+                                        </>
+                                      ) : (
+                                        <Typography.Text type="secondary">Origem: sem contrato vinculado</Typography.Text>
+                                      )}
                                     </Space>
                                   </Card>
                                 </Col>
@@ -7157,7 +7643,13 @@ export function AppShell() {
             const response = await apiRequest<{ client: Record<string, unknown> }>("/clients", {
               method: "POST",
               token,
-              body: { name: values.name, description: values.description ?? "" },
+              body: {
+                name: values.name,
+                cnpj: String(values.cnpj ?? ""),
+                contact_name: String(values.contact_name ?? ""),
+                financial_emails: String(values.financial_emails ?? ""),
+                description: values.description ?? "",
+              },
             });
             if (!response.ok) {
               apiMessage.error(response.error?.message ?? "Falha ao criar cliente.");
@@ -7175,10 +7667,43 @@ export function AppShell() {
         >
           <Form.Item
             name="name"
-            label="Nome"
+            label="Nome fantasia"
             rules={[{ required: true, message: "Informe o nome." }, { min: 3 }, { max: 255 }]}
           >
             <Input placeholder="Ex.: Cliente Alfa" />
+          </Form.Item>
+          <Form.Item
+            name="cnpj"
+            label="CNPJ"
+            getValueFromEvent={(event) => maskCnpjInput(event?.target?.value)}
+            rules={[
+              { required: true, message: "Informe o CNPJ." },
+              {
+                validator: (_rule, value) => {
+                  const digits = String(value ?? "").replace(/\D/g, "");
+                  return digits.length === 14
+                    ? Promise.resolve()
+                    : Promise.reject(new Error("CNPJ deve ter 14 digitos."));
+                },
+              },
+            ]}
+          >
+            <Input placeholder="Somente numeros ou formatado" />
+          </Form.Item>
+          <Form.Item
+            name="contact_name"
+            label="Nome para contato"
+            rules={[{ required: true, message: "Informe o nome de contato." }]}
+          >
+            <Input placeholder="Ex.: Maria Financeiro" />
+          </Form.Item>
+          <Form.Item
+            name="financial_emails"
+            label="E-mail financeiro"
+            getValueFromEvent={(event) => normalizeFinancialEmailsInput(event?.target?.value)}
+            rules={[{ required: true, message: "Informe ao menos um e-mail financeiro." }]}
+          >
+            <Input placeholder="financeiro@cliente.com;contas@cliente.com" />
           </Form.Item>
           <Form.Item name="description" label="Descricao">
             <Input.TextArea rows={3} />
@@ -7189,6 +7714,903 @@ export function AppShell() {
             title={`Sera vinculado automaticamente a area de trabalho atual: ${String(selectedWorkspace?.name ?? "")}`}
             description="O cliente aparecera dentro desta area assim que voce criar o primeiro projeto vinculado."
           />
+        </Form>
+      </Modal>
+
+      <Modal
+        title={manageClientModal?.mode === "edit" ? "Editar cliente" : "Novo cliente"}
+        open={Boolean(manageClientModal)}
+        onCancel={() => setManageClientModal(null)}
+        onOk={() => manageClientForm.submit()}
+        okText={manageClientModal?.mode === "edit" ? "Salvar" : "Criar"}
+        cancelText="Cancelar"
+        destroyOnHidden
+      >
+        <Form
+          layout="vertical"
+          form={manageClientForm}
+          onFinish={async (values) => {
+            if (manageClientModal?.mode === "edit" && manageClientModal.clientId) {
+              const response = await apiRequest(`/clients/${manageClientModal.clientId}`, {
+                method: "PATCH",
+                token,
+                body: {
+                  name: values.name,
+                  cnpj: String(values.cnpj ?? ""),
+                  contact_name: String(values.contact_name ?? ""),
+                  financial_emails: String(values.financial_emails ?? ""),
+                  description: values.description ?? "",
+                },
+              });
+              if (!response.ok) {
+                apiMessage.error(response.error?.message ?? "Falha ao atualizar cliente.");
+                return;
+              }
+              apiMessage.success("Cliente atualizado.");
+            } else {
+              const response = await apiRequest("/clients", {
+                method: "POST",
+                token,
+                body: {
+                  name: values.name,
+                  cnpj: String(values.cnpj ?? ""),
+                  contact_name: String(values.contact_name ?? ""),
+                  financial_emails: String(values.financial_emails ?? ""),
+                  description: values.description ?? "",
+                },
+              });
+              if (!response.ok) {
+                apiMessage.error(response.error?.message ?? "Falha ao criar cliente.");
+                return;
+              }
+              apiMessage.success("Cliente criado.");
+            }
+            setManageClientModal(null);
+            manageClientForm.resetFields();
+            await fetchCrudData();
+          }}
+        >
+          <Form.Item name="name" label="Nome fantasia" rules={[{ required: true }, { min: 3 }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="cnpj"
+            label="CNPJ"
+            getValueFromEvent={(event) => maskCnpjInput(event?.target?.value)}
+            rules={[
+              { required: true },
+              {
+                validator: (_rule, value) => {
+                  const digits = String(value ?? "").replace(/\D/g, "");
+                  return digits.length === 14
+                    ? Promise.resolve()
+                    : Promise.reject(new Error("CNPJ deve ter 14 digitos."));
+                },
+              },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="contact_name" label="Nome para contato" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="financial_emails"
+            label="E-mails financeiros"
+            getValueFromEvent={(event) => normalizeFinancialEmailsInput(event?.target?.value)}
+            rules={[{ required: true }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Descricao">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={manageServiceModal?.mode === "edit" ? "Editar servico" : "Novo servico"}
+        open={Boolean(manageServiceModal)}
+        onCancel={() => setManageServiceModal(null)}
+        onOk={() => manageServiceForm.submit()}
+        okText={manageServiceModal?.mode === "edit" ? "Salvar" : "Criar"}
+        cancelText="Cancelar"
+        destroyOnHidden
+      >
+        <Form
+          layout="vertical"
+          form={manageServiceForm}
+          initialValues={{ is_active: true, display_order: 100 }}
+          onFinish={async (values) => {
+            const body = {
+              name: String(values.name ?? "").trim(),
+              description: String(values.description ?? ""),
+              is_active: Boolean(values.is_active),
+              display_order: Number(values.display_order ?? 100),
+            };
+            if (manageServiceModal?.mode === "edit" && manageServiceModal.serviceId) {
+              const response = await apiRequest(`/services/${manageServiceModal.serviceId}`, {
+                method: "PATCH",
+                token,
+                body,
+              });
+              if (!response.ok) {
+                apiMessage.error(response.error?.message ?? "Falha ao atualizar servico.");
+                return;
+              }
+              apiMessage.success("Servico atualizado.");
+            } else {
+              const response = await apiRequest("/services", { method: "POST", token, body });
+              if (!response.ok) {
+                apiMessage.error(response.error?.message ?? "Falha ao criar servico.");
+                return;
+              }
+              apiMessage.success("Servico criado.");
+            }
+            setManageServiceModal(null);
+            manageServiceForm.resetFields();
+            await fetchCrudData();
+          }}
+        >
+          <Form.Item name="name" label="Nome do servico" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Descricao">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="display_order" label="Ordem">
+            <InputNumber min={1} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="is_active" label="Ativo">
+            <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Detalhes da venda"
+        open={Boolean(viewContractData)}
+        onCancel={() => setViewContractData(null)}
+        footer={[
+          <Button key="close" onClick={() => setViewContractData(null)}>
+            Fechar
+          </Button>,
+          viewContractData ? (
+            <Button
+              key="edit"
+              type="primary"
+              onClick={() => {
+                if (!viewContractData) return;
+                editContractForm.setFieldsValue(contractToEditFormValues(viewContractData));
+                setEditContractId(viewContractData.id);
+                setViewContractData(null);
+              }}
+            >
+              Editar
+            </Button>
+          ) : null,
+        ]}
+        width={760}
+        destroyOnHidden
+      >
+        {viewContractData ? (
+          <Space orientation="vertical" style={{ width: "100%" }} size="middle">
+            <Row gutter={[12, 12]}>
+              <Col xs={24} md={12}>
+                <Typography.Text type="secondary">Cliente</Typography.Text>
+                <div>{viewContractData.client_name ?? viewContractData.client_id}</div>
+              </Col>
+              <Col xs={24} md={12}>
+                <Typography.Text type="secondary">Status</Typography.Text>
+                <div>
+                  <Tag color={viewContractData.status === "active" ? "success" : "default"}>
+                    {viewContractData.status}
+                  </Tag>
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <Typography.Text type="secondary">Pagamento</Typography.Text>
+                <div>
+                  {paymentMethodLabel(viewContractData.payment_method)}
+                  {viewContractData.payment_other ? ` (${viewContractData.payment_other})` : ""}
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <Typography.Text type="secondary">NF / ISS / INSS</Typography.Text>
+                <div>
+                  NF: {viewContractData.emits_invoice ? "Sim" : "Nao"} | ISS:{" "}
+                  {viewContractData.has_iss_retention ? "Sim" : "Nao"} | INSS:{" "}
+                  {viewContractData.has_inss_retention ? "Sim" : "Nao"}
+                </div>
+              </Col>
+              {viewContractData.notes ? (
+                <Col span={24}>
+                  <Typography.Text type="secondary">Observacoes</Typography.Text>
+                  <div>{viewContractData.notes}</div>
+                </Col>
+              ) : null}
+              {viewContractData.created_at ? (
+                <Col xs={24} md={12}>
+                  <Typography.Text type="secondary">Criado em</Typography.Text>
+                  <div>{formatDate(viewContractData.created_at)}</div>
+                </Col>
+              ) : null}
+            </Row>
+            <Table
+              size="small"
+              rowKey={contractServiceLineRowKey}
+              pagination={false}
+              dataSource={viewContractData.service_lines ?? []}
+              columns={[
+                { title: "Servico", render: (line) => line.service_name ?? line.service_id ?? line.service ?? "-" },
+                {
+                  title: "Tipo",
+                  dataIndex: "service_type",
+                  render: (v: string) => (v === "recurring" ? "Recorrente" : "Avulso"),
+                },
+                { title: "Valor", dataIndex: "amount" },
+                {
+                  title: "Recorrencia",
+                  render: (line) =>
+                    line.service_type === "recurring"
+                      ? `${line.recurrence ?? "-"}${line.starts_on ? ` (${line.starts_on} - ${line.ends_on ?? "..."})` : ""}`
+                      : "-",
+                },
+                { title: "Obs.", dataIndex: "notes", render: (v: string | undefined) => v || "-" },
+              ]}
+            />
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title="Editar venda"
+        open={Boolean(editContractId)}
+        onCancel={() => {
+          setEditContractId(null);
+          editContractForm.resetFields();
+        }}
+        onOk={() => editContractForm.submit()}
+        okText="Salvar"
+        cancelText="Cancelar"
+        width={900}
+        destroyOnHidden
+      >
+        <Form
+          layout="vertical"
+          form={editContractForm}
+          onFinish={async (values) => {
+            if (!editContractId) return;
+            const body = buildContractPatchBody(values as Record<string, unknown>);
+            if (!body.service_lines.length) {
+              apiMessage.error("Informe ao menos um servico.");
+              return;
+            }
+            if (body.service_lines.some((line) => !line.service)) {
+              apiMessage.error("Selecione o servico em todas as linhas.");
+              return;
+            }
+            const response = await apiRequest(`/contracts/${editContractId}`, {
+              method: "PATCH",
+              token,
+              body,
+            });
+            if (!response.ok) {
+              apiMessage.error(extractApiErrorMessage(response.error, "Falha ao atualizar venda."));
+              return;
+            }
+            apiMessage.success("Venda atualizada.");
+            setEditContractId(null);
+            editContractForm.resetFields();
+            await fetchCrudData();
+          }}
+        >
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={8}>
+              <Form.Item name="emits_invoice" label="Emissao de NF?">
+                <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="has_iss_retention" label="Retencao ISS?">
+                <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="has_inss_retention" label="Retencao INSS?">
+                <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="payment_method" label="Forma de pagamento" rules={[{ required: true }]}>
+                <Select
+                  options={[
+                    { value: "boleto", label: "Boleto" },
+                    { value: "transfer", label: "Transferencia" },
+                    { value: "pix", label: "PIX" },
+                    { value: "other", label: "Outro" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.payment_method !== curr.payment_method}>
+              {({ getFieldValue }) =>
+                getFieldValue("payment_method") === "other" ? (
+                  <Col xs={24} md={12}>
+                    <Form.Item name="payment_other" label="Detalhe do pagamento" rules={[{ required: true }]}>
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                ) : null
+              }
+            </Form.Item>
+            <Col span={24}>
+              <Form.Item name="notes" label="Observacoes">
+                <Input.TextArea rows={2} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Divider>Servicos</Divider>
+          <Form.List name="service_lines">
+            {(fields, { add, remove }) => (
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                {fields.map((field, index) => (
+                  <Card key={field.key} type="inner" title={`Servico ${index + 1}`}>
+                    <Row gutter={[12, 12]}>
+                      <Col xs={24} md={12}>
+                        <Form.Item name={[field.name, "service"]} label="Servico" rules={[{ required: true }]}>
+                          <Select
+                            showSearch
+                            optionFilterProp="label"
+                            options={serviceCatalog.map((item) => ({
+                              value: item.id,
+                              label: item.name,
+                            }))}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name={[field.name, "service_type"]} label="Tipo" rules={[{ required: true }]}>
+                          <Select
+                            options={[
+                              { value: "one_off", label: "Avulso" },
+                              { value: "recurring", label: "Recorrente" },
+                            ]}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name={[field.name, "amount"]} label="Valor" rules={[{ required: true }]}>
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name={[field.name, "notes"]} label="Observacoes">
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Form.Item noStyle shouldUpdate>
+                        {({ getFieldValue }) =>
+                          getFieldValue(["service_lines", field.name, "service_type"]) === "recurring" ? (
+                            <>
+                              <Col xs={24} md={12}>
+                                <Form.Item name={[field.name, "starts_on"]} label="Inicio (YYYY-MM-DD)">
+                                  <Input />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} md={12}>
+                                <Form.Item name={[field.name, "ends_on"]} label="Fim (YYYY-MM-DD)">
+                                  <Input />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} md={12}>
+                                <Form.Item name={[field.name, "recurrence"]} label="Periodicidade">
+                                  <Select
+                                    options={[
+                                      { value: "monthly", label: "Mensal" },
+                                      { value: "bimonthly", label: "Bimestral" },
+                                      { value: "quarterly", label: "Trimestral" },
+                                      { value: "semiannual", label: "Semestral" },
+                                      { value: "other", label: "Outro" },
+                                    ]}
+                                  />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} md={12}>
+                                <Form.Item name={[field.name, "recurrence_other"]} label="Recorrencia customizada">
+                                  <Input />
+                                </Form.Item>
+                              </Col>
+                            </>
+                          ) : null
+                        }
+                      </Form.Item>
+                    </Row>
+                    <Button danger onClick={() => remove(field.name)}>
+                      Remover servico
+                    </Button>
+                  </Card>
+                ))}
+                <Button type="dashed" onClick={() => add({ service_type: "one_off", amount: "0.00" })} icon={<PlusOutlined />}>
+                  Adicionar servico
+                </Button>
+              </Space>
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Nova venda"
+        open={newSaleWizardOpen}
+        onCancel={() => {
+          setNewSaleWizardOpen(false);
+          setNewSaleWizardStep(0);
+        }}
+        width={900}
+        footer={null}
+      >
+        <Steps
+          size="small"
+          current={newSaleWizardStep}
+          items={[
+            { title: "Cliente" },
+            { title: "Servicos" },
+            { title: "Financeiro" },
+            { title: "Recorrencia" },
+            { title: "Revisao" },
+          ]}
+          style={{ marginBottom: 16 }}
+        />
+        <Form
+          layout="vertical"
+          form={newSaleWizardForm}
+          initialValues={{
+            use_existing_client: false,
+            emits_invoice: true,
+            has_iss_retention: false,
+            has_inss_retention: false,
+            payment_method: "boleto",
+            service_lines: [{ service_type: "one_off", amount: "0.00" }],
+          }}
+          onValuesChange={(_, allValues) => {
+            newSaleWizardValuesRef.current = allValues as Record<string, unknown>;
+          }}
+          onFinish={async () => {
+            const values = {
+              ...newSaleWizardValuesRef.current,
+              ...newSaleWizardForm.getFieldsValue(true),
+            } as Record<string, unknown>;
+            const validation = buildNewSaleWizardValidation(values, clients, serviceCatalog);
+            if (!validation.ok) {
+              apiMessage.error(validation.errors.join(" "));
+              return;
+            }
+
+            let clientId = validation.clientId;
+            if (!validation.useExistingClient) {
+              const createClientResp = await apiRequest<{ client: { id: string } }>("/clients", {
+                method: "POST",
+                token,
+                body: {
+                  name: String(values.name ?? "").trim(),
+                  cnpj: String(values.cnpj ?? ""),
+                  contact_name: String(values.contact_name ?? "").trim(),
+                  financial_emails: String(values.financial_emails ?? "").trim(),
+                  description: String(values.description ?? "").trim(),
+                },
+              });
+              if (!createClientResp.ok || !createClientResp.data?.client?.id) {
+                apiMessage.error(extractApiErrorMessage(createClientResp.error, "Falha ao criar cliente."));
+                return;
+              }
+              clientId = String(createClientResp.data.client.id).trim();
+            }
+            if (!clientId) {
+              apiMessage.error("Cliente obrigatorio para continuar.");
+              return;
+            }
+
+            const paymentMethod = validation.paymentMethod;
+            const lines = validation.lines;
+            const contractResp = await apiRequest<{ contract: { id: string } }>("/contracts", {
+              method: "POST",
+              token,
+              body: {
+                client: clientId,
+                emits_invoice: Boolean(values.emits_invoice),
+                has_iss_retention: Boolean(values.has_iss_retention),
+                has_inss_retention: Boolean(values.has_inss_retention),
+                payment_method: paymentMethod,
+                payment_other: paymentMethod === "other" ? String(values.payment_other ?? "").trim() : "",
+                status: "submitted",
+                notes: String(values.notes ?? "").trim(),
+                service_lines: lines,
+              },
+            });
+            if (!contractResp.ok || !contractResp.data?.contract?.id) {
+              apiMessage.error(extractApiErrorMessage(contractResp.error, "Falha ao criar contrato."));
+              return;
+            }
+            const confirmResp = await apiRequest(`/contracts/${contractResp.data.contract.id}/confirm`, {
+              method: "POST",
+              token,
+              body: {},
+            });
+            if (!confirmResp.ok) {
+              apiMessage.error(extractApiErrorMessage(confirmResp.error, "Contrato criado, mas falhou ao confirmar."));
+              return;
+            }
+            apiMessage.success("Venda confirmada. Estrutura operacional criada automaticamente.");
+            await fetchCrudData();
+            setNewSaleWizardOpen(false);
+            setNewSaleWizardStep(0);
+            newSaleWizardForm.resetFields();
+          }}
+        >
+          <div style={{ display: newSaleWizardStep === 0 ? "block" : "none" }}>
+            <Row gutter={[12, 12]}>
+              <Col span={24}>
+                <Form.Item name="use_existing_client" label="Cliente existente?">
+                  <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+                </Form.Item>
+              </Col>
+              <Form.Item noStyle shouldUpdate={(prev, curr) => prev.use_existing_client !== curr.use_existing_client}>
+                {({ getFieldValue }) =>
+                  isUseExistingClient(getFieldValue("use_existing_client")) ? (
+                    <Col span={24}>
+                      <Form.Item name="existing_client_id" label="Cliente" rules={[{ required: true }]}>
+                        <Select
+                          showSearch
+                          optionFilterProp="label"
+                          options={clients.map((row) => ({
+                            value: String(row.id),
+                            label: `${String(row.name ?? row.id)} (${String((row as { cnpj?: string }).cnpj ?? "sem cnpj")})`,
+                          }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                  ) : (
+                    <>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="name" label="Nome fantasia" rules={[{ required: true }]}>
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item
+                          name="cnpj"
+                          label="CNPJ"
+                          getValueFromEvent={(event) => maskCnpjInput(event?.target?.value)}
+                          rules={[
+                            { required: true, message: "Informe o CNPJ." },
+                            {
+                              validator: (_rule, value) => {
+                                const digits = String(value ?? "").replace(/\D/g, "");
+                                return digits.length === 14
+                                  ? Promise.resolve()
+                                  : Promise.reject(new Error("CNPJ deve ter 14 digitos."));
+                              },
+                            },
+                          ]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="contact_name" label="Nome para contato" rules={[{ required: true }]}>
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item
+                          name="financial_emails"
+                          label="E-mail financeiro"
+                          getValueFromEvent={(event) => normalizeFinancialEmailsInput(event?.target?.value)}
+                          rules={[{ required: true }]}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </Col>
+                    </>
+                  )
+                }
+              </Form.Item>
+            </Row>
+          </div>
+
+          <div style={{ display: newSaleWizardStep === 1 || newSaleWizardStep === 3 ? "block" : "none" }} aria-hidden={newSaleWizardStep !== 1 && newSaleWizardStep !== 3}>
+            <Form.List name="service_lines">
+              {(fields, { add, remove }) => (
+                <Space orientation="vertical" style={{ width: "100%" }}>
+                  {fields.map((field, index) => (
+                    <Card
+                      key={field.key}
+                      type="inner"
+                      title={newSaleWizardStep === 3 ? "Recorrencia por servico" : `Servico ${index + 1}`}
+                    >
+                      <div style={{ display: newSaleWizardStep === 1 ? "block" : "none" }}>
+                        <Row gutter={[12, 12]}>
+                          <Col xs={24} md={12}>
+                            <Form.Item name={[field.name, "service"]} label="Servico" rules={[{ required: true }]}>
+                              <Select
+                                showSearch
+                                optionFilterProp="label"
+                                options={serviceCatalog
+                                  .filter((item) => item.is_active)
+                                  .map((item) => ({ value: item.id, label: item.name }))}
+                              />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Form.Item name={[field.name, "service_type"]} label="Tipo" rules={[{ required: true }]}>
+                              <Select
+                                options={[
+                                  { value: "one_off", label: "Avulso" },
+                                  { value: "recurring", label: "Recorrente" },
+                                ]}
+                              />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Form.Item name={[field.name, "amount"]} label="Valor por servico" rules={[{ required: true }]}>
+                              <Input />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Form.Item name={[field.name, "notes"]} label="Observacoes">
+                              <Input />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+                        <Button danger onClick={() => remove(field.name)}>
+                          Remover servico
+                        </Button>
+                      </div>
+                      <div style={{ display: newSaleWizardStep === 3 ? "block" : "none" }}>
+                        <Form.Item noStyle shouldUpdate>
+                          {({ getFieldValue }) =>
+                            getFieldValue(["service_lines", field.name, "service_type"]) === "recurring" ? (
+                              <Row gutter={[12, 12]}>
+                                <Col xs={24} md={12}>
+                                  <Form.Item name={[field.name, "starts_on"]} label="Inicio vigencia (YYYY-MM-DD)">
+                                    <Input />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12}>
+                                  <Form.Item name={[field.name, "ends_on"]} label="Fim vigencia (YYYY-MM-DD)">
+                                    <Input />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12}>
+                                  <Form.Item name={[field.name, "recurrence"]} label="Periodicidade">
+                                    <Select
+                                      options={[
+                                        { value: "monthly", label: "Mensal" },
+                                        { value: "bimonthly", label: "Bimestral" },
+                                        { value: "quarterly", label: "Trimestral" },
+                                        { value: "semiannual", label: "Semestral" },
+                                        { value: "other", label: "Outro" },
+                                      ]}
+                                    />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12}>
+                                  <Form.Item name={[field.name, "recurrence_other"]} label="Recorrencia customizada">
+                                    <Input />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                            ) : (
+                              <Alert type="info" showIcon title="Servico avulso: sem campos extras de recorrencia." />
+                            )
+                          }
+                        </Form.Item>
+                      </div>
+                    </Card>
+                  ))}
+                  {newSaleWizardStep === 1 ? (
+                    <Button onClick={() => add({ service_type: "one_off", amount: "0.00" })}>Adicionar servico</Button>
+                  ) : null}
+                </Space>
+              )}
+            </Form.List>
+          </div>
+
+          <div style={{ display: newSaleWizardStep === 2 ? "block" : "none" }}>
+            <Row gutter={[12, 12]}>
+              <Col xs={24} md={12}>
+                <Form.Item name="emits_invoice" label="Havera emissao de NF?">
+                  <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="payment_method" label="Forma de pagamento" rules={[{ required: true }]}>
+                  <Select
+                    options={[
+                      { value: "boleto", label: "Boleto" },
+                      { value: "transfer", label: "Transferencia" },
+                      { value: "pix", label: "PIX" },
+                      { value: "other", label: "Outro" },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Form.Item noStyle shouldUpdate={(prev, curr) => prev.payment_method !== curr.payment_method}>
+                {({ getFieldValue }) =>
+                  getFieldValue("payment_method") === "other" ? (
+                    <Col xs={24} md={12}>
+                      <Form.Item name="payment_other" label="Qual forma de pagamento?" rules={[{ required: true }]}>
+                        <Input />
+                      </Form.Item>
+                    </Col>
+                  ) : null
+                }
+              </Form.Item>
+              <Col xs={24} md={12}>
+                <Form.Item name="has_iss_retention" label="Retencao de ISS?">
+                  <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="has_inss_retention" label="Retencao de INSS?">
+                  <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="notes" label="Observacoes gerais">
+                  <Input.TextArea rows={3} />
+                </Form.Item>
+              </Col>
+            </Row>
+          </div>
+
+          <div style={{ display: newSaleWizardStep === 4 ? "block" : "none" }}>
+            <Form.Item noStyle shouldUpdate>
+              {() => {
+                const values = {
+                  ...newSaleWizardValuesRef.current,
+                  ...newSaleWizardForm.getFieldsValue(true),
+                } as Record<string, unknown>;
+                const validation = buildNewSaleWizardValidation(values, clients, serviceCatalog);
+                return (
+                  <Space orientation="vertical" style={{ width: "100%" }} size={12}>
+                    <Alert
+                      type={validation.ok ? "success" : "warning"}
+                      showIcon
+                      title="Revisao final"
+                      description="Confira os dados abaixo antes de confirmar. O sistema cria o contrato e gera automaticamente area, portfolio e projetos vinculados."
+                    />
+                    <Card type="inner" title="Resumo da venda">
+                      <Space orientation="vertical" size={6} style={{ width: "100%" }}>
+                        <Typography.Text>
+                          <strong>Cliente:</strong> {validation.clientLabel}
+                          {validation.useExistingClient ? " (existente)" : " (novo)"}
+                        </Typography.Text>
+                        <Typography.Text>
+                          <strong>Pagamento:</strong> {validation.paymentLabel}
+                        </Typography.Text>
+                        <Typography.Text>
+                          <strong>NF:</strong> {values.emits_invoice ? "Sim" : "Nao"} | <strong>ISS:</strong>{" "}
+                          {values.has_iss_retention ? "Sim" : "Nao"} | <strong>INSS:</strong>{" "}
+                          {values.has_inss_retention ? "Sim" : "Nao"}
+                        </Typography.Text>
+                        <Typography.Text strong>Servicos:</Typography.Text>
+                        {validation.serviceSummaries.length === 0 ? (
+                          <Typography.Text type="secondary">Nenhum servico selecionado.</Typography.Text>
+                        ) : (
+                          validation.serviceSummaries.map((line, index) => (
+                            <Typography.Text key={`${line.name}-${index}`}>
+                              - {line.name} ({line.type}) — R$ {line.amount}
+                            </Typography.Text>
+                          ))
+                        )}
+                      </Space>
+                    </Card>
+                    {!validation.ok ? (
+                      <Alert
+                        type="error"
+                        showIcon
+                        title="Campos obrigatorios pendentes"
+                        description={
+                          <ul style={{ margin: 0, paddingLeft: 18 }}>
+                            {validation.errors.map((error) => (
+                              <li key={error}>{error}</li>
+                            ))}
+                          </ul>
+                        }
+                      />
+                    ) : (
+                      <Alert type="success" showIcon title="Tudo certo para confirmar a venda." />
+                    )}
+                  </Space>
+                );
+              }}
+            </Form.Item>
+          </div>
+
+          <Divider />
+          <Space style={{ width: "100%", justifyContent: "space-between" }}>
+            <Button
+              disabled={newSaleWizardStep === 0}
+              onClick={() => setNewSaleWizardStep((prev) => Math.max(prev - 1, 0))}
+            >
+              Voltar
+            </Button>
+            {newSaleWizardStep < 4 ? (
+              <Button
+                type="primary"
+                onClick={async () => {
+                  try {
+                    if (newSaleWizardStep === 0) {
+                      const useExisting = isUseExistingClient(newSaleWizardForm.getFieldValue("use_existing_client"));
+                      if (useExisting) {
+                        await newSaleWizardForm.validateFields(["existing_client_id"]);
+                      } else {
+                        await newSaleWizardForm.validateFields([
+                          "name",
+                          "cnpj",
+                          "contact_name",
+                          "financial_emails",
+                        ]);
+                      }
+                    } else if (newSaleWizardStep === 1) {
+                      await newSaleWizardForm.validateFields(["service_lines"]);
+                      const lines = (newSaleWizardForm.getFieldValue("service_lines") as Array<Record<string, unknown>>) ?? [];
+                      const selected = lines.filter((line) => String(line?.service ?? "").trim().length > 0);
+                      if (selected.length === 0) {
+                        apiMessage.error("Selecione ao menos um servico para continuar.");
+                        return;
+                      }
+                    } else if (newSaleWizardStep === 2) {
+                      await newSaleWizardForm.validateFields([
+                        "emits_invoice",
+                        "payment_method",
+                        "has_iss_retention",
+                        "has_inss_retention",
+                      ]);
+                      if (newSaleWizardForm.getFieldValue("payment_method") === "other") {
+                        await newSaleWizardForm.validateFields(["payment_other"]);
+                      }
+                    } else if (newSaleWizardStep === 3) {
+                      const lines = (newSaleWizardForm.getFieldValue("service_lines") as Array<Record<string, unknown>>) ?? [];
+                      const invalidRecurring = lines.find((line) => {
+                        if (String(line?.service_type ?? "") !== "recurring") return false;
+                        return !String(line?.recurrence ?? "").trim() || !String(line?.starts_on ?? "").trim();
+                      });
+                      if (invalidRecurring) {
+                        apiMessage.error("Preencha recorrencia e inicio de vigencia para todos os servicos recorrentes.");
+                        return;
+                      }
+                    }
+                    setNewSaleWizardStep((prev) => Math.min(prev + 1, 4));
+                  } catch {
+                    // validation errors already shown in form
+                  }
+                }}
+              >
+                Proxima etapa
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                onClick={async () => {
+                  const values = {
+                    ...newSaleWizardValuesRef.current,
+                    ...newSaleWizardForm.getFieldsValue(true),
+                  } as Record<string, unknown>;
+                  const validation = buildNewSaleWizardValidation(values, clients, serviceCatalog);
+                  if (!validation.ok) {
+                    apiMessage.error(validation.errors.join(" "));
+                    return;
+                  }
+                  newSaleWizardForm.submit();
+                }}
+              >
+                Confirmar e criar venda
+              </Button>
+            )}
+          </Space>
         </Form>
       </Modal>
 
