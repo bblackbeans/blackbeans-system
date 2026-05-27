@@ -59,6 +59,9 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
   };
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("bb:unauthorized"));
+    }
     return {
       ok: false,
       status: response.status,
