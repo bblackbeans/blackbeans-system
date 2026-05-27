@@ -3044,8 +3044,8 @@ export function AppShell() {
     setContracts([]);
     setPortfolios([]);
     setBoards([]);
-    setBoardGroupsByBoard({});
-    setKanbanBoardByBoardId({});
+    setBoardGroupsIndex({});
+    setBoardKanbanByBoardId({});
     setGlobalError(null);
     setActiveKey("dashboard");
   }
@@ -3066,7 +3066,7 @@ export function AppShell() {
     if (window.location.hash) {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  }
+  }, [token]);
 
   async function patchEntity(path: string, payload: Record<string, unknown>, successMessage: string) {
     const response = await apiRequest(path, { method: "PATCH", token, body: payload });
