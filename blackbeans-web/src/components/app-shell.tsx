@@ -314,6 +314,15 @@ function getAdminFromToken(token: string | null): boolean {
   );
 }
 
+function isTokenExpired(token: string | null, nowMs: number = Date.now()): boolean {
+  if (!token) return true;
+  const payload = decodeJwtPayload(token);
+  if (!payload) return true;
+  const exp = Number(payload.exp);
+  if (!Number.isFinite(exp) || exp <= 0) return false;
+  return exp * 1000 <= nowMs;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "-";
   return new Date(value).toLocaleString("pt-BR");
@@ -2260,8 +2269,13 @@ export function AppShell() {
     if (typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
       const storedToken = localStorage.getItem(AUTH_STORAGE_KEY);
-      const fallbackKey: MenuKey = getAdminFromToken(storedToken) ? "my-work" : "dashboard";
-      setToken(storedToken);
+      const validToken = isTokenExpired(storedToken) ? null : storedToken;
+      if (!validToken) {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        localStorage.removeItem(REFRESH_STORAGE_KEY);
+      }
+      const fallbackKey: MenuKey = getAdminFromToken(validToken) ? "my-work" : "dashboard";
+      setToken(validToken);
       setRefreshToken(localStorage.getItem(REFRESH_STORAGE_KEY));
       setActiveKey(getMenuKeyFromHash(window.location.hash, fallbackKey));
       setTaskStatusFilter(localStorage.getItem(TASK_STATUS_FILTER_KEY) ?? "all");
@@ -2363,6 +2377,13 @@ export function AppShell() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    if (!token || !hydratedSession) return;
+    if (!isTokenExpired(token, nowMs)) return;
+    apiMessage.error("Sessao expirada. Entre novamente.");
+    handleLogout();
+  }, [apiMessage, hydratedSession, nowMs, token]);
 
   useEffect(() => {
     if (!token || isAdmin || activeKey !== "dashboard") return;
@@ -3001,11 +3022,50 @@ export function AppShell() {
     setRefreshToken(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
     localStorage.removeItem(REFRESH_STORAGE_KEY);
+    localStorage.removeItem(BOARD_STORAGE_KEY);
+    localStorage.removeItem(TASK_STATUS_FILTER_KEY);
+    localStorage.removeItem(TASK_SEARCH_FILTER_KEY);
+    localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
+    localStorage.removeItem(SELECTED_CLIENT_STORAGE_KEY);
+    localStorage.removeItem(SELECTED_PROJECT_STORAGE_KEY);
+    localStorage.removeItem(PROJECT_SIDEBAR_EXPANDED_KEY);
+    localStorage.removeItem(DEFAULT_PORTFOLIO_STORAGE_KEY);
+    localStorage.removeItem(ADMIN_USERS_STORAGE_KEY);
+    localStorage.removeItem(ADMIN_USER_META_STORAGE_KEY);
     setMeWorkspaceAccess(null);
     setSelectedTask(null);
     setTaskDrawerTab("summary");
     setNotifications([]);
     setTasks([]);
+    setAllTasks([]);
+    setWorkspaces([]);
+    setClients([]);
+    setProjects([]);
+    setContracts([]);
+    setPortfolios([]);
+    setBoards([]);
+    setBoardGroupsByBoard({});
+    setKanbanBoardByBoardId({});
+    setGlobalError(null);
+    setActiveKey("dashboard");
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onUnauthorized = () => {
+      apiMessage.error("Autenticacao necessaria. Entre novamente.");
+      handleLogout();
+    };
+    window.addEventListener("bb:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("bb:unauthorized", onUnauthorized);
+  }, [apiMessage, handleLogout]);
+
+  useEffect(() => {
+    if (token) return;
+    if (typeof window === "undefined") return;
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
   }
 
   async function patchEntity(path: string, payload: Record<string, unknown>, successMessage: string) {
