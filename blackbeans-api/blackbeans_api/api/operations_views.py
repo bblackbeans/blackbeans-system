@@ -52,6 +52,10 @@ from blackbeans_api.governance.models import TaskDependency
 from blackbeans_api.governance.models import TimeLog
 from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.audit import log_audit_event
+from blackbeans_api.governance.notification_service import dispatch_task_comment
+from blackbeans_api.governance.notification_service import dispatch_task_priority_changed
+from blackbeans_api.governance.notification_service import dispatch_task_status_changed
+from blackbeans_api.governance.notification_service import dispatch_task_updated
 from blackbeans_api.governance.tasks import dispatch_deadline_notifications
 from blackbeans_api.governance.tasks import dispatch_task_assigned_notification
 from blackbeans_api.governance.tasks import dispatch_task_completed_notifications
@@ -70,6 +74,32 @@ def _log_task_activity(*, task: Task, actor_id: int, event_type: str, summary: s
         event_type=event_type,
         summary=summary,
     )
+
+
+def _close_open_time_logs_for_task(task: Task, *, now=None) -> int:
+    """Encerra logs ACTIVE/PAUSED da tarefa, acumulando tempo parcial."""
+    now = now or timezone.now()
+    closed = 0
+    for time_log in TimeLog.objects.filter(
+        task=task,
+        status__in=[TimeLog.Status.ACTIVE, TimeLog.Status.PAUSED],
+    ):
+        elapsed = int((now - time_log.current_started_at).total_seconds()) if time_log.current_started_at else 0
+        time_log.accumulated_seconds += max(elapsed, 0)
+        time_log.current_started_at = None
+        time_log.ended_at = now
+        time_log.status = TimeLog.Status.COMPLETED
+        time_log.save(
+            update_fields=[
+                "accumulated_seconds",
+                "current_started_at",
+                "ended_at",
+                "status",
+                "updated_at",
+            ],
+        )
+        closed += 1
+    return closed
 
 
 def _recalculate_dependents(task: Task) -> None:
@@ -918,12 +948,40 @@ class TaskDetailView(APIView):
             )
         serializer = TaskWriteSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        before_status = task.status
+        before_priority = task.priority
+        changed_fields = sorted(serializer.validated_data.keys())
         serializer.save()
+        task.refresh_from_db()
+        if "priority" in serializer.validated_data and task.priority != before_priority:
+            dispatch_task_priority_changed(
+                task=task,
+                actor=request.user,
+                old_priority=before_priority,
+                new_priority=task.priority,
+                correlation_id=correlation_id,
+            )
+        if "status" in serializer.validated_data and task.status != before_status:
+            dispatch_task_status_changed(
+                task=task,
+                actor=request.user,
+                old_status=before_status,
+                new_status=task.status,
+                correlation_id=correlation_id,
+            )
+        other_fields = [field for field in changed_fields if field not in {"priority", "status"}]
+        if other_fields:
+            dispatch_task_updated(
+                task=task,
+                actor=request.user,
+                fields=other_fields,
+                correlation_id=correlation_id,
+            )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.updated",
-            summary=f"Tarefa atualizada campos={','.join(sorted(serializer.validated_data.keys()))}.",
+            summary=f"Tarefa atualizada campos={','.join(changed_fields)}.",
         )
         _recalculate_dependents(task)
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
@@ -1113,8 +1171,22 @@ class TaskStatusView(APIView):
                 http_status=status.HTTP_409_CONFLICT,
             )
         before = task.status
-        task.status = new_status
-        task.save(update_fields=["status", "updated_at"])
+        update_fields = ["status", "updated_at"]
+        with transaction.atomic():
+            if new_status == Task.Status.DONE:
+                _close_open_time_logs_for_task(task)
+                if task.end_date is None:
+                    task.end_date = timezone.now()
+                    update_fields.append("end_date")
+            task.status = new_status
+            task.save(update_fields=update_fields)
+        dispatch_task_status_changed(
+            task=task,
+            actor=request.user,
+            old_status=before,
+            new_status=new_status,
+            correlation_id=correlation_id,
+        )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
@@ -1637,6 +1709,12 @@ class TaskCommentsView(APIView):
         serializer = TaskCommentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         comment = TaskComment.objects.create(task=task, author=request.user, **serializer.validated_data)
+        dispatch_task_comment(
+            task=Task.objects.select_related("board__project__portfolio__workspace").get(pk=task.pk),
+            actor=request.user,
+            content=comment.content,
+            correlation_id=correlation_id,
+        )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,

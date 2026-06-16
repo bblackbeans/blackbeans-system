@@ -1,0 +1,10 @@
+{{ digest_label }} - {{ app_name }}
+
+Ola {{ user_name }}, voce tem {{ notifications|length }} notificacoes:
+
+{% for item in notifications %}
+- {{ item.title }}: {{ item.message }}
+  {% if item.metadata.deep_link %}{{ item.metadata.deep_link }}{% endif %}
+{% endfor %}
+
+Preferencias: {{ preferences_url }}

@@ -382,9 +382,15 @@ class Notification(models.Model):
         COMPLETED = "task_completed", _("Task Completed")
         OVERDUE = "task_overdue", _("Task Overdue")
         DUE_SOON = "task_due_soon", _("Task Due Soon")
+        COMMENTED = "task_commented", _("Task Commented")
+        MENTIONED = "task_mentioned", _("Task Mentioned")
+        STATUS_CHANGED = "task_status_changed", _("Task Status Changed")
+        PRIORITY_CHANGED = "task_priority_changed", _("Task Priority Changed")
+        UPDATED = "task_updated", _("Task Updated")
 
     class Channel(models.TextChoices):
         IN_APP = "in_app", _("In App")
+        EMAIL = "email", _("Email")
 
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = ForeignKey(
@@ -399,6 +405,13 @@ class Notification(models.Model):
         null=True,
         blank=True,
     )
+    actor = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="triggered_notifications",
+    )
     type = CharField(max_length=32, choices=Type.choices)
     title = CharField(max_length=255)
     message = TextField(blank=True, default="")
@@ -406,6 +419,8 @@ class Notification(models.Model):
     metadata = JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     read_at = DateTimeField(null=True, blank=True)
+    email_sent_at = DateTimeField(null=True, blank=True)
+    digest_sent_at = DateTimeField(null=True, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -416,6 +431,128 @@ class Notification(models.Model):
             models.Index(fields=["user", "is_read", "created_at"]),
             models.Index(fields=["type", "created_at"]),
             models.Index(fields=["task", "type"]),
+            models.Index(fields=["user", "email_sent_at"]),
+        ]
+
+
+class NotificationPreference(models.Model):
+    class EmailMode(models.TextChoices):
+        OFF = "off", _("Off")
+        INSTANT = "instant", _("Instant")
+        DAILY = "daily", _("Daily Digest")
+        WEEKLY = "weekly", _("Weekly Digest")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=CASCADE,
+        related_name="notification_preferences",
+    )
+    event_type = CharField(max_length=32, choices=Notification.Type.choices)
+    in_app_enabled = models.BooleanField(default=True)
+    email_mode = CharField(max_length=16, choices=EmailMode.choices, default=EmailMode.INSTANT)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Notification Preference")
+        verbose_name_plural = _("Notification Preferences")
+        constraints = [
+            UniqueConstraint(
+                fields=["user", "event_type"],
+                name="uniq_notification_preference_user_event",
+            ),
+        ]
+
+
+class NotificationSubscription(models.Model):
+    class TargetType(models.TextChoices):
+        TASK = "task", _("Task")
+        BOARD = "board", _("Board")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=CASCADE,
+        related_name="notification_subscriptions",
+    )
+    target_type = CharField(max_length=16, choices=TargetType.choices)
+    target_id = UUIDField()
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Notification Subscription")
+        verbose_name_plural = _("Notification Subscriptions")
+        constraints = [
+            UniqueConstraint(
+                fields=["user", "target_type", "target_id"],
+                name="uniq_notification_subscription_target",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["target_type", "target_id"]),
+        ]
+
+
+class NotificationDigestItem(models.Model):
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    notification = ForeignKey(
+        Notification,
+        on_delete=CASCADE,
+        related_name="digest_items",
+    )
+    user = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=CASCADE,
+        related_name="notification_digest_items",
+    )
+    digest_mode = CharField(
+        max_length=16,
+        choices=NotificationPreference.EmailMode.choices,
+        default=NotificationPreference.EmailMode.DAILY,
+    )
+    scheduled_for = DateTimeField()
+    sent_at = DateTimeField(null=True, blank=True)
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Notification Digest Item")
+        verbose_name_plural = _("Notification Digest Items")
+        indexes = [
+            models.Index(fields=["user", "sent_at", "scheduled_for"]),
+        ]
+
+
+class NotificationDeliveryLog(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        SENT = "sent", _("Sent")
+        FAILED = "failed", _("Failed")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    notification = ForeignKey(
+        Notification,
+        on_delete=CASCADE,
+        related_name="delivery_logs",
+        null=True,
+        blank=True,
+    )
+    user = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=CASCADE,
+        related_name="notification_delivery_logs",
+    )
+    channel = CharField(max_length=16, choices=Notification.Channel.choices)
+    status = CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    provider_message_id = CharField(max_length=255, blank=True, default="")
+    error = TextField(blank=True, default="")
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Notification Delivery Log")
+        verbose_name_plural = _("Notification Delivery Logs")
+        indexes = [
+            models.Index(fields=["user", "channel", "created_at"]),
         ]
 
 

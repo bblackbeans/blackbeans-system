@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ digest_label }}</title>
+</head>
+<body style="margin:0;padding:24px;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#fff;border-radius:12px;">
+          <tr>
+            <td style="padding:24px;">
+              <div style="font-size:20px;font-weight:700;margin-bottom:8px;">{{ digest_label }}</div>
+              <div style="font-size:14px;color:#676879;margin-bottom:20px;">Ola {{ user_name }}, voce tem {{ notifications|length }} notificacoes.</div>
+              {% for item in notifications %}
+              <div style="border-top:1px solid #e6e9ef;padding:12px 0;">
+                <div style="font-weight:600;">{{ item.title }}</div>
+                <div style="font-size:13px;color:#676879;">{{ item.message }}</div>
+                {% if item.metadata.deep_link %}
+                <a href="{{ item.metadata.deep_link }}" style="font-size:13px;color:#ff6b00;">Abrir</a>
+                {% endif %}
+              </div>
+              {% endfor %}
+              <div style="margin-top:20px;">
+                <a href="{{ preferences_url }}" style="color:#676879;font-size:12px;">Gerenciar preferencias</a>
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -39,3 +39,6 @@ MEDIA_URL = "http://media.testserver/"
 
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+
+FRONTEND_BASE_URL = "http://testserver"
+NOTIFICATION_EMAIL_ENABLED = True

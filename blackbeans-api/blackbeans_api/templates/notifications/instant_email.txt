@@ -1,0 +1,12 @@
+{{ app_name }}
+
+{{ action_text }}
+{{ task_title }}
+{% if breadcrumb %}{{ breadcrumb }}{% endif %}
+
+{{ message }}
+
+Ver tarefa: {{ deep_link }}
+
+Preferencias: {{ preferences_url }}
+Desativar este tipo: {{ unsubscribe_url }}
