@@ -9,6 +9,7 @@ import {
   DownOutlined,
   EditOutlined,
   EyeOutlined,
+  FolderOutlined,
   FolderOpenOutlined,
   LoginOutlined,
   LogoutOutlined,
@@ -74,6 +75,7 @@ const BRANDING_STORAGE_KEY = "bb_branding_config";
 const ADMIN_USERS_STORAGE_KEY = "bb_admin_users_cache";
 const ADMIN_USER_META_STORAGE_KEY = "bb_admin_users_meta";
 const SELECTED_WORKSPACE_STORAGE_KEY = "bb_selected_workspace_id";
+const SELECTED_PORTFOLIO_STORAGE_KEY = "bb_selected_portfolio_id";
 const SELECTED_CLIENT_STORAGE_KEY = "bb_selected_client_id";
 const SELECTED_PROJECT_STORAGE_KEY = "bb_selected_project_id";
 const PROJECT_SIDEBAR_EXPANDED_KEY = "bb_projects_sidebar_expanded_keys";
@@ -111,9 +113,37 @@ type NotificationItem = {
   type: string;
   title: string;
   message: string;
+  task_id?: string | null;
+  metadata?: Record<string, unknown>;
+  channel?: string;
   is_read: boolean;
   created_at: string;
 };
+
+type NotificationPreferenceItem = {
+  event_type: string;
+  in_app_enabled: boolean;
+  email_mode: "off" | "instant" | "daily" | "weekly";
+};
+
+const NOTIFICATION_EVENT_LABELS: Record<string, string> = {
+  task_assigned: "Tarefa designada",
+  task_completed: "Tarefa concluida",
+  task_overdue: "Tarefa atrasada",
+  task_due_soon: "Prazo proximo",
+  task_commented: "Novo comentario",
+  task_mentioned: "Mencao",
+  task_status_changed: "Status alterado",
+  task_priority_changed: "Prioridade alterada",
+  task_updated: "Tarefa atualizada",
+};
+
+const NOTIFICATION_EMAIL_MODE_OPTIONS = [
+  { value: "off", label: "Desligado" },
+  { value: "instant", label: "Instantaneo" },
+  { value: "daily", label: "Resumo diario" },
+  { value: "weekly", label: "Resumo semanal" },
+];
 
 type TaskItem = {
   id: string;
@@ -765,7 +795,7 @@ function AuthPanel({
   );
 }
 
-type ProjectsSidebarNodeType = "workspace" | "client" | "project" | "board";
+type ProjectsSidebarNodeType = "workspace" | "portfolio" | "project" | "board";
 type ProjectsSidebarNode = {
   key: string;
   title: string;
@@ -806,8 +836,8 @@ function ProjectsSidebarTree({
         const Icon =
           node.type === "workspace"
             ? AppstoreOutlined
-            : node.type === "client"
-              ? TeamOutlined
+            : node.type === "portfolio"
+              ? FolderOutlined
               : node.type === "project"
                 ? FolderOpenOutlined
                 : UnorderedListOutlined;
@@ -962,6 +992,8 @@ export function AppShell() {
 
   const [health, setHealth] = useState<ApiHealthData>({ ok: false, message: "Carregando..." });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferenceItem[]>([]);
+  const [watchedTaskIds, setWatchedTaskIds] = useState<Set<string>>(new Set());
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [allTasks, setAllTasks] = useState<TaskItem[]>([]);
@@ -1055,6 +1087,7 @@ export function AppShell() {
   const [boardGroupsIndex, setBoardGroupsIndex] = useState<Record<string, GroupItem>>({});
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [boardKanbanByBoardId, setBoardKanbanByBoardId] = useState<Record<string, KanbanGroup[]>>({});
@@ -1067,6 +1100,7 @@ export function AppShell() {
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [editWorkspaceOpen, setEditWorkspaceOpen] = useState(false);
   const [createClientOpen, setCreateClientOpen] = useState(false);
+  const [createPortfolioOpen, setCreatePortfolioOpen] = useState(false);
   const [newSaleWizardOpen, setNewSaleWizardOpen] = useState(false);
   const [newSaleWizardStep, setNewSaleWizardStep] = useState(0);
   const newSaleWizardValuesRef = useRef<Record<string, unknown>>({});
@@ -1077,6 +1111,7 @@ export function AppShell() {
   const [createWorkspaceForm] = Form.useForm();
   const [editWorkspaceForm] = Form.useForm();
   const [createClientForm] = Form.useForm();
+  const [createPortfolioForm] = Form.useForm();
   const [manageClientForm] = Form.useForm();
   const [manageServiceForm] = Form.useForm();
   const [manageClientModal, setManageClientModal] = useState<{ mode: "create" | "edit"; clientId?: string } | null>(
@@ -1095,6 +1130,7 @@ export function AppShell() {
   const [createGroupForm] = Form.useForm();
   const [createTaskForm] = Form.useForm();
   const [kanbanGroups, setKanbanGroups] = useState<KanbanGroup[]>([]);
+  const [boardGroupSelectOptions, setBoardGroupSelectOptions] = useState<{ value: string; label: string }[]>([]);
   const [boardViewMode] = useState<BoardViewMode>("list");
   const [usersTabKey, setUsersTabKey] = useState<string>("u-list-page");
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
@@ -1222,12 +1258,12 @@ export function AppShell() {
     [taskSummary.logs],
   );
   const liveTaskTotalSeconds = useMemo(() => {
-    if (!activeTimeLog) {
+    if (selectedTask?.status === "done" || !activeTimeLog) {
       return taskSummary.total_seconds;
     }
     const deltaSeconds = Math.max(0, Math.floor((liveTickMs - taskSummaryFetchedAtMs) / 1000));
     return taskSummary.total_seconds + deltaSeconds;
-  }, [activeTimeLog, liveTickMs, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
+  }, [activeTimeLog, liveTickMs, selectedTask?.status, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
   const currentUserId = useMemo(() => getUserIdFromToken(token), [token]);
   const currentUserIdentity = useMemo(() => {
     const displayNameRaw =
@@ -1625,6 +1661,15 @@ export function AppShell() {
     });
     return result;
   }, [portfolios, projects]);
+  const portfoliosForWorkspace = useCallback(
+    (workspaceId: string) =>
+      portfolios.filter((portfolio) => String(portfolio.workspace_id ?? "") === workspaceId),
+    [portfolios],
+  );
+  const projectsForPortfolio = useCallback(
+    (portfolioId: string) => projects.filter((project) => String(project.portfolio_id ?? "") === portfolioId),
+    [projects],
+  );
   const clientsForWorkspace = useCallback(
     (workspaceId: string) => {
       const projectsInWs = projectsByWorkspace[workspaceId] ?? [];
@@ -1652,6 +1697,11 @@ export function AppShell() {
     () => (selectedWorkspaceId ? workspaces.find((row) => String(row.id) === selectedWorkspaceId) ?? null : null),
     [selectedWorkspaceId, workspaces],
   );
+  const selectedPortfolio = useMemo(
+    () =>
+      selectedPortfolioId ? portfolios.find((row) => String(row.id) === selectedPortfolioId) ?? null : null,
+    [portfolios, selectedPortfolioId],
+  );
   const selectedClient = useMemo(
     () => (selectedClientId ? clients.find((row) => String(row.id) === selectedClientId) ?? null : null),
     [clients, selectedClientId],
@@ -1667,17 +1717,24 @@ export function AppShell() {
         key: `ws:${workspaceId}`,
         title: String(workspace.name ?? "Area de trabalho"),
         type: "workspace",
-        children: clientsForWorkspace(workspaceId).map((client) => {
-          const clientId = String(client.id);
+        children: portfoliosForWorkspace(workspaceId).map((portfolio) => {
+          const portfolioId = String(portfolio.id);
           return {
-            key: `cl:${clientId}`,
-            title: String(client.name ?? "Cliente"),
-            type: "client",
-            children: projectsForClient(workspaceId, clientId).map((project) => {
+            key: `pf:${portfolioId}`,
+            title: String(portfolio.name ?? "Portfolio"),
+            type: "portfolio",
+            children: projectsForPortfolio(portfolioId).map((project) => {
               const projectId = String(project.id);
+              const clientId = project.client_id ? String(project.client_id) : "";
+              const clientName = clientId
+                ? String(clients.find((row) => String(row.id) === clientId)?.name ?? "")
+                : "";
+              const projectTitle = clientName
+                ? `${String(project.name ?? "Projeto")} (${clientName})`
+                : String(project.name ?? "Projeto");
               return {
                 key: `pr:${projectId}`,
-                title: String(project.name ?? "Projeto"),
+                title: projectTitle,
                 type: "project",
                 children: boardsForProject(projectId).map((board) => ({
                   key: `bd:${board.id}`,
@@ -1690,7 +1747,7 @@ export function AppShell() {
         }),
       };
     });
-  }, [boardsForProject, clientsForWorkspace, projectsForClient, visibleWorkspaces]);
+  }, [boardsForProject, clients, portfoliosForWorkspace, projectsForPortfolio, visibleWorkspaces]);
   const projectSidebarAncestorMap = useMemo(() => {
     const map: Record<string, string[]> = {};
     const walk = (nodes: ProjectsSidebarNode[], ancestors: string[]) => {
@@ -1706,32 +1763,34 @@ export function AppShell() {
   }, [projectSidebarTreeData]);
   const selectedProjectSidebarKey = useMemo(() => {
     const ws = selectedWorkspaceId;
-    const cl = selectedClientId;
+    const pf = selectedPortfolioId;
     const pr = selectedProjectId;
     const bd = selectedBoardId;
     if (!ws) return null;
-    const clientOk = Boolean(cl && clientsForWorkspace(ws).some((row) => String(row.id) === cl));
+    const portfolioOk = Boolean(
+      pf && portfoliosForWorkspace(ws).some((row) => String(row.id) === String(pf)),
+    );
     const projectOk = Boolean(
-      cl &&
+      pf &&
         pr &&
-        clientOk &&
-        projectsForClient(ws, String(cl)).some((row) => String(row.id) === String(pr)),
+        portfolioOk &&
+        projectsForPortfolio(String(pf)).some((row) => String(row.id) === String(pr)),
     );
     let boardMatchesProject = false;
     if (projectOk && bd) {
       const boardRow = boards.find((item) => item.id === bd);
       boardMatchesProject = Boolean(boardRow?.project_id === pr);
     }
-    if (boardMatchesProject && cl && pr && bd) return `bd:${bd}`;
-    if (projectOk && cl && pr) return `pr:${pr}`;
-    if (clientOk && cl) return `cl:${cl}`;
+    if (boardMatchesProject && pf && pr && bd) return `bd:${bd}`;
+    if (projectOk && pf && pr) return `pr:${pr}`;
+    if (portfolioOk && pf) return `pf:${pf}`;
     return `ws:${ws}`;
   }, [
     boards,
-    clientsForWorkspace,
-    projectsForClient,
+    portfoliosForWorkspace,
+    projectsForPortfolio,
     selectedBoardId,
-    selectedClientId,
+    selectedPortfolioId,
     selectedProjectId,
     selectedWorkspaceId,
   ]);
@@ -1755,18 +1814,18 @@ export function AppShell() {
       if (raw.startsWith("ws:")) {
         const workspaceId = raw.replace("ws:", "");
         setSelectedWorkspaceId(workspaceId);
+        setSelectedPortfolioId(null);
         setSelectedClientId(null);
         setSelectedProjectId(null);
         setSelectedBoardId(null);
         return;
       }
-      if (raw.startsWith("cl:")) {
-        const clientId = raw.replace("cl:", "");
-        const parentWorkspace = visibleWorkspaces.find((workspace) =>
-          clientsForWorkspace(String(workspace.id)).some((client) => String(client.id) === clientId),
-        );
-        if (parentWorkspace) setSelectedWorkspaceId(String(parentWorkspace.id));
-        setSelectedClientId(clientId);
+      if (raw.startsWith("pf:")) {
+        const portfolioId = raw.replace("pf:", "");
+        const portfolio = portfolios.find((row) => String(row.id) === portfolioId) ?? null;
+        if (portfolio?.workspace_id) setSelectedWorkspaceId(String(portfolio.workspace_id));
+        setSelectedPortfolioId(portfolioId);
+        setSelectedClientId(null);
         setSelectedProjectId(null);
         setSelectedBoardId(null);
         return;
@@ -1774,10 +1833,12 @@ export function AppShell() {
       if (raw.startsWith("pr:")) {
         const projectId = raw.replace("pr:", "");
         const project = projects.find((row) => String(row.id) === projectId) ?? null;
-        const workspaceId = project
-          ? String(portfolios.find((item) => String(item.id) === String(project.portfolio_id ?? ""))?.workspace_id ?? "")
+        const portfolioId = project ? String(project.portfolio_id ?? "") : "";
+        const workspaceId = portfolioId
+          ? String(portfolios.find((item) => String(item.id) === portfolioId)?.workspace_id ?? "")
           : "";
         if (workspaceId) setSelectedWorkspaceId(workspaceId);
+        if (portfolioId) setSelectedPortfolioId(portfolioId);
         if (project?.client_id) setSelectedClientId(String(project.client_id));
         setSelectedProjectId(projectId);
         const firstBoard = boardsForProject(projectId)[0]?.id ?? null;
@@ -1791,6 +1852,7 @@ export function AppShell() {
         setSelectedBoardId(boardId);
         setSelectedProjectId(board.project_id);
         const project = projects.find((row) => String(row.id) === board.project_id) ?? null;
+        if (project?.portfolio_id) setSelectedPortfolioId(String(project.portfolio_id));
         if (project?.client_id) setSelectedClientId(String(project.client_id));
         const workspaceId = project
           ? String(portfolios.find((item) => String(item.id) === String(project.portfolio_id ?? ""))?.workspace_id ?? "")
@@ -1798,16 +1860,7 @@ export function AppShell() {
         if (workspaceId) setSelectedWorkspaceId(workspaceId);
       }
     },
-    [
-      activeKey,
-      boards,
-      boardsForProject,
-      clientsForWorkspace,
-      navigateTo,
-      portfolios,
-      projects,
-      visibleWorkspaces,
-    ],
+    [activeKey, boards, boardsForProject, navigateTo, portfolios, projects],
   );
   const taskContext = useCallback(
     (task: TaskItem) => {
@@ -1862,6 +1915,29 @@ export function AppShell() {
     } else {
       setGlobalError(null);
     }
+  }, [token]);
+
+  const fetchNotificationPreferences = useCallback(async () => {
+    const response = await apiRequest<{ preferences: NotificationPreferenceItem[] }>(
+      "/me/notification-preferences",
+      { token },
+    );
+    if (response.ok) {
+      setNotificationPreferences(response.data?.preferences ?? []);
+    }
+  }, [token]);
+
+  const fetchNotificationSubscriptions = useCallback(async () => {
+    const response = await apiRequest<{
+      subscriptions: Array<{ target_type: string; target_id: string }>;
+    }>("/me/notification-subscriptions", { token });
+    if (!response.ok) return;
+    const taskIds = new Set(
+      (response.data?.subscriptions ?? [])
+        .filter((row) => row.target_type === "task")
+        .map((row) => String(row.target_id)),
+    );
+    setWatchedTaskIds(taskIds);
   }, [token]);
 
   const fetchTasks = useCallback(async () => {
@@ -1943,11 +2019,6 @@ export function AppShell() {
     setTaskAssigneePickList(Array.from(uniq.values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
   }, [token, adminUsersCache, tasks, allTasks, currentUserId, currentUserIdentity.displayName]);
 
-  useEffect(() => {
-    if (!createTaskOpen || !token) return;
-    void hydrateTaskAssigneePickList();
-  }, [createTaskOpen, token, hydrateTaskAssigneePickList]);
-
   const fetchAuditOverview = useCallback(async () => {
     const overviewResp = await apiRequest<Record<string, unknown>>("/audit/dashboard", { token });
     if (overviewResp.ok) setAuditOverview(overviewResp.data ?? {});
@@ -2013,13 +2084,61 @@ export function AppShell() {
       apiRequest<{ portfolios: Record<string, unknown>[] }>("/portfolios", { token }),
       apiRequest<{ projects: Record<string, unknown>[] }>("/projects", { token }),
     ]);
+    const failures: string[] = [];
     if (clientsResp.ok) setClients(clientsResp.data?.clients ?? []);
+    else failures.push(`clientes (${clientsResp.error?.message ?? "erro"})`);
     if (servicesResp.ok) setServiceCatalog(servicesResp.data?.services ?? []);
+    else failures.push(`servicos (${servicesResp.error?.message ?? "erro"})`);
     if (contractsResp.ok) setContracts(contractsResp.data?.contracts ?? []);
+    else failures.push(`vendas (${contractsResp.error?.message ?? "erro"})`);
     if (workspacesResp.ok) setWorkspaces(workspacesResp.data?.workspaces ?? []);
+    else failures.push(`areas (${workspacesResp.error?.message ?? "erro"})`);
     if (portfoliosResp.ok) setPortfolios(portfoliosResp.data?.portfolios ?? []);
+    else failures.push(`portfolios (${portfoliosResp.error?.message ?? "erro"})`);
     if (projectsResp.ok) setProjects(projectsResp.data?.projects ?? []);
-  }, [token]);
+    else failures.push(`projetos (${projectsResp.error?.message ?? "erro"})`);
+    if (failures.length > 0) {
+      apiMessage.error(
+        `Falha ao carregar: ${failures.join("; ")}. Em producao, confira se as migrations foram aplicadas.`,
+      );
+    }
+  }, [apiMessage, token]);
+
+  const loadBoardGroupSelectOptions = useCallback(
+    async (boardId: string) => {
+      if (!boardId || !token) {
+        setBoardGroupSelectOptions([]);
+        return;
+      }
+      const response = await apiRequest<{ groups: GroupItem[] }>(`/boards/${boardId}/groups`, { token });
+      if (!response.ok) {
+        setBoardGroupSelectOptions([]);
+        return;
+      }
+      const options = [...(response.data?.groups ?? [])]
+        .sort((a, b) => a.position - b.position)
+        .map((group) => ({ value: group.id, label: formatColumnLabel(group.name) }));
+      setBoardGroupSelectOptions(options);
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    if (!createTaskOpen || !token) return;
+    void hydrateTaskAssigneePickList();
+    const targetBoardId = composeBoardId ?? selectedBoardId;
+    if (targetBoardId) {
+      void loadBoardGroupSelectOptions(targetBoardId);
+    }
+  }, [composeBoardId, createTaskOpen, hydrateTaskAssigneePickList, loadBoardGroupSelectOptions, selectedBoardId, token]);
+
+  useEffect(() => {
+    if (!token || !selectedBoardId) {
+      setBoardGroupSelectOptions([]);
+      return;
+    }
+    void loadBoardGroupSelectOptions(selectedBoardId);
+  }, [loadBoardGroupSelectOptions, selectedBoardId, token]);
 
   const fetchClientDetail = useCallback(
     async (clientId: string) => {
@@ -2191,6 +2310,8 @@ export function AppShell() {
     await Promise.all([
       fetchHealth(),
       fetchNotifications(),
+      fetchNotificationPreferences(),
+      fetchNotificationSubscriptions(),
       fetchTasks(),
       fetchAudit(),
       fetch2FASettings(),
@@ -2206,6 +2327,8 @@ export function AppShell() {
     fetchCrudData,
     fetchHealth,
     fetchMeWorkspaceAccess,
+    fetchNotificationPreferences,
+    fetchNotificationSubscriptions,
     fetchNotifications,
     fetchProfile,
     fetchTasks,
@@ -2237,6 +2360,11 @@ export function AppShell() {
       fetchCrudData().catch(() => undefined);
     }
   }, [activeKey, fetchCrudData, isAdmin, token]);
+
+  useEffect(() => {
+    if (!token || activeKey !== "profile") return;
+    fetchNotificationPreferences().catch(() => undefined);
+  }, [activeKey, fetchNotificationPreferences, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -2282,6 +2410,7 @@ export function AppShell() {
       setTaskSearchFilter(localStorage.getItem(TASK_SEARCH_FILTER_KEY) ?? "");
       setSelectedBoardId(localStorage.getItem(BOARD_STORAGE_KEY));
       setSelectedWorkspaceId(localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY));
+      setSelectedPortfolioId(localStorage.getItem(SELECTED_PORTFOLIO_STORAGE_KEY));
       setSelectedClientId(localStorage.getItem(SELECTED_CLIENT_STORAGE_KEY));
       setSelectedProjectId(localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY));
       const rawSidebarExpanded = localStorage.getItem(PROJECT_SIDEBAR_EXPANDED_KEY);
@@ -2558,7 +2687,7 @@ export function AppShell() {
       setSelectedBoardId(null);
       return;
     }
-    if (!selectedWorkspaceId || !selectedClientId) {
+    if (!selectedWorkspaceId || !selectedPortfolioId) {
       setSelectedBoardId(null);
       return;
     }
@@ -2570,10 +2699,18 @@ export function AppShell() {
     activeKey,
     boards,
     selectedBoardId,
-    selectedClientId,
+    selectedPortfolioId,
     selectedProjectId,
     selectedWorkspaceId,
   ]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (selectedPortfolioId) {
+      localStorage.setItem(SELECTED_PORTFOLIO_STORAGE_KEY, selectedPortfolioId);
+    } else {
+      localStorage.removeItem(SELECTED_PORTFOLIO_STORAGE_KEY);
+    }
+  }, [selectedPortfolioId]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (selectedWorkspaceId) {
@@ -2793,6 +2930,59 @@ export function AppShell() {
     fetchNotifications().catch(() => undefined);
   }
 
+  async function markAllNotificationsAsRead() {
+    const response = await apiRequest("/notifications/read-all", { method: "POST", token, body: {} });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao marcar todas como lidas.");
+      return;
+    }
+    apiMessage.success("Todas as notificacoes foram marcadas como lidas.");
+    await fetchNotifications();
+  }
+
+  async function openNotificationItem(item: NotificationItem) {
+    if (!item.is_read) {
+      await markNotificationAsRead(item.id);
+    }
+    const taskId = item.task_id ?? (item.metadata?.task_id ? String(item.metadata.task_id) : "");
+    if (!taskId) {
+      navigateTo("notifications");
+      return;
+    }
+    const cached =
+      tasks.find((task) => task.id === taskId) ??
+      allTasks.find((task) => task.id === taskId);
+    if (cached) {
+      await openTask(cached);
+      return;
+    }
+    const response = await apiRequest<{ task: TaskItem }>(`/tasks/${taskId}`, { token });
+    if (response.ok && response.data?.task) {
+      await openTask(response.data.task);
+      return;
+    }
+    apiMessage.error("Nao foi possivel abrir a tarefa desta notificacao.");
+  }
+
+  async function toggleTaskWatch(taskId: string, watched: boolean) {
+    const response = await apiRequest(`/tasks/${taskId}/watch`, {
+      method: watched ? "DELETE" : "POST",
+      token,
+      body: {},
+    });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao atualizar seguimento da tarefa.");
+      return;
+    }
+    setWatchedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (watched) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+    apiMessage.success(watched ? "Voce deixou de seguir a tarefa." : "Voce passou a seguir a tarefa.");
+  }
+
   async function openTask(task: TaskItem, focusTab: TaskDrawerTab = "summary") {
     setSelectedTask(task);
     setTaskDrawerTab(focusTab);
@@ -2800,6 +2990,7 @@ export function AppShell() {
     setTaskCommentEditingId(null);
     setTaskCommentEditingContent("");
     void hydrateTaskAssigneePickList();
+    void fetchNotificationSubscriptions();
     const [activityResp, summaryResp, groupsResp, commentsResp] = await Promise.all([
       apiRequest<{ activities: TaskActivity[] }>(`/tasks/${task.id}/activity`, { token }),
       apiRequest<{ total_seconds: number; logs: TimeLog[] }>(`/tasks/${task.id}/time-summary`, { token }),
@@ -3026,6 +3217,7 @@ export function AppShell() {
     localStorage.removeItem(TASK_STATUS_FILTER_KEY);
     localStorage.removeItem(TASK_SEARCH_FILTER_KEY);
     localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
+    localStorage.removeItem(SELECTED_PORTFOLIO_STORAGE_KEY);
     localStorage.removeItem(SELECTED_CLIENT_STORAGE_KEY);
     localStorage.removeItem(SELECTED_PROJECT_STORAGE_KEY);
     localStorage.removeItem(PROJECT_SIDEBAR_EXPANDED_KEY);
@@ -3190,6 +3382,7 @@ export function AppShell() {
           apiMessage.success("Area de trabalho excluida.");
           if (selectedWorkspaceId === id) {
             setSelectedWorkspaceId(null);
+            setSelectedPortfolioId(null);
             setSelectedClientId(null);
             setSelectedProjectId(null);
             setSelectedBoardId(null);
@@ -3200,39 +3393,39 @@ export function AppShell() {
       });
       return;
     }
-    if (node.type === "client") {
+    if (node.type === "portfolio") {
       if (action === "rename") {
         openTextInputModal({
-          title: "Renomear cliente",
+          title: "Renomear portfolio",
           initialValue: node.title,
-          placeholder: "Novo nome do cliente",
+          placeholder: "Novo nome do portfolio",
           onSubmit: async (nextName) => {
-            const response = await apiRequest(`/clients/${id}`, {
+            const response = await apiRequest(`/portfolios/${id}`, {
               method: "PATCH",
               token,
               body: { name: nextName },
             });
             if (!response.ok) {
-              apiMessage.error(response.error?.message ?? "Falha ao renomear cliente.");
-              throw new Error("client_rename_failed");
+              apiMessage.error(response.error?.message ?? "Falha ao renomear portfolio.");
+              throw new Error("portfolio_rename_failed");
             }
-            apiMessage.success("Cliente atualizado.");
+            apiMessage.success("Portfolio atualizado.");
             await fetchCrudData();
           },
         });
         return;
       }
       openDeleteConfirmModal({
-        title: `Excluir o cliente "${node.title}"?`,
+        title: `Excluir o portfolio "${node.title}"?`,
         onConfirm: async () => {
-          const response = await apiRequest(`/clients/${id}`, { method: "DELETE", token });
+          const response = await apiRequest(`/portfolios/${id}`, { method: "DELETE", token });
           if (!response.ok) {
-            apiMessage.error(response.error?.message ?? "Falha ao excluir cliente.");
-            throw new Error("client_delete_failed");
+            apiMessage.error(response.error?.message ?? "Falha ao excluir portfolio.");
+            throw new Error("portfolio_delete_failed");
           }
-          apiMessage.success("Cliente excluido.");
-          if (selectedClientId === id) {
-            setSelectedClientId(null);
+          apiMessage.success("Portfolio excluido.");
+          if (selectedPortfolioId === id) {
+            setSelectedPortfolioId(null);
             setSelectedProjectId(null);
             setSelectedBoardId(null);
           }
@@ -3555,14 +3748,49 @@ export function AppShell() {
               </Typography.Title>
             </Space>
             <Space>
-              <Button
-                type="text"
-                aria-label="Abrir notificacoes"
-                icon={<BellOutlined />}
-                onClick={() => navigateTo("notifications")}
+              <Dropdown
+                trigger={["click"]}
+                popupRender={() => (
+                  <Card size="small" style={{ width: 360 }} title="Notificacoes recentes">
+                    <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                      {notifications.slice(0, 5).length === 0 ? (
+                        <Typography.Text type="secondary">Nenhuma notificacao.</Typography.Text>
+                      ) : (
+                        notifications.slice(0, 5).map((item) => (
+                          <Button
+                            key={item.id}
+                            type="text"
+                            block
+                            style={{ height: "auto", textAlign: "left", whiteSpace: "normal" }}
+                            onClick={() => void openNotificationItem(item)}
+                          >
+                            <Space orientation="vertical" size={0} style={{ width: "100%" }}>
+                              <Typography.Text strong={!item.is_read}>{item.title}</Typography.Text>
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                {NOTIFICATION_EVENT_LABELS[item.type] ?? item.type}
+                              </Typography.Text>
+                            </Space>
+                          </Button>
+                        ))
+                      )}
+                      <Space wrap>
+                        <Button size="small" onClick={() => navigateTo("notifications")}>
+                          Ver todas
+                        </Button>
+                        {unreadCount > 0 ? (
+                          <Button size="small" onClick={() => void markAllNotificationsAsRead()}>
+                            Marcar todas lidas
+                          </Button>
+                        ) : null}
+                      </Space>
+                    </Space>
+                  </Card>
+                )}
               >
-                {unreadCount > 0 ? `(${unreadCount})` : ""}
-              </Button>
+                <Button type="text" aria-label="Abrir notificacoes" icon={<BellOutlined />}>
+                  {unreadCount > 0 ? `(${unreadCount})` : ""}
+                </Button>
+              </Dropdown>
               <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
                 <Button type="text" aria-label="Abrir menu da conta" icon={<UserOutlined />}>
                   Conta
@@ -3903,8 +4131,8 @@ export function AppShell() {
                           }}
                         >
                           <Row gutter={[12, 0]}>
-                            <Col xs={24} md={12}>
-                                  <Form.Item label="Grupo" required>
+            <Col xs={24} md={12}>
+                                  <Form.Item label="Quadro" required>
                                 <Select
                                   value={selectedBoardId ?? undefined}
                                   onChange={(value) => setSelectedBoardId(value)}
@@ -3916,12 +4144,9 @@ export function AppShell() {
                               </Form.Item>
                             </Col>
                             <Col xs={24} md={12}>
-                              <Form.Item name="group_id" label="Grupo" rules={[{ required: true, message: "Selecione o grupo." }]}>
+                              <Form.Item name="group_id" label="Lista" rules={[{ required: true, message: "Selecione a lista." }]}>
                                 <Select
-                                  options={kanbanGroups.map((item) => ({
-                                    value: item.group.id,
-                                    label: item.group.name,
-                                  }))}
+                                  options={boardGroupSelectOptions}
                                 />
                               </Form.Item>
                             </Col>
@@ -6352,47 +6577,152 @@ export function AppShell() {
                         </Form>
                       </Card>
                     </Col>
+                    <Col span={24}>
+                      <Card title="Notificacoes por e-mail">
+                        <Typography.Paragraph type="secondary">
+                          Escolha como deseja ser avisado por evento. Instantaneo envia na hora; resumos agrupam varios avisos.
+                        </Typography.Paragraph>
+                        <Table
+                          size="small"
+                          rowKey="event_type"
+                          pagination={false}
+                          dataSource={notificationPreferences}
+                          columns={[
+                            {
+                              title: "Evento",
+                              dataIndex: "event_type",
+                              render: (value: string) => NOTIFICATION_EVENT_LABELS[value] ?? value,
+                            },
+                            {
+                              title: "No sistema",
+                              render: (row: NotificationPreferenceItem) => (
+                                <Select
+                                  size="small"
+                                  style={{ width: 100 }}
+                                  value={row.in_app_enabled}
+                                  options={[
+                                    { value: true, label: "Sim" },
+                                    { value: false, label: "Nao" },
+                                  ]}
+                                  onChange={(next) =>
+                                    setNotificationPreferences((prev) =>
+                                      prev.map((item) =>
+                                        item.event_type === row.event_type
+                                          ? { ...item, in_app_enabled: Boolean(next) }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ),
+                            },
+                            {
+                              title: "E-mail",
+                              render: (row: NotificationPreferenceItem) => (
+                                <Select
+                                  size="small"
+                                  style={{ width: 160 }}
+                                  value={row.email_mode}
+                                  options={NOTIFICATION_EMAIL_MODE_OPTIONS}
+                                  onChange={(next) =>
+                                    setNotificationPreferences((prev) =>
+                                      prev.map((item) =>
+                                        item.event_type === row.event_type
+                                          ? { ...item, email_mode: next as NotificationPreferenceItem["email_mode"] }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ),
+                            },
+                          ]}
+                        />
+                        <Button
+                          type="primary"
+                          style={{ marginTop: 12 }}
+                          onClick={async () => {
+                            const response = await apiRequest<{ preferences: NotificationPreferenceItem[] }>(
+                              "/me/notification-preferences",
+                              {
+                                method: "PATCH",
+                                token,
+                                body: { preferences: notificationPreferences },
+                              },
+                            );
+                            if (!response.ok) {
+                              apiMessage.error(response.error?.message ?? "Falha ao salvar preferencias.");
+                              return;
+                            }
+                            setNotificationPreferences(response.data?.preferences ?? notificationPreferences);
+                            apiMessage.success("Preferencias de notificacao salvas.");
+                          }}
+                        >
+                          Salvar preferencias
+                        </Button>
+                      </Card>
+                    </Col>
                   </Row>
                 )}
 
                 {activeKey === "notifications" && (
                   <Card title="Central de notificacoes">
-                    <Space style={{ marginBottom: 12 }}>
+                    <Space style={{ marginBottom: 12 }} wrap>
                       <Tag color={unreadCount > 0 ? "processing" : "default"}>{unreadCount} nao lidas</Tag>
                       <Button size="small" onClick={() => fetchNotifications().catch(() => undefined)}>
                         Atualizar
                       </Button>
-                      <Button
-                        size="small"
-                        onClick={async () => {
-                          const response = await apiRequest("/notifications/deadline-scan", {
-                            method: "POST",
-                            token,
-                            body: {},
-                          });
-                          if (!response.ok) {
-                            apiMessage.error(response.error?.message ?? "Falha ao disparar varredura de prazos.");
-                            return;
-                          }
-                          apiMessage.success("Varredura de prazos enfileirada.");
-                        }}
-                      >
-                        Disparar deadline-scan
-                      </Button>
+                      {unreadCount > 0 ? (
+                        <Button size="small" onClick={() => void markAllNotificationsAsRead()}>
+                          Marcar todas como lidas
+                        </Button>
+                      ) : null}
+                      {isAdmin ? (
+                        <Button
+                          size="small"
+                          onClick={async () => {
+                            const response = await apiRequest("/notifications/deadline-scan", {
+                              method: "POST",
+                              token,
+                              body: {},
+                            });
+                            if (!response.ok) {
+                              apiMessage.error(response.error?.message ?? "Falha ao disparar varredura de prazos.");
+                              return;
+                            }
+                            apiMessage.success("Varredura de prazos enfileirada.");
+                          }}
+                        >
+                          Disparar deadline-scan
+                        </Button>
+                      ) : null}
                     </Space>
                     <Space orientation="vertical" style={{ width: "100%" }} size={8}>
                       {notifications.length === 0 ? (
                         <Empty description="Nenhuma notificacao no momento." />
                       ) : null}
                       {notifications.map((item) => (
-                        <Card key={item.id} size="small">
+                        <Card
+                          key={item.id}
+                          size="small"
+                          hoverable
+                          onClick={() => void openNotificationItem(item)}
+                          style={{ cursor: "pointer" }}
+                        >
                           <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
                             <Space>
-                              <Typography.Text strong>{item.title}</Typography.Text>
+                              <Typography.Text strong={!item.is_read}>{item.title}</Typography.Text>
+                              <Tag>{NOTIFICATION_EVENT_LABELS[item.type] ?? item.type}</Tag>
                               <Tag color={item.is_read ? "default" : "processing"}>{item.is_read ? "Lida" : "Nova"}</Tag>
                             </Space>
                             {!item.is_read ? (
-                              <Button size="small" onClick={() => markNotificationAsRead(item.id)}>
+                              <Button
+                                size="small"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void markNotificationAsRead(item.id);
+                                }}
+                              >
                                 Marcar como lida
                               </Button>
                             ) : null}
@@ -6400,6 +6730,11 @@ export function AppShell() {
                           <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
                             {item.message} - {formatDate(item.created_at)}
                           </Typography.Paragraph>
+                          {item.metadata?.breadcrumb ? (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {String(item.metadata.breadcrumb)}
+                            </Typography.Text>
+                          ) : null}
                         </Card>
                       ))}
                     </Space>
@@ -6508,6 +6843,7 @@ export function AppShell() {
                           type="link"
                           onClick={() => {
                             setSelectedWorkspaceId(null);
+                            setSelectedPortfolioId(null);
                             setSelectedClientId(null);
                             setSelectedProjectId(null);
                             setSelectedBoardId(null);
@@ -6521,18 +6857,19 @@ export function AppShell() {
                             <Typography.Text type="secondary">/</Typography.Text>
                             <Button
                               type="link"
-                              onClick={() => {
-                                setSelectedClientId(null);
-                                setSelectedProjectId(null);
-                                setSelectedBoardId(null);
-                              }}
+                            onClick={() => {
+                              setSelectedPortfolioId(null);
+                              setSelectedClientId(null);
+                              setSelectedProjectId(null);
+                              setSelectedBoardId(null);
+                            }}
                               style={{ paddingInline: 0 }}
                             >
                               {`Area de trabalho: ${String(selectedWorkspace.name ?? "Area de trabalho")}`}
                             </Button>
                           </>
                         ) : null}
-                        {selectedClient ? (
+                        {selectedPortfolio ? (
                           <>
                             <Typography.Text type="secondary">/</Typography.Text>
                             <Button
@@ -6543,7 +6880,7 @@ export function AppShell() {
                               }}
                               style={{ paddingInline: 0 }}
                             >
-                              {`Cliente: ${String(selectedClient.name ?? "Cliente")}`}
+                              {`Portfolio: ${String(selectedPortfolio.name ?? "Portfolio")}`}
                             </Button>
                           </>
                         ) : null}
@@ -6562,12 +6899,12 @@ export function AppShell() {
                             Nova area de trabalho
                           </Button>
                         ) : null}
-                        {selectedWorkspaceId && !selectedClientId && isAdmin ? (
-                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateClientOpen(true)}>
-                            Novo cliente
+                        {selectedWorkspaceId && !selectedPortfolioId && isAdmin ? (
+                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreatePortfolioOpen(true)}>
+                            Novo portfolio
                           </Button>
                         ) : null}
-                        {selectedClientId && !selectedProjectId && isAdmin ? (
+                        {selectedPortfolioId && !selectedProjectId && isAdmin ? (
                           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateProjectOpen(true)}>
                             Novo projeto
                           </Button>
@@ -6741,7 +7078,7 @@ export function AppShell() {
                           <Row gutter={[16, 16]}>
                             {visibleWorkspaces.map((ws) => {
                               const wsId = String(ws.id);
-                              const wsClients = clientsForWorkspace(wsId).length;
+                              const wsPortfolios = portfoliosForWorkspace(wsId).length;
                               const wsProjects = (projectsByWorkspace[wsId] ?? []).length;
                               return (
                                 <Col xs={24} sm={12} lg={8} xl={6} key={wsId}>
@@ -6749,6 +7086,7 @@ export function AppShell() {
                                     hoverable
                                     onClick={() => {
                                       setSelectedWorkspaceId(wsId);
+                                      setSelectedPortfolioId(null);
                                       setSelectedClientId(null);
                                       setSelectedProjectId(null);
                                       setSelectedBoardId(null);
@@ -6795,6 +7133,7 @@ export function AppShell() {
                                                   apiMessage.success("Area de trabalho excluida.");
                                                   if (selectedWorkspaceId === wsId) {
                                                     setSelectedWorkspaceId(null);
+                                                    setSelectedPortfolioId(null);
                                                     setSelectedClientId(null);
                                                     setSelectedProjectId(null);
                                                     setSelectedBoardId(null);
@@ -6810,7 +7149,7 @@ export function AppShell() {
                                     }
                                   >
                                     <Space orientation="vertical" size={4}>
-                                      <Tag color="processing">{wsClients} clientes</Tag>
+                                      <Tag color="processing">{wsPortfolios} portfolios</Tag>
                                       <Tag color="purple">{wsProjects} projetos</Tag>
                                     </Space>
                                   </Card>
@@ -6822,25 +7161,32 @@ export function AppShell() {
                       </Card>
                     )}
 
-                    {selectedWorkspaceId && !selectedClientId && (
-                      <Card title={`Clientes em ${String(selectedWorkspace?.name ?? "")}`}>
-                        {clientsForWorkspace(selectedWorkspaceId).length === 0 ? (
-                          <Empty description={isAdmin ? "Sem clientes nesta area de trabalho. Cadastre o primeiro." : "Sem clientes vinculados aqui."} />
+                    {selectedWorkspaceId && !selectedPortfolioId && (
+                      <Card title={`Portfolios em ${String(selectedWorkspace?.name ?? "")}`}>
+                        {portfoliosForWorkspace(selectedWorkspaceId).length === 0 ? (
+                          <Empty
+                            description={
+                              isAdmin
+                                ? "Sem portfolios nesta area. Crie o primeiro (ex.: Producao, Financeiro)."
+                                : "Sem portfolios vinculados aqui."
+                            }
+                          />
                         ) : (
                           <Row gutter={[16, 16]}>
-                            {clientsForWorkspace(selectedWorkspaceId).map((client) => {
-                              const clientId = String(client.id);
-                              const projectsCount = projectsForClient(selectedWorkspaceId, clientId).length;
+                            {portfoliosForWorkspace(selectedWorkspaceId).map((portfolio) => {
+                              const portfolioId = String(portfolio.id);
+                              const projectsCount = projectsForPortfolio(portfolioId).length;
                               return (
-                                <Col xs={24} sm={12} lg={8} xl={6} key={clientId}>
+                                <Col xs={24} sm={12} lg={8} xl={6} key={portfolioId}>
                                   <Card
                                     hoverable
                                     onClick={() => {
-                                      setSelectedClientId(clientId);
+                                      setSelectedPortfolioId(portfolioId);
+                                      setSelectedClientId(null);
                                       setSelectedProjectId(null);
                                       setSelectedBoardId(null);
                                     }}
-                                    title={String(client.name ?? "Cliente")}
+                                    title={String(portfolio.name ?? "Portfolio")}
                                     extra={
                                       isAdmin ? (
                                         <Space
@@ -6852,23 +7198,25 @@ export function AppShell() {
                                             type="text"
                                             size="small"
                                             icon={<EditOutlined />}
-                                            aria-label="Renomear cliente"
+                                            aria-label="Renomear portfolio"
                                             onClick={() =>
                                               openTextInputModal({
-                                                title: "Renomear cliente",
-                                                initialValue: String(client.name ?? ""),
-                                                placeholder: "Novo nome do cliente",
+                                                title: "Renomear portfolio",
+                                                initialValue: String(portfolio.name ?? ""),
+                                                placeholder: "Novo nome do portfolio",
                                                 onSubmit: async (nextName) => {
-                                                  const response = await apiRequest(`/clients/${clientId}`, {
+                                                  const response = await apiRequest(`/portfolios/${portfolioId}`, {
                                                     method: "PATCH",
                                                     token,
                                                     body: { name: nextName },
                                                   });
                                                   if (!response.ok) {
-                                                    apiMessage.error(response.error?.message ?? "Falha ao renomear cliente.");
-                                                    throw new Error("client_rename_failed");
+                                                    apiMessage.error(
+                                                      response.error?.message ?? "Falha ao renomear portfolio.",
+                                                    );
+                                                    throw new Error("portfolio_rename_failed");
                                                   }
-                                                  apiMessage.success("Cliente atualizado.");
+                                                  apiMessage.success("Portfolio atualizado.");
                                                   await fetchCrudData();
                                                 },
                                               })
@@ -6880,7 +7228,11 @@ export function AppShell() {
                                   >
                                     <Space orientation="vertical" size={4}>
                                       <Tag color="purple">{projectsCount} projetos</Tag>
-                                      <Typography.Text type="secondary">Status: {String(client.status ?? "-")}</Typography.Text>
+                                      {portfolio.description ? (
+                                        <Typography.Text type="secondary">
+                                          {String(portfolio.description)}
+                                        </Typography.Text>
+                                      ) : null}
                                     </Space>
                                   </Card>
                                 </Col>
@@ -6891,15 +7243,25 @@ export function AppShell() {
                       </Card>
                     )}
 
-                    {selectedWorkspaceId && selectedClientId && !selectedProjectId && (
-                      <Card title={`Projetos de ${String(selectedClient?.name ?? "")}`}>
-                        {projectsForClient(selectedWorkspaceId, selectedClientId).length === 0 ? (
-                          <Empty description={isAdmin ? "Sem projetos para este cliente. Crie o primeiro." : "Sem projetos vinculados."} />
+                    {selectedWorkspaceId && selectedPortfolioId && !selectedProjectId && (
+                      <Card title={`Projetos em ${String(selectedPortfolio?.name ?? "")}`}>
+                        {projectsForPortfolio(selectedPortfolioId).length === 0 ? (
+                          <Empty
+                            description={
+                              isAdmin
+                                ? "Sem projetos neste portfolio. Crie o primeiro e vincule um cliente existente."
+                                : "Sem projetos vinculados."
+                            }
+                          />
                         ) : (
                           <Row gutter={[16, 16]}>
-                            {projectsForClient(selectedWorkspaceId, selectedClientId).map((project) => {
+                            {projectsForPortfolio(selectedPortfolioId).map((project) => {
                               const projectId = String(project.id);
                               const projectBoards = boardsForProject(projectId).length;
+                              const clientId = project.client_id ? String(project.client_id) : "";
+                              const clientName = clientId
+                                ? String(clients.find((row) => String(row.id) === clientId)?.name ?? "Cliente")
+                                : "Sem cliente";
                               const contractLineId = String(project.contract_line_id ?? "");
                               const contractLine = contractLineId ? contractLineById[contractLineId] : undefined;
                               return (
@@ -6908,6 +7270,7 @@ export function AppShell() {
                                     hoverable
                                     onClick={() => {
                                       setSelectedProjectId(projectId);
+                                      if (clientId) setSelectedClientId(clientId);
                                       const firstBoard = boardsForProject(projectId)[0]?.id ?? null;
                                       setSelectedBoardId(firstBoard);
                                     }}
@@ -6979,6 +7342,7 @@ export function AppShell() {
                                     }
                                   >
                                     <Space orientation="vertical" size={4}>
+                                      <Tag color="gold">{clientName}</Tag>
                                       <Tag color="processing">{projectBoards} grupos</Tag>
                                       <Typography.Text type="secondary">Status: {String(project.status ?? "-")}</Typography.Text>
                                       {contractLine ? (
@@ -7689,6 +8053,64 @@ export function AppShell() {
       </Modal>
 
       <Modal
+        title="Novo portfolio"
+        open={createPortfolioOpen}
+        onCancel={() => setCreatePortfolioOpen(false)}
+        onOk={() => createPortfolioForm.submit()}
+        okText="Criar"
+        cancelText="Cancelar"
+      >
+        <Form
+          layout="vertical"
+          form={createPortfolioForm}
+          onFinish={async (values) => {
+            if (!selectedWorkspaceId) {
+              apiMessage.error("Selecione uma area de trabalho.");
+              return;
+            }
+            const response = await apiRequest<{ portfolio: Record<string, unknown> }>("/portfolios", {
+              method: "POST",
+              token,
+              body: {
+                name: values.name,
+                description: values.description ?? "",
+                workspace_id: selectedWorkspaceId,
+              },
+            });
+            if (!response.ok) {
+              apiMessage.error(response.error?.message ?? "Falha ao criar portfolio.");
+              return;
+            }
+            const created = response.data?.portfolio as { id?: string } | undefined;
+            apiMessage.success("Portfolio criado.");
+            await fetchCrudData();
+            if (created?.id) {
+              setSelectedPortfolioId(String(created.id));
+            }
+            createPortfolioForm.resetFields();
+            setCreatePortfolioOpen(false);
+          }}
+        >
+          <Form.Item
+            name="name"
+            label="Nome do portfolio"
+            rules={[{ required: true, message: "Informe o nome." }, { min: 3 }, { max: 255 }]}
+          >
+            <Input placeholder="Ex.: Producao, Financeiro, Administrativo" />
+          </Form.Item>
+          <Form.Item name="description" label="Descricao">
+            <Input.TextArea rows={2} placeholder="Opcional" />
+          </Form.Item>
+          <Alert
+            type="info"
+            showIcon
+            title={`Area de trabalho: ${String(selectedWorkspace?.name ?? "")}`}
+            description="Portfolios organizam projetos dentro da area (ex.: setores da agencia)."
+          />
+        </Form>
+      </Modal>
+
+      <Modal
         title="Novo cliente"
         open={createClientOpen}
         onCancel={() => setCreateClientOpen(false)}
@@ -7771,8 +8193,8 @@ export function AppShell() {
           <Alert
             type="info"
             showIcon
-            title={`Sera vinculado automaticamente a area de trabalho atual: ${String(selectedWorkspace?.name ?? "")}`}
-            description="O cliente aparecera dentro desta area assim que voce criar o primeiro projeto vinculado."
+            title="Cliente global"
+            description="O cliente e cadastrado no catalogo geral. Para aparecer nesta area, vincule-o ao criar um projeto dentro de um portfolio."
           />
         </Form>
       </Modal>
@@ -7808,7 +8230,7 @@ export function AppShell() {
               }
               apiMessage.success("Cliente atualizado.");
             } else {
-              const response = await apiRequest("/clients", {
+              const response = await apiRequest<{ client?: { id?: string } }>("/clients", {
                 method: "POST",
                 token,
                 body: {
@@ -7824,6 +8246,10 @@ export function AppShell() {
                 return;
               }
               apiMessage.success("Cliente criado.");
+              const newClientId = response.data?.client?.id ? String(response.data.client.id) : null;
+              if (newClientId && createProjectOpen) {
+                createProjectForm.setFieldsValue({ client_id: newClientId });
+              }
             }
             setManageClientModal(null);
             manageClientForm.resetFields();
@@ -8681,37 +9107,46 @@ export function AppShell() {
         onOk={() => createProjectForm.submit()}
         okText="Criar"
         cancelText="Cancelar"
+        afterOpenChange={(open) => {
+          if (!open) return;
+          createProjectForm.setFieldsValue({
+            portfolio_id: selectedPortfolioId ?? undefined,
+            client_id: undefined,
+          });
+        }}
       >
         <Form
           layout="vertical"
           form={createProjectForm}
           onFinish={async (values) => {
-            if (!selectedWorkspaceId) {
-              apiMessage.error("Selecione uma area de trabalho.");
+            const portfolioId = String(values.portfolio_id ?? selectedPortfolioId ?? "");
+            const clientId = String(values.client_id ?? "");
+            if (!portfolioId) {
+              apiMessage.error("Selecione um portfolio.");
               return;
             }
-            if (!selectedClientId) {
-              apiMessage.error("Selecione um cliente.");
+            if (!clientId) {
+              apiMessage.error("Selecione um cliente existente ou cadastre um em Administracao > Clientes.");
               return;
             }
-            const portfolioId = await ensureDefaultPortfolio(selectedWorkspaceId);
-            if (!portfolioId) return;
             const response = await apiRequest<{ project: Record<string, unknown> }>("/projects", {
               method: "POST",
               token,
               body: {
                 name: values.name,
                 portfolio_id: portfolioId,
-                client_id: selectedClientId,
+                client_id: clientId,
               },
             });
             if (!response.ok) {
               apiMessage.error(response.error?.message ?? "Falha ao criar projeto.");
               return;
             }
-            const created = response.data?.project as { id?: string } | undefined;
+            const created = response.data?.project as { id?: string; portfolio_id?: string; client_id?: string } | undefined;
             apiMessage.success("Projeto criado.");
             await fetchCrudData();
+            if (created?.portfolio_id) setSelectedPortfolioId(String(created.portfolio_id));
+            if (created?.client_id) setSelectedClientId(String(created.client_id));
             if (created?.id) {
               setSelectedProjectId(String(created.id));
             }
@@ -8719,6 +9154,45 @@ export function AppShell() {
             setCreateProjectOpen(false);
           }}
         >
+          <Form.Item
+            name="portfolio_id"
+            label="Portfolio"
+            rules={[{ required: true, message: "Selecione o portfolio." }]}
+          >
+            <Select
+              placeholder="Escolha o portfolio"
+              options={portfoliosForWorkspace(selectedWorkspaceId ?? "").map((portfolio) => ({
+                value: String(portfolio.id),
+                label: String(portfolio.name ?? "Portfolio"),
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="client_id"
+            label="Cliente (existente)"
+            rules={[{ required: true, message: "Selecione um cliente." }]}
+            extra={
+              isAdmin ? (
+                <Button type="link" size="small" onClick={() => setManageClientModal({ mode: "create" })} style={{ padding: 0 }}>
+                  Cadastrar novo cliente
+                </Button>
+              ) : undefined
+            }
+          >
+            <Select
+              showSearch
+              placeholder="Vincule um cliente ja cadastrado"
+              filterOption={(input, option) =>
+                String(option?.label ?? "")
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
+              }
+              options={clients.map((client) => ({
+                value: String(client.id),
+                label: String(client.name ?? client.id),
+              }))}
+            />
+          </Form.Item>
           <Form.Item
             name="name"
             label="Nome do projeto"
@@ -8729,7 +9203,8 @@ export function AppShell() {
           <Alert
             type="info"
             showIcon
-            title={`Cliente: ${String(selectedClient?.name ?? "-")} | Area: ${String(selectedWorkspace?.name ?? "-")}`}
+            title={`Area: ${String(selectedWorkspace?.name ?? "-")}`}
+            description="Projetos ficam dentro do portfolio e vinculam o cliente escolhido."
           />
         </Form>
       </Modal>
@@ -8874,12 +9349,7 @@ export function AppShell() {
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="group_id" label="Lista" rules={[{ required: true, message: "Selecione a lista." }]}>
-                <Select
-                  options={(boardKanbanByBoardId[composeBoardId ?? selectedBoardId ?? ""] ?? kanbanGroups).map((item) => ({
-                    value: item.group.id,
-                    label: formatColumnLabel(item.group.name),
-                  }))}
-                />
+                <Select options={boardGroupSelectOptions} placeholder="Selecione o quadro e a lista" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -8949,6 +9419,15 @@ export function AppShell() {
         {selectedTask && (
           <Space orientation="vertical" size={12} style={{ width: "100%" }}>
             <Card size="small" title="Resumo">
+              <Space wrap align="center" style={{ marginBottom: 8 }}>
+                <Button
+                  size="small"
+                  type={watchedTaskIds.has(selectedTask.id) ? "primary" : "default"}
+                  onClick={() => void toggleTaskWatch(selectedTask.id, watchedTaskIds.has(selectedTask.id))}
+                >
+                  {watchedTaskIds.has(selectedTask.id) ? "Seguindo" : "Seguir tarefa"}
+                </Button>
+              </Space>
               <Space wrap align="center">
                 <Typography.Text type="secondary">Status atual:</Typography.Text>
                 {renderStatusTag(selectedTask.status)}
@@ -8981,16 +9460,34 @@ export function AppShell() {
                 {secondsToText(liveTaskTotalSeconds)}
               </Typography.Title>
               <Space wrap>
-                <Button icon={<PlayCircleOutlined />} type={activeTimeLog ? "default" : "primary"} onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}>
+                <Button
+                  icon={<PlayCircleOutlined />}
+                  type={activeTimeLog ? "default" : "primary"}
+                  disabled={selectedTask.status === "done" || Boolean(activeTimeLog)}
+                  onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}
+                >
                   Iniciar
                 </Button>
-                <Button icon={<PauseCircleOutlined />} onClick={() => taskAction(`/tasks/${selectedTask.id}/time/pause`, "POST", {})}>
+                <Button
+                  icon={<PauseCircleOutlined />}
+                  disabled={selectedTask.status === "done" || !activeTimeLog}
+                  onClick={() => taskAction(`/tasks/${selectedTask.id}/time/pause`, "POST", {})}
+                >
                   Pausar
                 </Button>
-                <Button icon={<PlayCircleOutlined />} onClick={() => taskAction(`/tasks/${selectedTask.id}/time/resume`, "POST", {})}>
+                <Button
+                  icon={<PlayCircleOutlined />}
+                  disabled={selectedTask.status === "done" || !pausedTimeLog}
+                  onClick={() => taskAction(`/tasks/${selectedTask.id}/time/resume`, "POST", {})}
+                >
                   Retomar
                 </Button>
-                <Button icon={<CheckCircleOutlined />} type="primary" onClick={() => taskAction(`/tasks/${selectedTask.id}/complete`, "POST", {})}>
+                <Button
+                  icon={<CheckCircleOutlined />}
+                  type="primary"
+                  disabled={selectedTask.status === "done"}
+                  onClick={() => taskAction(`/tasks/${selectedTask.id}/complete`, "POST", {})}
+                >
                   Concluir
                 </Button>
               </Space>

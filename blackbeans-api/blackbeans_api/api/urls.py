@@ -29,6 +29,12 @@ from blackbeans_api.api.operations_views import BoardGroupListCreateView
 from blackbeans_api.api.operations_views import BoardGroupDetailView
 from blackbeans_api.api.operations_views import BoardDetailView
 from blackbeans_api.api.operations_views import BoardProgressView
+from blackbeans_api.api.notification_views import BoardWatchView
+from blackbeans_api.api.notification_views import MeNotificationPreferencesView
+from blackbeans_api.api.notification_views import MeNotificationSubscriptionsView
+from blackbeans_api.api.notification_views import NotificationUnsubscribeView
+from blackbeans_api.api.notification_views import NotificationsReadAllView
+from blackbeans_api.api.notification_views import TaskWatchView
 from blackbeans_api.api.operations_views import NotificationsDeadlineScanView
 from blackbeans_api.api.operations_views import NotificationsListView
 from blackbeans_api.api.operations_views import NotificationsUnreadCountView
@@ -118,8 +124,18 @@ urlpatterns = [
     path("my-tasks", MyTasksView.as_view(), name="my-tasks"),
     path("notifications", NotificationsListView.as_view(), name="notifications-list"),
     path("notifications/unread-count", NotificationsUnreadCountView.as_view(), name="notifications-unread-count"),
+    path("notifications/read-all", NotificationsReadAllView.as_view(), name="notifications-read-all"),
+    path("notifications/unsubscribe", NotificationUnsubscribeView.as_view(), name="notifications-unsubscribe"),
     path("notifications/<uuid:notification_id>/read", NotificationReadView.as_view(), name="notifications-read"),
     path("notifications/deadline-scan", NotificationsDeadlineScanView.as_view(), name="notifications-deadline-scan"),
+    path("me/notification-preferences", MeNotificationPreferencesView.as_view(), name="me-notification-preferences"),
+    path(
+        "me/notification-subscriptions",
+        MeNotificationSubscriptionsView.as_view(),
+        name="me-notification-subscriptions",
+    ),
+    path("tasks/<uuid:task_id>/watch", TaskWatchView.as_view(), name="tasks-watch"),
+    path("boards/<uuid:board_id>/watch", BoardWatchView.as_view(), name="boards-watch"),
     path("projects/<uuid:project_id>", ProjectDetailView.as_view(), name="projects-detail"),
     path("projects/<uuid:project_id>/status", ProjectStatusView.as_view(), name="projects-status"),
     path("projects/<uuid:project_id>/schedule", ProjectScheduleView.as_view(), name="projects-schedule"),

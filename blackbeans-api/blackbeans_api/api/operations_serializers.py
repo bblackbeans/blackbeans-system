@@ -454,6 +454,7 @@ def notification_to_representation(notification: Notification) -> dict:
         "id": str(notification.pk),
         "user_id": notification.user_id,
         "task_id": str(notification.task_id) if notification.task_id else None,
+        "actor_id": notification.actor_id,
         "type": notification.type,
         "title": notification.title,
         "message": notification.message,
@@ -461,5 +462,7 @@ def notification_to_representation(notification: Notification) -> dict:
         "metadata": notification.metadata,
         "is_read": notification.is_read,
         "read_at": _iso(notification.read_at),
+        "email_sent_at": _iso(notification.email_sent_at),
+        "digest_sent_at": _iso(notification.digest_sent_at),
         "created_at": _iso(notification.created_at),
     }
