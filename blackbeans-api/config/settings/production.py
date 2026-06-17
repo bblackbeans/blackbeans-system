@@ -89,17 +89,23 @@ EMAIL_SUBJECT_PREFIX = env(
 )
 ACCOUNT_EMAIL_SUBJECT_PREFIX = EMAIL_SUBJECT_PREFIX
 
-# ADMIN
+# SMTP (preferido quando EMAIL_HOST estiver definido)
 # ------------------------------------------------------------------------------
-# Django Admin URL regex.
-ADMIN_URL = env("DJANGO_ADMIN_URL")
+EMAIL_HOST = env("EMAIL_HOST", default="")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+    EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 
-# Anymail (opcional)
+# Anymail / Mailgun (opcional, se SMTP nao estiver configurado)
 # ------------------------------------------------------------------------------
 # Habilita Mailgun apenas quando as variaveis obrigatorias forem informadas.
 MAILGUN_API_KEY = env("MAILGUN_API_KEY", default="")
 MAILGUN_DOMAIN = env("MAILGUN_DOMAIN", default="")
-if MAILGUN_API_KEY and MAILGUN_DOMAIN:
+if not EMAIL_HOST and MAILGUN_API_KEY and MAILGUN_DOMAIN:
     # https://anymail.readthedocs.io/en/stable/installation/#installing-anymail
     INSTALLED_APPS += ["anymail"]
     # https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
@@ -111,6 +117,12 @@ if MAILGUN_API_KEY and MAILGUN_DOMAIN:
         "MAILGUN_SENDER_DOMAIN": MAILGUN_DOMAIN,
         "MAILGUN_API_URL": env("MAILGUN_API_URL", default="https://api.mailgun.net/v3"),
     }
+
+
+# ADMIN
+# ------------------------------------------------------------------------------
+# Django Admin URL regex.
+ADMIN_URL = env("DJANGO_ADMIN_URL")
 
 
 # LOGGING
