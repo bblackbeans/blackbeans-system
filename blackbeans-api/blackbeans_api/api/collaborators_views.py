@@ -67,6 +67,30 @@ def _active_department_for(collaborator: Collaborator) -> Department | None:
     return link.department if link else None
 
 
+def _ensure_collaborator_link_for_user(user) -> UserCollaboratorLink:
+    existing = (
+        UserCollaboratorLink.objects.filter(user=user, is_active=True)
+        .select_related("collaborator")
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    display_name = str(getattr(user, "name", "") or "").strip() or str(getattr(user, "username", "") or "Usuario")
+    professional_email = str(getattr(user, "email", "") or "").strip()
+    collaborator = Collaborator.objects.create(
+        display_name=display_name,
+        professional_email=professional_email,
+        job_title="",
+        phone="",
+    )
+    return UserCollaboratorLink.objects.create(
+        user=user,
+        collaborator=collaborator,
+        is_active=True,
+    )
+
+
 class AdminCollaboratorListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
@@ -254,13 +278,7 @@ class MeCollaboratorProfileView(APIView):
         correlation_id = get_correlation_id(request)
         ulink = self._active_link(request)
         if ulink is None:
-            return error_response(
-                correlation_id=correlation_id,
-                code="collaborator_profile_not_found",
-                message="Nenhum perfil de colaborador vinculado a este usuario.",
-                details={},
-                http_status=status.HTTP_404_NOT_FOUND,
-            )
+            ulink = _ensure_collaborator_link_for_user(request.user)
 
         collaborator = ulink.collaborator
         serializer = CollaboratorUpdateSerializer(

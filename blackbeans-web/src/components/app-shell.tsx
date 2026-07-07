@@ -3,6 +3,7 @@
 import {
   AppstoreOutlined,
   BellOutlined,
+  BugOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -57,12 +58,18 @@ import {
   Typography,
   Upload,
   message,
+  Tooltip,
 } from "antd";
+import type { SelectProps } from "antd/es/select";
 import type { MenuProps } from "antd";
+import type { ReactElement } from "react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiRequest } from "@/lib/api";
+import { installReportProblemCollectors } from "@/lib/report-problem";
+import { ProblemReportsPanel } from "@/components/report-problem/ProblemReportsPanel";
+import { ReportProblemWidget } from "@/components/report-problem/ReportProblemWidget";
 
 const { Header, Sider, Content } = Layout;
 const AUTH_STORAGE_KEY = "bb_access_token";
@@ -81,6 +88,109 @@ const SELECTED_PROJECT_STORAGE_KEY = "bb_selected_project_id";
 const PROJECT_SIDEBAR_EXPANDED_KEY = "bb_projects_sidebar_expanded_keys";
 const DEFAULT_PORTFOLIO_STORAGE_KEY = "bb_default_portfolio_by_workspace";
 const DEFAULT_PORTFOLIO_NAME = "Default";
+
+const HELP_TIPS = {
+  menuMyWork: "Tarefas atribuidas a voce, com filtros por prazo e prioridade.",
+  menuTasks: "Lista geral de tarefas do sistema com filtros avancados (admin).",
+  menuProjects: "Estrutura Area > Portfolio > Projeto > Quadro > Lista > Tarefa.",
+  menuClients: "Cadastro global de clientes (CNPJ, contato, e-mails financeiros).",
+  menuServices: "Catalogo de servicos usado em vendas e contratos.",
+  menuSales: "Wizard de venda/contrato; ao confirmar pode gerar estrutura de projeto.",
+  menuUsers: "Gestao de usuarios, permissoes e vinculos.",
+  menuStatus: "Paleta e rotulos dos status de tarefas em todo o sistema.",
+  menuStats: "Indicadores e visao consolidada da operacao.",
+  menuProblems: "Triagem de problemas reportados pelos usuarios (screenshot, gravacao, contexto).",
+  novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
+  novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
+  novoProjeto: "Entrega vinculada a um cliente existente dentro do portfolio.",
+  novoGrupo: "Quadro de tarefas do projeto (ex.: Sprint, Campanha, Operacao).",
+  novaLista: "Coluna do quadro (ex.: Em andamento, Revisao). Tarefas sao organizadas aqui.",
+  novaTarefa: "Cria um card de trabalho na lista escolhida deste quadro.",
+  excluirGrupo: "Remove o quadro inteiro e suas listas.",
+  moverSelecionadas: "Move tarefas marcadas para outro quadro ou lista.",
+  novoCliente: "Cadastra cliente no catalogo global; vincule ao criar um projeto.",
+  novoServico: "Item do catalogo de servicos para precificar vendas.",
+  novaVenda: "Inicia contrato comercial com cliente, servicos e financeiro.",
+  limiteWip: "Maximo de tarefas simultaneas nesta coluna (controle Kanban).",
+  editar: "Abre os detalhes para editar informacoes.",
+  excluir: "Remove o item permanentemente (quando permitido).",
+  comentarios: "Abre comentarios e permite mencionar outros usuarios com @.",
+  atualizar: "Recarrega os dados mais recentes do servidor.",
+  salvar: "Grava as alteracoes feitas neste formulario.",
+  filterPeriodo: "Filtra tarefas pelo periodo ou situacao de prazo.",
+  filterPrioridade: "Filtra tarefas pelo nivel de prioridade.",
+  filterPrazo: "Filtra tarefas pela data de vencimento.",
+  statusRapido: "Altera o status da tarefa sem abrir o painel completo.",
+  criarTarefaParaMim: "Cria tarefa ja atribuida a voce no quadro escolhido.",
+  notificacoes: "Central de avisos do sistema (tarefas, mencoes, prazos).",
+  conta: "Perfil, dados pessoais, 2FA e preferencias de e-mail.",
+  sidebarRename: "Renomeia este item na estrutura de projetos.",
+  sidebarDelete: "Exclui este item e, em cascata, o que estiver abaixo dele.",
+  sidebarExpand: "Expande ou recolhe os itens filhos nesta arvore.",
+  kanbanRenomearLista: "Renomeia esta coluna do quadro.",
+  kanbanExcluirLista: "Remove esta coluna; tarefas precisam estar vazias ou movidas antes.",
+  visualizarVenda: "Abre resumo do contrato e linhas de servico.",
+  confirmarVenda: "Confirma a venda e pode gerar workspace, portfolio e projetos.",
+  limparFiltros: "Volta todos os filtros ao estado inicial.",
+  filterStatus: "Filtra tarefas pelo status (a fazer, em progresso, concluida...).",
+  filterProjeto: "Limita a lista a um projeto especifico.",
+  filterQuadro: "Limita a lista a um quadro especifico.",
+  filterResponsavel: "Filtra por quem esta atribuido a tarefa.",
+  buscarTitulo: "Busca tarefas pelo titulo (texto livre).",
+  iniciar2fa: "Gera QR code para vincular app autenticador (Google Authenticator etc.).",
+  desativar2fa: "Remove a exigencia de codigo no login (precisa do codigo atual).",
+  subirImagemPerfil: "Altera a foto exibida no perfil (salva localmente no navegador).",
+  salvarPreferenciasEmail: "Grava como voce quer receber cada tipo de notificacao.",
+  seguirTarefa: "Recebe avisos quando a tarefa for atualizada, comentada ou mudar de status.",
+  timerIniciar: "Inicia contagem de tempo nesta tarefa (so uma sessao ativa por vez).",
+  timerPausar: "Pausa a contagem sem perder o tempo ja registrado.",
+  timerRetomar: "Continua a contagem de onde parou.",
+  timerConcluir: "Marca a tarefa como concluida e encerra timers abertos.",
+  salvarStatus: "Atualiza o status da tarefa no servidor.",
+  marcarTodasLidas: "Remove o destaque de notificacoes nao lidas.",
+  verTodasNotificacoes: "Abre a central completa de notificacoes.",
+  buscarCliente: "Filtra clientes por nome, CNPJ ou contato.",
+} as const;
+
+function HelpTip({ title, children }: { title: string; children: ReactElement }) {
+  return (
+    <Tooltip title={title} mouseEnterDelay={0.35}>
+      {children}
+    </Tooltip>
+  );
+}
+
+function TipButton({
+  tip,
+  ...props
+}: { tip: string } & React.ComponentProps<typeof Button>) {
+  return (
+    <HelpTip title={tip}>
+      <Button {...props} />
+    </HelpTip>
+  );
+}
+
+function TipSelect<ValueType = string>({
+  tip,
+  ...props
+}: { tip: string } & SelectProps<ValueType>) {
+  return (
+    <Tooltip title={tip} mouseEnterDelay={0.35}>
+      <span style={{ display: "inline-block" }}>
+        <Select<ValueType> {...props} />
+      </span>
+    </Tooltip>
+  );
+}
+
+function menuLabel(text: string, tip: string) {
+  return (
+    <Tooltip title={tip} mouseEnterDelay={0.35}>
+      <span>{text}</span>
+    </Tooltip>
+  );
+}
 
 const PERMISSION_KEY_OPTIONS = (
   [
@@ -246,6 +356,7 @@ type MenuKey =
   | "profile"
   | "notifications"
   | "stats"
+  | "problems"
   | "projects";
 
 const MENU_KEYS: MenuKey[] = [
@@ -262,6 +373,7 @@ const MENU_KEYS: MenuKey[] = [
   "profile",
   "notifications",
   "stats",
+  "problems",
   "projects",
 ];
 const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
@@ -274,6 +386,7 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "status-config",
   "admin-settings",
   "stats",
+  "problems",
 ];
 
 const DEFAULT_STATUS_META: Record<string, { label: string; color: string }> = {
@@ -693,6 +806,25 @@ function formatColumnLabel(name: string) {
   return map[name] ?? name;
 }
 
+function resolveBoardSelection(
+  rows: BoardItem[],
+  currentBoardId: string | null,
+  projectId: string | null,
+): string | null {
+  if (!rows.length) return null;
+  if (currentBoardId) {
+    const current = rows.find((board) => board.id === currentBoardId);
+    if (current && (!projectId || current.project_id === projectId)) {
+      return currentBoardId;
+    }
+  }
+  if (projectId) {
+    const projectBoard = rows.find((board) => board.project_id === projectId);
+    if (projectBoard) return projectBoard.id;
+  }
+  return rows[0]?.id ?? null;
+}
+
 function formatTimeLogStatus(status: string) {
   const key = String(status).toLowerCase();
   const map: Record<string, string> = {
@@ -931,31 +1063,35 @@ function ProjectsSidebarTree({
                   onMouseDown={(event) => event.stopPropagation()}
                   style={{ display: "flex", gap: 2, flex: "0 0 auto" }}
                 >
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label="Renomear"
-                    icon={
-                      <EditOutlined
-                        style={{ color: "rgba(244,240,237,0.92)", fontSize: 13 }}
-                      />
-                    }
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onAction("rename", node);
-                    }}
-                  />
-                  <Button
-                    type="text"
-                    size="small"
-                    danger
-                    aria-label="Excluir"
-                    icon={<DeleteOutlined style={{ fontSize: 13 }} />}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onAction("delete", node);
-                    }}
-                  />
+                  <HelpTip title={HELP_TIPS.sidebarRename}>
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label="Renomear"
+                      icon={
+                        <EditOutlined
+                          style={{ color: "rgba(244,240,237,0.92)", fontSize: 13 }}
+                        />
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onAction("rename", node);
+                      }}
+                    />
+                  </HelpTip>
+                  <HelpTip title={HELP_TIPS.sidebarDelete}>
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      aria-label="Excluir"
+                      icon={<DeleteOutlined style={{ fontSize: 13 }} />}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onAction("delete", node);
+                      }}
+                    />
+                  </HelpTip>
                 </span>
               ) : null}
             </div>
@@ -1090,6 +1226,8 @@ export function AppShell() {
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const selectedBoardIdRef = useRef<string | null>(null);
+  const selectedProjectIdRef = useRef<string | null>(null);
   const [boardKanbanByBoardId, setBoardKanbanByBoardId] = useState<Record<string, KanbanGroup[]>>({});
   const [boardViewModeByBoardId, setBoardViewModeByBoardId] = useState<Record<string, BoardViewMode>>({});
   const [boardListTasksByBoardId, setBoardListTasksByBoardId] = useState<Record<string, TaskItem[]>>({});
@@ -1178,15 +1316,15 @@ export function AppShell() {
     () => {
       if (!isAdmin) {
         return [
-          { key: "dashboard", icon: <AppstoreOutlined />, label: "Dashboard" },
-          { key: "my-work", icon: <UnorderedListOutlined />, label: "Meu trabalho" },
-          { key: "projects", icon: <FolderOpenOutlined />, label: "Projetos" },
+          { key: "dashboard", icon: <AppstoreOutlined />, label: menuLabel("Dashboard", "Resumo rapido da sua operacao.") },
+          { key: "my-work", icon: <UnorderedListOutlined />, label: menuLabel("Meu trabalho", HELP_TIPS.menuMyWork) },
+          { key: "projects", icon: <FolderOpenOutlined />, label: menuLabel("Projetos", HELP_TIPS.menuProjects) },
         ];
       }
       const base: NonNullable<MenuProps["items"]> = [
-        { key: "my-work", icon: <UnorderedListOutlined />, label: "Meu trabalho" },
-        { key: "tasks", icon: <UnorderedListOutlined />, label: "Tarefas" },
-        { key: "projects", icon: <FolderOpenOutlined />, label: "Projetos" },
+        { key: "my-work", icon: <UnorderedListOutlined />, label: menuLabel("Meu trabalho", HELP_TIPS.menuMyWork) },
+        { key: "tasks", icon: <UnorderedListOutlined />, label: menuLabel("Tarefas", HELP_TIPS.menuTasks) },
+        { key: "projects", icon: <FolderOpenOutlined />, label: menuLabel("Projetos", HELP_TIPS.menuProjects) },
       ];
       return [
         ...base,
@@ -1194,14 +1332,15 @@ export function AppShell() {
         {
           key: "admin-root",
           icon: <SettingOutlined />,
-          label: "Administracao",
+          label: menuLabel("Administracao", "Cadastros e configuracoes do sistema."),
           children: [
-            { key: "clients", icon: <ShopOutlined />, label: "Clientes" },
-            { key: "services", icon: <TagsOutlined />, label: "Servicos" },
-            { key: "sales", icon: <ShoppingCartOutlined />, label: "Venda" },
-            { key: "users", icon: <TeamOutlined />, label: "Usuarios" },
-            { key: "status-config", icon: <CheckCircleOutlined />, label: "Status globais" },
-            { key: "stats", icon: <StockOutlined />, label: "Estatisticas" },
+            { key: "clients", icon: <ShopOutlined />, label: menuLabel("Clientes", HELP_TIPS.menuClients) },
+            { key: "services", icon: <TagsOutlined />, label: menuLabel("Servicos", HELP_TIPS.menuServices) },
+            { key: "sales", icon: <ShoppingCartOutlined />, label: menuLabel("Venda", HELP_TIPS.menuSales) },
+            { key: "users", icon: <TeamOutlined />, label: menuLabel("Usuarios", HELP_TIPS.menuUsers) },
+            { key: "status-config", icon: <CheckCircleOutlined />, label: menuLabel("Status globais", HELP_TIPS.menuStatus) },
+            { key: "stats", icon: <StockOutlined />, label: menuLabel("Estatisticas", HELP_TIPS.menuStats) },
+            { key: "problems", icon: <BugOutlined />, label: menuLabel("Problemas", HELP_TIPS.menuProblems) },
           ],
         },
       ];
@@ -2184,14 +2323,15 @@ export function AppShell() {
       setKanbanGroups([]);
       return;
     }
-    if (!selectedBoardId) {
-      setSelectedBoardId(rows[0].id);
-      return;
+    const nextBoardId = resolveBoardSelection(
+      rows,
+      selectedBoardIdRef.current,
+      selectedProjectIdRef.current,
+    );
+    if (nextBoardId !== selectedBoardIdRef.current) {
+      setSelectedBoardId(nextBoardId);
     }
-    if (!rows.some((board) => board.id === selectedBoardId)) {
-      setSelectedBoardId(rows[0].id);
-    }
-  }, [fetchBoardGroupsIndex, selectedBoardId, token]);
+  }, [fetchBoardGroupsIndex, token]);
 
   const fetchBoardView = useCallback(
     async (boardId: string, view: BoardViewMode) => {
@@ -2365,6 +2505,11 @@ export function AppShell() {
     if (!token || activeKey !== "profile") return;
     fetchNotificationPreferences().catch(() => undefined);
   }, [activeKey, fetchNotificationPreferences, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    installReportProblemCollectors();
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -2672,6 +2817,14 @@ export function AppShell() {
   }, [boards, boardViewModeByBoardId, fetchKanbanForBoard, selectedProjectId, token]);
 
   useEffect(() => {
+    selectedBoardIdRef.current = selectedBoardId;
+  }, [selectedBoardId]);
+
+  useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId;
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     if (selectedBoardId) {
       localStorage.setItem(BOARD_STORAGE_KEY, selectedBoardId);
@@ -2682,18 +2835,20 @@ export function AppShell() {
   /** Na area Projetos, board so faz sentido com projeto atual; senao sobrevive stale do LS/outras telas e a arvore destaca board errado. */
   useEffect(() => {
     if (activeKey !== "projects") return;
-    if (!selectedBoardId) return;
     if (!selectedProjectId) {
-      setSelectedBoardId(null);
+      if (selectedBoardId) setSelectedBoardId(null);
       return;
     }
     if (!selectedWorkspaceId || !selectedPortfolioId) {
-      setSelectedBoardId(null);
+      if (selectedBoardId) setSelectedBoardId(null);
       return;
     }
     const boardRow = boards.find((b) => b.id === selectedBoardId);
     if (!boardRow || boardRow.project_id !== selectedProjectId) {
-      setSelectedBoardId(null);
+      const nextBoardId = resolveBoardSelection(boards, selectedBoardId, selectedProjectId);
+      if (nextBoardId !== selectedBoardId) {
+        setSelectedBoardId(nextBoardId);
+      }
     }
   }, [
     activeKey,
@@ -3748,54 +3903,62 @@ export function AppShell() {
               </Typography.Title>
             </Space>
             <Space>
-              <Dropdown
-                trigger={["click"]}
-                popupRender={() => (
-                  <Card size="small" style={{ width: 360 }} title="Notificacoes recentes">
-                    <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                      {notifications.slice(0, 5).length === 0 ? (
-                        <Typography.Text type="secondary">Nenhuma notificacao.</Typography.Text>
-                      ) : (
-                        notifications.slice(0, 5).map((item) => (
-                          <Button
-                            key={item.id}
-                            type="text"
-                            block
-                            style={{ height: "auto", textAlign: "left", whiteSpace: "normal" }}
-                            onClick={() => void openNotificationItem(item)}
-                          >
-                            <Space orientation="vertical" size={0} style={{ width: "100%" }}>
-                              <Typography.Text strong={!item.is_read}>{item.title}</Typography.Text>
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                {NOTIFICATION_EVENT_LABELS[item.type] ?? item.type}
-                              </Typography.Text>
-                            </Space>
-                          </Button>
-                        ))
-                      )}
-                      <Space wrap>
-                        <Button size="small" onClick={() => navigateTo("notifications")}>
-                          Ver todas
-                        </Button>
-                        {unreadCount > 0 ? (
-                          <Button size="small" onClick={() => void markAllNotificationsAsRead()}>
-                            Marcar todas lidas
-                          </Button>
-                        ) : null}
+              <HelpTip title={HELP_TIPS.notificacoes}>
+                <Dropdown
+                  trigger={["click"]}
+                  popupRender={() => (
+                    <Card size="small" style={{ width: 360 }} title="Notificacoes recentes">
+                      <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                        {notifications.slice(0, 5).length === 0 ? (
+                          <Typography.Text type="secondary">Nenhuma notificacao.</Typography.Text>
+                        ) : (
+                          notifications.slice(0, 5).map((item) => (
+                            <Button
+                              key={item.id}
+                              type="text"
+                              block
+                              style={{ height: "auto", textAlign: "left", whiteSpace: "normal" }}
+                              onClick={() => void openNotificationItem(item)}
+                            >
+                              <Space orientation="vertical" size={0} style={{ width: "100%" }}>
+                                <Typography.Text strong={!item.is_read}>{item.title}</Typography.Text>
+                                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                  {NOTIFICATION_EVENT_LABELS[item.type] ?? item.type}
+                                </Typography.Text>
+                              </Space>
+                            </Button>
+                          ))
+                        )}
+                        <Space wrap>
+                          <HelpTip title={HELP_TIPS.verTodasNotificacoes}>
+                            <Button size="small" onClick={() => navigateTo("notifications")}>
+                              Ver todas
+                            </Button>
+                          </HelpTip>
+                          {unreadCount > 0 ? (
+                            <HelpTip title={HELP_TIPS.marcarTodasLidas}>
+                              <Button size="small" onClick={() => void markAllNotificationsAsRead()}>
+                                Marcar todas lidas
+                              </Button>
+                            </HelpTip>
+                          ) : null}
+                        </Space>
                       </Space>
-                    </Space>
-                  </Card>
-                )}
-              >
-                <Button type="text" aria-label="Abrir notificacoes" icon={<BellOutlined />}>
-                  {unreadCount > 0 ? `(${unreadCount})` : ""}
-                </Button>
-              </Dropdown>
-              <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
-                <Button type="text" aria-label="Abrir menu da conta" icon={<UserOutlined />}>
-                  Conta
-                </Button>
-              </Dropdown>
+                    </Card>
+                  )}
+                >
+                  <Button type="text" aria-label="Abrir notificacoes" icon={<BellOutlined />}>
+                    {unreadCount > 0 ? `(${unreadCount})` : ""}
+                  </Button>
+                </Dropdown>
+              </HelpTip>
+              <HelpTip title={HELP_TIPS.conta}>
+                <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
+                  <Button type="text" aria-label="Abrir menu da conta" icon={<UserOutlined />}>
+                    Conta
+                  </Button>
+                </Dropdown>
+              </HelpTip>
             </Space>
           </Header>
           <Content id="conteudo-principal" tabIndex={-1} style={{ padding: isCompactNav ? 12 : 24 }}>
@@ -3937,7 +4100,8 @@ export function AppShell() {
                     <Col span={24}>
                       <Card title="Minhas tarefas (acoes rapidas)">
                         <Space wrap style={{ marginBottom: 12 }}>
-                          <Select
+                          <TipSelect
+                            tip={HELP_TIPS.filterPeriodo}
                             value={myWorkPeriodFilter}
                             onChange={setMyWorkPeriodFilter}
                             style={{ minWidth: 200 }}
@@ -3949,7 +4113,8 @@ export function AppShell() {
                               { value: "no_due", label: `Sem prazo (${myWorkGrouped.noDue.length})` },
                             ]}
                           />
-                          <Select
+                          <TipSelect
+                            tip={HELP_TIPS.filterPrioridade}
                             value={myWorkPriorityFilter}
                             onChange={setMyWorkPriorityFilter}
                             style={{ minWidth: 170 }}
@@ -3961,7 +4126,8 @@ export function AppShell() {
                               { value: "critical", label: "Critica" },
                             ]}
                           />
-                          <Select
+                          <TipSelect
+                            tip={HELP_TIPS.filterPrazo}
                             value={myWorkDeadlineFilter}
                             onChange={setMyWorkDeadlineFilter}
                             style={{ minWidth: 190 }}
@@ -4017,16 +4183,18 @@ export function AppShell() {
                               title: "Status",
                               dataIndex: "status",
                               render: (_: string, record: TaskItem) => (
-                                <Select
-                                  size="small"
-                                  value={record.status}
-                                  style={{ minWidth: 140 }}
-                                  options={statusOptions}
-                                  onChange={(nextStatus) => {
-                                    quickChangeTaskStatus(record, nextStatus).catch(() => undefined);
-                                  }}
-                                  onClick={(event) => event.stopPropagation()}
-                                />
+                                <HelpTip title={HELP_TIPS.statusRapido}>
+                                  <Select
+                                    size="small"
+                                    value={record.status}
+                                    style={{ minWidth: 140 }}
+                                    options={statusOptions}
+                                    onChange={(nextStatus) => {
+                                      quickChangeTaskStatus(record, nextStatus).catch(() => undefined);
+                                    }}
+                                    onClick={(event) => event.stopPropagation()}
+                                  />
+                                </HelpTip>
                               ),
                             },
                             { title: "Prazo", dataIndex: "end_date", render: (v: string | null) => formatDate(v) },
@@ -4034,14 +4202,16 @@ export function AppShell() {
                               title: "Acoes",
                               render: (record: TaskItem) => (
                                 <Space onClick={(event) => event.stopPropagation()}>
-                                  <Button
+                                  <TipButton
+                                    tip={HELP_TIPS.editar}
                                     size="small"
                                     icon={<EditOutlined />}
                                     onClick={() => openTask(record).catch(() => undefined)}
                                   >
                                     Editar
-                                  </Button>
-                                  <Button
+                                  </TipButton>
+                                  <TipButton
+                                    tip={HELP_TIPS.excluir}
                                     size="small"
                                     danger
                                     icon={<DeleteOutlined />}
@@ -4056,8 +4226,9 @@ export function AppShell() {
                                     }
                                   >
                                     Excluir
-                                  </Button>
-                                  <Button
+                                  </TipButton>
+                                  <TipButton
+                                    tip={HELP_TIPS.comentarios}
                                     size="small"
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -4065,7 +4236,7 @@ export function AppShell() {
                                     }}
                                   >
                                     Comentarios
-                                  </Button>
+                                  </TipButton>
                                 </Space>
                               ),
                             },
@@ -4193,9 +4364,9 @@ export function AppShell() {
                               </Form.Item>
                             </Col>
                           </Row>
-                          <Button type="primary" htmlType="submit" icon={<PlusOutlined />}>
+                          <TipButton tip={HELP_TIPS.criarTarefaParaMim} type="primary" htmlType="submit" icon={<PlusOutlined />}>
                             Criar tarefa para mim
-                          </Button>
+                          </TipButton>
                         </Form>
                       </Card>
                     </Col>
@@ -4207,7 +4378,8 @@ export function AppShell() {
                     title="Tarefas"
                     extra={
                       <Space wrap>
-                        <Button
+                        <TipButton
+                          tip={HELP_TIPS.atualizar}
                           onClick={() => {
                             if (isAdmin) fetchAllTasks().catch(() => undefined);
                             else fetchTasks().catch(() => undefined);
@@ -4215,8 +4387,9 @@ export function AppShell() {
                           loading={allTasksLoading}
                         >
                           Atualizar
-                        </Button>
-                        <Button
+                        </TipButton>
+                        <TipButton
+                          tip={HELP_TIPS.limparFiltros}
                           onClick={() => {
                             setTaskStatusFilter("all");
                             setTaskPriorityFilter("all");
@@ -4228,12 +4401,13 @@ export function AppShell() {
                           }}
                         >
                           Limpar filtros
-                        </Button>
+                        </TipButton>
                       </Space>
                     }
                   >
                     <Space style={{ marginBottom: 12 }} wrap>
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterPeriodo}
                         value={taskPeriodFilter}
                         onChange={(value) => setTaskPeriodFilter(value)}
                         style={{ minWidth: 200 }}
@@ -4248,7 +4422,8 @@ export function AppShell() {
                           { value: "done", label: "Concluidas" },
                         ]}
                       />
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterStatus}
                         value={taskStatusFilter}
                         onChange={(value) => setTaskStatusFilter(value)}
                         style={{ minWidth: 180 }}
@@ -4257,7 +4432,8 @@ export function AppShell() {
                           ...statusOptions,
                         ]}
                       />
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterPrioridade}
                         value={taskPriorityFilter}
                         onChange={(value) => setTaskPriorityFilter(value)}
                         style={{ minWidth: 160 }}
@@ -4269,7 +4445,8 @@ export function AppShell() {
                           { value: "critical", label: "Critica" },
                         ]}
                       />
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterProjeto}
                         value={taskProjectFilter}
                         onChange={(value) => {
                           setTaskProjectFilter(value);
@@ -4288,7 +4465,8 @@ export function AppShell() {
                           ...projects.map((p) => ({ value: String(p.id), label: String(p.name ?? p.id) })),
                         ]}
                       />
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterQuadro}
                         value={taskBoardFilter}
                         onChange={(value) => setTaskBoardFilter(value)}
                         style={{ minWidth: 200 }}
@@ -4301,7 +4479,8 @@ export function AppShell() {
                             .map((b) => ({ value: b.id, label: b.name })),
                         ]}
                       />
-                      <Select
+                      <TipSelect
+                        tip={HELP_TIPS.filterResponsavel}
                         value={taskAssigneeFilter}
                         onChange={(value) => setTaskAssigneeFilter(value)}
                         style={{ minWidth: 200 }}
@@ -4313,12 +4492,14 @@ export function AppShell() {
                           ...adminUsersCache.map((u) => ({ value: String(u.id), label: u.name || u.email || `Usuario ${u.id}` })),
                         ]}
                       />
-                      <Input
-                        placeholder="Buscar por titulo"
-                        value={taskSearchFilter}
-                        onChange={(event) => setTaskSearchFilter(event.target.value)}
-                        style={{ width: 260 }}
-                      />
+                      <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
+                        <Input
+                          placeholder="Buscar por titulo"
+                          value={taskSearchFilter}
+                          onChange={(event) => setTaskSearchFilter(event.target.value)}
+                          style={{ width: 260 }}
+                        />
+                      </Tooltip>
                       <Tag color="processing">{tasksTabFiltered.length} tarefas visiveis</Tag>
                     </Space>
                     <Table<TaskItem>
@@ -4369,14 +4550,16 @@ export function AppShell() {
                           title: "Acoes",
                           render: (record: TaskItem) => (
                             <Space onClick={(event) => event.stopPropagation()}>
-                              <Button
+                              <TipButton
+                                tip={HELP_TIPS.editar}
                                 size="small"
                                 icon={<EditOutlined />}
                                 onClick={() => openTask(record).catch(() => undefined)}
                               >
                                 Editar
-                              </Button>
-                              <Button
+                              </TipButton>
+                              <TipButton
+                                tip={HELP_TIPS.excluir}
                                 size="small"
                                 danger
                                 icon={<DeleteOutlined />}
@@ -4391,8 +4574,9 @@ export function AppShell() {
                                 }
                               >
                                 Excluir
-                              </Button>
-                              <Button
+                              </TipButton>
+                              <TipButton
+                                tip={HELP_TIPS.comentarios}
                                 size="small"
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -4400,7 +4584,7 @@ export function AppShell() {
                                 }}
                               >
                                 Comentarios
-                              </Button>
+                              </TipButton>
                             </Space>
                           ),
                         },
@@ -4422,9 +4606,13 @@ export function AppShell() {
                               label: "Lista",
                               children: (
                                 <Space orientation="vertical" style={{ width: "100%" }} size={12}>
-                                  <Button onClick={() => fetchAdminUsers().catch(() => undefined)} loading={adminUsersLoading}>
+                                  <TipButton
+                                    tip={HELP_TIPS.atualizar}
+                                    onClick={() => fetchAdminUsers().catch(() => undefined)}
+                                    loading={adminUsersLoading}
+                                  >
                                     Atualizar lista
-                                  </Button>
+                                  </TipButton>
                                   <Table
                                     rowKey="id"
                                     loading={adminUsersLoading}
@@ -4440,7 +4628,8 @@ export function AppShell() {
                                         title: "Acoes",
                                         render: (record: { id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string }) => (
                                           <Space>
-                                            <Button
+                                            <TipButton
+                                              tip={HELP_TIPS.editar}
                                               size="small"
                                               icon={<EditOutlined />}
                                               onClick={() => {
@@ -4469,8 +4658,9 @@ export function AppShell() {
                                               }}
                                             >
                                               Editar
-                                            </Button>
-                                            <Button
+                                            </TipButton>
+                                            <TipButton
+                                              tip={HELP_TIPS.excluir}
                                               size="small"
                                               danger
                                               icon={<DeleteOutlined />}
@@ -4496,7 +4686,7 @@ export function AppShell() {
                                               }
                                             >
                                               Excluir
-                                            </Button>
+                                            </TipButton>
                                           </Space>
                                         ),
                                       },
@@ -5072,18 +5262,23 @@ export function AppShell() {
                           value={clientListSearch}
                           onChange={(event) => setClientListSearch(event.target.value)}
                           style={{ width: 280 }}
+                          title={HELP_TIPS.buscarCliente}
                         />
-                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
-                        <Button
-                          type="primary"
-                          icon={<PlusOutlined />}
-                          onClick={() => {
-                            manageClientForm.resetFields();
-                            setManageClientModal({ mode: "create" });
-                          }}
-                        >
-                          Novo cliente
-                        </Button>
+                        <TipButton tip={HELP_TIPS.atualizar} onClick={() => fetchCrudData().catch(() => undefined)}>
+                          Atualizar
+                        </TipButton>
+                        <HelpTip title={HELP_TIPS.novoCliente}>
+                          <Button
+                            type="primary"
+                            icon={<PlusOutlined />}
+                            onClick={() => {
+                              manageClientForm.resetFields();
+                              setManageClientModal({ mode: "create" });
+                            }}
+                          >
+                            Novo cliente
+                          </Button>
+                        </HelpTip>
                       </Space>
                     }
                   >
@@ -5108,7 +5303,8 @@ export function AppShell() {
                             const clientId = String(row.id ?? "");
                             return (
                               <Space>
-                                <Button
+                                <TipButton
+                                  tip={HELP_TIPS.editar}
                                   size="small"
                                   icon={<EditOutlined />}
                                   onClick={() => {
@@ -5123,8 +5319,9 @@ export function AppShell() {
                                   }}
                                 >
                                   Editar
-                                </Button>
-                                <Button
+                                </TipButton>
+                                <TipButton
+                                  tip={HELP_TIPS.excluir}
                                   size="small"
                                   danger
                                   icon={<DeleteOutlined />}
@@ -5147,7 +5344,7 @@ export function AppShell() {
                                   }
                                 >
                                   Excluir
-                                </Button>
+                                </TipButton>
                               </Space>
                             );
                           },
@@ -5161,18 +5358,22 @@ export function AppShell() {
                     title="Servicos"
                     extra={
                       <Space wrap>
-                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
-                        <Button
-                          type="primary"
-                          icon={<PlusOutlined />}
-                          onClick={() => {
-                            manageServiceForm.resetFields();
-                            manageServiceForm.setFieldsValue({ is_active: true, display_order: 100 });
-                            setManageServiceModal({ mode: "create" });
-                          }}
-                        >
-                          Novo servico
-                        </Button>
+                        <TipButton tip={HELP_TIPS.atualizar} onClick={() => fetchCrudData().catch(() => undefined)}>
+                          Atualizar
+                        </TipButton>
+                        <HelpTip title={HELP_TIPS.novoServico}>
+                          <Button
+                            type="primary"
+                            icon={<PlusOutlined />}
+                            onClick={() => {
+                              manageServiceForm.resetFields();
+                              manageServiceForm.setFieldsValue({ is_active: true, display_order: 100 });
+                              setManageServiceModal({ mode: "create" });
+                            }}
+                          >
+                            Novo servico
+                          </Button>
+                        </HelpTip>
                       </Space>
                     }
                   >
@@ -5193,7 +5394,8 @@ export function AppShell() {
                           title: "Acoes",
                           render: (row) => (
                             <Space>
-                              <Button
+                              <TipButton
+                                tip={HELP_TIPS.editar}
                                 size="small"
                                 icon={<EditOutlined />}
                                 onClick={() => {
@@ -5207,8 +5409,9 @@ export function AppShell() {
                                 }}
                               >
                                 Editar
-                              </Button>
-                              <Button
+                              </TipButton>
+                              <TipButton
+                                tip={HELP_TIPS.excluir}
                                 size="small"
                                 danger
                                 icon={<DeleteOutlined />}
@@ -5231,7 +5434,7 @@ export function AppShell() {
                                 }
                               >
                                 Excluir
-                              </Button>
+                              </TipButton>
                             </Space>
                           ),
                         },
@@ -5244,28 +5447,32 @@ export function AppShell() {
                     title="Vendas e contratos"
                     extra={
                       <Space wrap>
-                        <Button onClick={() => fetchCrudData().catch(() => undefined)}>Atualizar</Button>
-                        <Button
-                          type="primary"
-                          icon={<PlusOutlined />}
-                          onClick={() => {
-                            setNewSaleWizardStep(0);
-                            newSaleWizardForm.resetFields();
-                            const initialWizardValues = {
-                              use_existing_client: false,
-                              emits_invoice: true,
-                              has_iss_retention: false,
-                              has_inss_retention: false,
-                              payment_method: "boleto",
-                              service_lines: [{ service_type: "one_off", amount: "0.00" }],
-                            };
-                            newSaleWizardForm.setFieldsValue(initialWizardValues);
-                            newSaleWizardValuesRef.current = initialWizardValues;
-                            setNewSaleWizardOpen(true);
-                          }}
-                        >
-                          Nova venda
-                        </Button>
+                        <TipButton tip={HELP_TIPS.atualizar} onClick={() => fetchCrudData().catch(() => undefined)}>
+                          Atualizar
+                        </TipButton>
+                        <HelpTip title={HELP_TIPS.novaVenda}>
+                          <Button
+                            type="primary"
+                            icon={<PlusOutlined />}
+                            onClick={() => {
+                              setNewSaleWizardStep(0);
+                              newSaleWizardForm.resetFields();
+                              const initialWizardValues = {
+                                use_existing_client: false,
+                                emits_invoice: true,
+                                has_iss_retention: false,
+                                has_inss_retention: false,
+                                payment_method: "boleto",
+                                service_lines: [{ service_type: "one_off", amount: "0.00" }],
+                              };
+                              newSaleWizardForm.setFieldsValue(initialWizardValues);
+                              newSaleWizardValuesRef.current = initialWizardValues;
+                              setNewSaleWizardOpen(true);
+                            }}
+                          >
+                            Nova venda
+                          </Button>
+                        </HelpTip>
                       </Space>
                     }
                   >
@@ -5294,7 +5501,8 @@ export function AppShell() {
                           title: "Acoes",
                           render: (row) => (
                             <Space wrap>
-                              <Button
+                              <TipButton
+                                tip={HELP_TIPS.visualizarVenda}
                                 size="small"
                                 icon={<EyeOutlined />}
                                 onClick={() => {
@@ -5314,8 +5522,9 @@ export function AppShell() {
                                 }}
                               >
                                 Visualizar
-                              </Button>
-                              <Button
+                              </TipButton>
+                              <TipButton
+                                tip={HELP_TIPS.editar}
                                 size="small"
                                 icon={<EditOutlined />}
                                 onClick={() => {
@@ -5337,8 +5546,9 @@ export function AppShell() {
                                 }}
                               >
                                 Editar
-                              </Button>
-                              <Button
+                              </TipButton>
+                              <TipButton
+                                tip={HELP_TIPS.excluir}
                                 size="small"
                                 danger
                                 icon={<DeleteOutlined />}
@@ -5364,9 +5574,10 @@ export function AppShell() {
                                 }
                               >
                                 Excluir
-                              </Button>
+                              </TipButton>
                               {row.status !== "active" && row.status !== "cancelled" ? (
-                                <Button
+                                <TipButton
+                                  tip={HELP_TIPS.confirmarVenda}
                                   size="small"
                                   type="primary"
                                   onClick={async () => {
@@ -5384,7 +5595,7 @@ export function AppShell() {
                                   }}
                                 >
                                   Confirmar
-                                </Button>
+                                </TipButton>
                               ) : null}
                               {row.status === "cancelled" ? (
                                 <Button
@@ -6424,7 +6635,9 @@ export function AppShell() {
                                   return false;
                                 }}
                               >
-                                <Button icon={<EditOutlined />}>Subir imagem</Button>
+                                <TipButton tip={HELP_TIPS.subirImagemPerfil} icon={<EditOutlined />}>
+                                  Subir imagem
+                                </TipButton>
                               </Upload>
                             </Space>
                           </Space>
@@ -6450,7 +6663,8 @@ export function AppShell() {
                             <Tag>Recovery codes: {totpSettings?.recovery_codes_count ?? 0}</Tag>
                           </Space>
                           <Space wrap>
-                            <Button
+                            <TipButton
+                              tip={HELP_TIPS.iniciar2fa}
                               type="primary"
                               onClick={async () => {
                                 const response = await apiRequest<{ manual_entry_key: string; otpauth_uri: string }>(
@@ -6473,8 +6687,9 @@ export function AppShell() {
                               }}
                             >
                               Iniciar ativacao por QR
-                            </Button>
-                            <Button
+                            </TipButton>
+                            <TipButton
+                              tip={HELP_TIPS.desativar2fa}
                               danger
                               onClick={async () => {
                                 openTextInputModal({
@@ -6499,7 +6714,7 @@ export function AppShell() {
                               }}
                             >
                               Desativar 2FA
-                            </Button>
+                            </TipButton>
                           </Space>
                         </Space>
                       </Card>
@@ -6542,6 +6757,7 @@ export function AppShell() {
                               localStorage.setItem(`bb_profile_extra_${currentUserId}`, JSON.stringify(payload));
                             }
                             apiMessage.success("Dados do perfil salvos.");
+                            await fetchProfile();
                           }}
                         >
                           <Row gutter={16}>
@@ -6571,9 +6787,9 @@ export function AppShell() {
                               </Form.Item>
                             </Col>
                           </Row>
-                          <Button htmlType="submit" type="primary">
+                          <TipButton tip={HELP_TIPS.salvar} htmlType="submit" type="primary">
                             Salvar dados do perfil
-                          </Button>
+                          </TipButton>
                         </Form>
                       </Card>
                     </Col>
@@ -6638,7 +6854,8 @@ export function AppShell() {
                             },
                           ]}
                         />
-                        <Button
+                        <TipButton
+                          tip={HELP_TIPS.salvarPreferenciasEmail}
                           type="primary"
                           style={{ marginTop: 12 }}
                           onClick={async () => {
@@ -6659,7 +6876,7 @@ export function AppShell() {
                           }}
                         >
                           Salvar preferencias
-                        </Button>
+                        </TipButton>
                       </Card>
                     </Col>
                   </Row>
@@ -6669,13 +6886,13 @@ export function AppShell() {
                   <Card title="Central de notificacoes">
                     <Space style={{ marginBottom: 12 }} wrap>
                       <Tag color={unreadCount > 0 ? "processing" : "default"}>{unreadCount} nao lidas</Tag>
-                      <Button size="small" onClick={() => fetchNotifications().catch(() => undefined)}>
+                      <TipButton tip={HELP_TIPS.atualizar} size="small" onClick={() => fetchNotifications().catch(() => undefined)}>
                         Atualizar
-                      </Button>
+                      </TipButton>
                       {unreadCount > 0 ? (
-                        <Button size="small" onClick={() => void markAllNotificationsAsRead()}>
+                        <TipButton tip={HELP_TIPS.marcarTodasLidas} size="small" onClick={() => void markAllNotificationsAsRead()}>
                           Marcar todas como lidas
-                        </Button>
+                        </TipButton>
                       ) : null}
                       {isAdmin ? (
                         <Button
@@ -6740,6 +6957,10 @@ export function AppShell() {
                     </Space>
                   </Card>
                 )}
+
+                {activeKey === "problems" && isAdmin && token ? (
+                  <ProblemReportsPanel token={token} />
+                ) : null}
 
                 {activeKey === "stats" && isAdmin && (
                   <Row gutter={[16, 16]}>
@@ -6895,24 +7116,32 @@ export function AppShell() {
                       </Space>
                       <Space wrap>
                         {!selectedWorkspaceId && isAdmin ? (
-                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateWorkspaceOpen(true)}>
-                            Nova area de trabalho
-                          </Button>
+                          <HelpTip title={HELP_TIPS.novaArea}>
+                            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateWorkspaceOpen(true)}>
+                              Nova area de trabalho
+                            </Button>
+                          </HelpTip>
                         ) : null}
                         {selectedWorkspaceId && !selectedPortfolioId && isAdmin ? (
-                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreatePortfolioOpen(true)}>
-                            Novo portfolio
-                          </Button>
+                          <HelpTip title={HELP_TIPS.novoPortfolio}>
+                            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreatePortfolioOpen(true)}>
+                              Novo portfolio
+                            </Button>
+                          </HelpTip>
                         ) : null}
                         {selectedPortfolioId && !selectedProjectId && isAdmin ? (
-                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateProjectOpen(true)}>
-                            Novo projeto
-                          </Button>
+                          <HelpTip title={HELP_TIPS.novoProjeto}>
+                            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateProjectOpen(true)}>
+                              Novo projeto
+                            </Button>
+                          </HelpTip>
                         ) : null}
                         {selectedProjectId && isAdmin ? (
-                          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateBoardOpen(true)}>
-                            Novo grupo
-                          </Button>
+                          <HelpTip title={HELP_TIPS.novoGrupo}>
+                            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateBoardOpen(true)}>
+                              Novo grupo
+                            </Button>
+                          </HelpTip>
                         ) : null}
                       </Space>
                     </Space>
@@ -7099,51 +7328,55 @@ export function AppShell() {
                                           onClick={(event) => event.stopPropagation()}
                                           onMouseDown={(event) => event.stopPropagation()}
                                         >
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            icon={<EditOutlined />}
-                                            aria-label="Renomear area"
-                                            onClick={() => {
-                                              editWorkspaceForm.setFieldsValue({
-                                                name: String(ws.name ?? ""),
-                                              });
-                                              setSelectedWorkspaceId(wsId);
-                                              setEditWorkspaceOpen(true);
-                                            }}
-                                          />
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            danger
-                                            icon={<DeleteOutlined />}
-                                            aria-label="Excluir area"
-                                            onClick={() =>
-                                              openDeleteConfirmModal({
-                                                title: `Excluir a area "${String(ws.name ?? "Area")}"?`,
-                                                onConfirm: async () => {
-                                                  const response = await apiRequest(`/workspaces/${wsId}`, {
-                                                    method: "DELETE",
-                                                    token,
-                                                  });
-                                                  if (!response.ok) {
-                                                    apiMessage.error(response.error?.message ?? "Falha ao excluir area.");
-                                                    throw new Error("workspace_delete_failed");
-                                                  }
-                                                  apiMessage.success("Area de trabalho excluida.");
-                                                  if (selectedWorkspaceId === wsId) {
-                                                    setSelectedWorkspaceId(null);
-                                                    setSelectedPortfolioId(null);
-                                                    setSelectedClientId(null);
-                                                    setSelectedProjectId(null);
-                                                    setSelectedBoardId(null);
-                                                  }
-                                                  await fetchCrudData();
-                                                  await fetchBoards();
-                                                },
-                                              })
-                                            }
-                                          />
+                                          <HelpTip title={HELP_TIPS.sidebarRename}>
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              icon={<EditOutlined />}
+                                              aria-label="Renomear area"
+                                              onClick={() => {
+                                                editWorkspaceForm.setFieldsValue({
+                                                  name: String(ws.name ?? ""),
+                                                });
+                                                setSelectedWorkspaceId(wsId);
+                                                setEditWorkspaceOpen(true);
+                                              }}
+                                            />
+                                          </HelpTip>
+                                          <HelpTip title={HELP_TIPS.sidebarDelete}>
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              danger
+                                              icon={<DeleteOutlined />}
+                                              aria-label="Excluir area"
+                                              onClick={() =>
+                                                openDeleteConfirmModal({
+                                                  title: `Excluir a area "${String(ws.name ?? "Area")}"?`,
+                                                  onConfirm: async () => {
+                                                    const response = await apiRequest(`/workspaces/${wsId}`, {
+                                                      method: "DELETE",
+                                                      token,
+                                                    });
+                                                    if (!response.ok) {
+                                                      apiMessage.error(response.error?.message ?? "Falha ao excluir area.");
+                                                      throw new Error("workspace_delete_failed");
+                                                    }
+                                                    apiMessage.success("Area de trabalho excluida.");
+                                                    if (selectedWorkspaceId === wsId) {
+                                                      setSelectedWorkspaceId(null);
+                                                      setSelectedPortfolioId(null);
+                                                      setSelectedClientId(null);
+                                                      setSelectedProjectId(null);
+                                                      setSelectedBoardId(null);
+                                                    }
+                                                    await fetchCrudData();
+                                                    await fetchBoards();
+                                                  },
+                                                })
+                                              }
+                                            />
+                                          </HelpTip>
                                         </Space>
                                       ) : null
                                     }
@@ -7194,34 +7427,36 @@ export function AppShell() {
                                           onClick={(event) => event.stopPropagation()}
                                           onMouseDown={(event) => event.stopPropagation()}
                                         >
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            icon={<EditOutlined />}
-                                            aria-label="Renomear portfolio"
-                                            onClick={() =>
-                                              openTextInputModal({
-                                                title: "Renomear portfolio",
-                                                initialValue: String(portfolio.name ?? ""),
-                                                placeholder: "Novo nome do portfolio",
-                                                onSubmit: async (nextName) => {
-                                                  const response = await apiRequest(`/portfolios/${portfolioId}`, {
-                                                    method: "PATCH",
-                                                    token,
-                                                    body: { name: nextName },
-                                                  });
-                                                  if (!response.ok) {
-                                                    apiMessage.error(
-                                                      response.error?.message ?? "Falha ao renomear portfolio.",
-                                                    );
-                                                    throw new Error("portfolio_rename_failed");
-                                                  }
-                                                  apiMessage.success("Portfolio atualizado.");
-                                                  await fetchCrudData();
-                                                },
-                                              })
-                                            }
-                                          />
+                                          <HelpTip title={HELP_TIPS.sidebarRename}>
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              icon={<EditOutlined />}
+                                              aria-label="Renomear portfolio"
+                                              onClick={() =>
+                                                openTextInputModal({
+                                                  title: "Renomear portfolio",
+                                                  initialValue: String(portfolio.name ?? ""),
+                                                  placeholder: "Novo nome do portfolio",
+                                                  onSubmit: async (nextName) => {
+                                                    const response = await apiRequest(`/portfolios/${portfolioId}`, {
+                                                      method: "PATCH",
+                                                      token,
+                                                      body: { name: nextName },
+                                                    });
+                                                    if (!response.ok) {
+                                                      apiMessage.error(
+                                                        response.error?.message ?? "Falha ao renomear portfolio.",
+                                                      );
+                                                      throw new Error("portfolio_rename_failed");
+                                                    }
+                                                    apiMessage.success("Portfolio atualizado.");
+                                                    await fetchCrudData();
+                                                  },
+                                                })
+                                              }
+                                            />
+                                          </HelpTip>
                                         </Space>
                                       ) : null
                                     }
@@ -7282,61 +7517,65 @@ export function AppShell() {
                                           onClick={(event) => event.stopPropagation()}
                                           onMouseDown={(event) => event.stopPropagation()}
                                         >
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            icon={<EditOutlined />}
-                                            aria-label="Renomear projeto"
-                                            onClick={() =>
-                                              openTextInputModal({
-                                                title: "Renomear projeto",
-                                                initialValue: String(project.name ?? ""),
-                                                placeholder: "Novo nome do projeto",
-                                                onSubmit: async (nextName) => {
-                                                  const response = await apiRequest(`/projects/${projectId}`, {
-                                                    method: "PATCH",
-                                                    token,
-                                                    body: { name: nextName },
-                                                  });
-                                                  if (!response.ok) {
-                                                    apiMessage.error(response.error?.message ?? "Falha ao renomear projeto.");
-                                                    throw new Error("project_rename_failed");
-                                                  }
-                                                  apiMessage.success("Projeto atualizado.");
-                                                  await fetchCrudData();
-                                                },
-                                              })
-                                            }
-                                          />
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            danger
-                                            icon={<DeleteOutlined />}
-                                            aria-label="Excluir projeto"
-                                            onClick={() =>
-                                              openDeleteConfirmModal({
-                                                title: `Excluir o projeto "${String(project.name ?? "Projeto")}"?`,
-                                                onConfirm: async () => {
-                                                  const response = await apiRequest(`/projects/${projectId}`, {
-                                                    method: "DELETE",
-                                                    token,
-                                                  });
-                                                  if (!response.ok) {
-                                                    apiMessage.error(response.error?.message ?? "Falha ao excluir projeto.");
-                                                    throw new Error("project_delete_failed");
-                                                  }
-                                                  apiMessage.success("Projeto excluido.");
-                                                  if (selectedProjectId === projectId) {
-                                                    setSelectedProjectId(null);
-                                                    setSelectedBoardId(null);
-                                                  }
-                                                  await fetchCrudData();
-                                                  await fetchBoards();
-                                                },
-                                              })
-                                            }
-                                          />
+                                          <HelpTip title={HELP_TIPS.sidebarRename}>
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              icon={<EditOutlined />}
+                                              aria-label="Renomear projeto"
+                                              onClick={() =>
+                                                openTextInputModal({
+                                                  title: "Renomear projeto",
+                                                  initialValue: String(project.name ?? ""),
+                                                  placeholder: "Novo nome do projeto",
+                                                  onSubmit: async (nextName) => {
+                                                    const response = await apiRequest(`/projects/${projectId}`, {
+                                                      method: "PATCH",
+                                                      token,
+                                                      body: { name: nextName },
+                                                    });
+                                                    if (!response.ok) {
+                                                      apiMessage.error(response.error?.message ?? "Falha ao renomear projeto.");
+                                                      throw new Error("project_rename_failed");
+                                                    }
+                                                    apiMessage.success("Projeto atualizado.");
+                                                    await fetchCrudData();
+                                                  },
+                                                })
+                                              }
+                                            />
+                                          </HelpTip>
+                                          <HelpTip title={HELP_TIPS.sidebarDelete}>
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              danger
+                                              icon={<DeleteOutlined />}
+                                              aria-label="Excluir projeto"
+                                              onClick={() =>
+                                                openDeleteConfirmModal({
+                                                  title: `Excluir o projeto "${String(project.name ?? "Projeto")}"?`,
+                                                  onConfirm: async () => {
+                                                    const response = await apiRequest(`/projects/${projectId}`, {
+                                                      method: "DELETE",
+                                                      token,
+                                                    });
+                                                    if (!response.ok) {
+                                                      apiMessage.error(response.error?.message ?? "Falha ao excluir projeto.");
+                                                      throw new Error("project_delete_failed");
+                                                    }
+                                                    apiMessage.success("Projeto excluido.");
+                                                    if (selectedProjectId === projectId) {
+                                                      setSelectedProjectId(null);
+                                                      setSelectedBoardId(null);
+                                                    }
+                                                    await fetchCrudData();
+                                                    await fetchBoards();
+                                                  },
+                                                })
+                                              }
+                                            />
+                                          </HelpTip>
                                         </Space>
                                       ) : null
                                     }
@@ -7508,10 +7747,11 @@ export function AppShell() {
                                                 })
                                               }
                                             />
-                                            <Button
-                                              size="small"
-                                              disabled={selectedTaskCount === 0 || !targetBoardIdForBoard}
-                                              onClick={async () => {
+                                            <HelpTip title={HELP_TIPS.moverSelecionadas}>
+                                              <Button
+                                                size="small"
+                                                disabled={selectedTaskCount === 0 || !targetBoardIdForBoard}
+                                                onClick={async () => {
                                                 const taskIds = selectedTaskIdsByBoardId[boardId] ?? [];
                                                 const targetBoardId = targetBoardIdForBoard;
                                                 if (!targetBoardId || taskIds.length === 0) return;
@@ -7575,58 +7815,67 @@ export function AppShell() {
                                             >
                                               {selectedTaskCount > 0 ? `Mover selecionadas (${selectedTaskCount})` : "Mover selecionadas"}
                                             </Button>
+                                            </HelpTip>
                                           </>
                                         ) : null}
-                                        <Button
-                                          size="small"
-                                          icon={<PlusOutlined />}
-                                          onClick={() => {
-                                            setSelectedBoardId(boardId);
-                                            setCreateGroupOpen(true);
-                                          }}
-                                        >
-                                          Nova lista
-                                        </Button>
-                                        <Button
-                                          type="primary"
-                                          size="small"
-                                          icon={<PlusOutlined />}
-                                          onClick={() => {
-                                            setSelectedBoardId(boardId);
-                                            setComposeBoardId(boardId);
-                                            setKanbanGroups(boardKanban);
-                                            setCreateTaskOpen(true);
-                                          }}
-                                        >
-                                          Nova tarefa
-                                        </Button>
-                                        <Button
-                                          danger
-                                          size="small"
-                                          icon={<DeleteOutlined />}
-                                          onClick={() =>
-                                            openDeleteConfirmModal({
-                                              title: "Excluir este grupo?",
-                                              onConfirm: async () => {
-                                                const response = await apiRequest(`/boards/${boardId}`, {
-                                                  method: "DELETE",
-                                                  token,
-                                                });
-                                                if (!response.ok) {
-                                                  apiMessage.error(response.error?.message ?? "Falha ao excluir grupo.");
-                                                  throw new Error("board_delete_failed");
-                                                }
-                                                apiMessage.success("Quadro excluido.");
-                                                if (selectedBoardId === boardId) setSelectedBoardId(null);
-                                                await fetchBoards();
-                                                await fetchTasks();
-                                                if (isAdmin) await fetchAllTasks().catch(() => undefined);
-                                              },
-                                            })
-                                          }
-                                        >
-                                          Excluir grupo
-                                        </Button>
+                                        {boardViewModeForBoard === "kanban" ? (
+                                          <HelpTip title={HELP_TIPS.novaLista}>
+                                            <Button
+                                              size="small"
+                                              icon={<PlusOutlined />}
+                                              onClick={() => {
+                                                setSelectedBoardId(boardId);
+                                                setCreateGroupOpen(true);
+                                              }}
+                                            >
+                                              Nova lista
+                                            </Button>
+                                          </HelpTip>
+                                        ) : null}
+                                        <HelpTip title={HELP_TIPS.novaTarefa}>
+                                          <Button
+                                            type="primary"
+                                            size="small"
+                                            icon={<PlusOutlined />}
+                                            onClick={() => {
+                                              setSelectedBoardId(boardId);
+                                              setComposeBoardId(boardId);
+                                              setKanbanGroups(boardKanban);
+                                              setCreateTaskOpen(true);
+                                            }}
+                                          >
+                                            Nova tarefa
+                                          </Button>
+                                        </HelpTip>
+                                        <HelpTip title={HELP_TIPS.excluirGrupo}>
+                                          <Button
+                                            danger
+                                            size="small"
+                                            icon={<DeleteOutlined />}
+                                            onClick={() =>
+                                              openDeleteConfirmModal({
+                                                title: "Excluir este grupo?",
+                                                onConfirm: async () => {
+                                                  const response = await apiRequest(`/boards/${boardId}`, {
+                                                    method: "DELETE",
+                                                    token,
+                                                  });
+                                                  if (!response.ok) {
+                                                    apiMessage.error(response.error?.message ?? "Falha ao excluir grupo.");
+                                                    throw new Error("board_delete_failed");
+                                                  }
+                                                  apiMessage.success("Quadro excluido.");
+                                                  if (selectedBoardId === boardId) setSelectedBoardId(null);
+                                                  await fetchBoards();
+                                                  await fetchTasks();
+                                                  if (isAdmin) await fetchAllTasks().catch(() => undefined);
+                                                },
+                                              })
+                                            }
+                                          >
+                                            Excluir
+                                          </Button>
+                                        </HelpTip>
                                       </>
                                     ) : null}
                                   </Space>
@@ -7649,7 +7898,8 @@ export function AppShell() {
                                               extra={
                                                 isAdmin ? (
                                                   <Space size={4} wrap>
-                                                    <Button
+                                                    <TipButton
+                                                      tip={HELP_TIPS.kanbanRenomearLista}
                                                       size="small"
                                                       type="text"
                                                       onClick={() => {
@@ -7671,8 +7921,9 @@ export function AppShell() {
                                                       }}
                                                     >
                                                       Editar
-                                                    </Button>
-                                                    <Button
+                                                    </TipButton>
+                                                    <TipButton
+                                                      tip={HELP_TIPS.kanbanExcluirLista}
                                                       size="small"
                                                       type="text"
                                                       danger
@@ -7698,7 +7949,7 @@ export function AppShell() {
                                                       }
                                                     >
                                                       Excluir
-                                                    </Button>
+                                                    </TipButton>
                                                   </Space>
                                                 ) : null
                                               }
@@ -7761,29 +8012,33 @@ export function AppShell() {
                                                           onClick={(event) => event.stopPropagation()}
                                                           onMouseDown={(event) => event.stopPropagation()}
                                                         >
-                                                          <Button
-                                                            type="text"
-                                                            size="small"
-                                                            icon={<EditOutlined />}
-                                                            aria-label="Editar tarefa"
-                                                            onClick={() => openTask(task).catch(() => undefined)}
-                                                          />
-                                                          <Button
-                                                            type="text"
-                                                            size="small"
-                                                            danger
-                                                            icon={<DeleteOutlined />}
-                                                            aria-label="Excluir tarefa"
-                                                            onClick={() =>
-                                                              openDeleteConfirmModal({
-                                                                title: "Excluir esta tarefa?",
-                                                                onConfirm: async () => {
-                                                                  const ok = await deleteTaskById(task.id);
-                                                                  if (!ok) throw new Error("task_delete_failed");
-                                                                },
-                                                              })
-                                                            }
-                                                          />
+                                                          <HelpTip title={HELP_TIPS.editar}>
+                                                            <Button
+                                                              type="text"
+                                                              size="small"
+                                                              icon={<EditOutlined />}
+                                                              aria-label="Editar tarefa"
+                                                              onClick={() => openTask(task).catch(() => undefined)}
+                                                            />
+                                                          </HelpTip>
+                                                          <HelpTip title={HELP_TIPS.excluir}>
+                                                            <Button
+                                                              type="text"
+                                                              size="small"
+                                                              danger
+                                                              icon={<DeleteOutlined />}
+                                                              aria-label="Excluir tarefa"
+                                                              onClick={() =>
+                                                                openDeleteConfirmModal({
+                                                                  title: "Excluir esta tarefa?",
+                                                                  onConfirm: async () => {
+                                                                    const ok = await deleteTaskById(task.id);
+                                                                    if (!ok) throw new Error("task_delete_failed");
+                                                                  },
+                                                                })
+                                                              }
+                                                            />
+                                                          </HelpTip>
                                                         </Space>
                                                       ) : null
                                                     }
@@ -7839,6 +8094,7 @@ export function AppShell() {
                                     <Table<TaskItem>
                                       rowKey="id"
                                       dataSource={boardListTasks}
+                                      locale={{ emptyText: "Nenhuma tarefa neste quadro." }}
                                       pagination={{ pageSize: 8 }}
                                       rowSelection={{
                                         selectedRowKeys: selectedTaskIdsByBoardId[boardId] ?? [],
@@ -7864,14 +8120,16 @@ export function AppShell() {
                                               size="small"
                                               onClick={(event) => event.stopPropagation()}
                                             >
-                                              <Button
+                                              <TipButton
+                                                tip={HELP_TIPS.editar}
                                                 size="small"
                                                 icon={<EditOutlined />}
                                                 onClick={() => openTask(record).catch(() => undefined)}
                                               >
                                                 Editar
-                                              </Button>
-                                              <Button
+                                              </TipButton>
+                                              <TipButton
+                                                tip={HELP_TIPS.excluir}
                                                 size="small"
                                                 danger
                                                 icon={<DeleteOutlined />}
@@ -7886,7 +8144,7 @@ export function AppShell() {
                                                 }
                                               >
                                                 Excluir
-                                              </Button>
+                                              </TipButton>
                                             </Space>
                                           ),
                                         },
@@ -8498,12 +8756,12 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
-              <Form.Item name="has_iss_retention" label="Retencao ISS?">
+              <Form.Item name="has_iss_retention" label="Retencao ISS (imposto sobre servicos)?">
                 <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
-              <Form.Item name="has_inss_retention" label="Retencao INSS?">
+              <Form.Item name="has_inss_retention" label="Retencao INSS (previdencia)?">
                 <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
               </Form.Item>
             </Col>
@@ -8934,12 +9192,12 @@ export function AppShell() {
                 }
               </Form.Item>
               <Col xs={24} md={12}>
-                <Form.Item name="has_iss_retention" label="Retencao de ISS?">
+                <Form.Item name="has_iss_retention" label="Retencao de ISS (imposto sobre servicos)?">
                   <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
-                <Form.Item name="has_inss_retention" label="Retencao de INSS?">
+                <Form.Item name="has_inss_retention" label="Retencao de INSS (previdencia)?">
                   <Select options={[{ value: true, label: "Sim" }, { value: false, label: "Nao" }]} />
                 </Form.Item>
               </Col>
@@ -9245,6 +9503,7 @@ export function AppShell() {
           <Form.Item
             name="name"
             label="Nome do grupo"
+            tooltip={HELP_TIPS.novoGrupo}
             rules={[{ required: true, message: "Informe o nome." }, { min: 3 }]}
           >
             <Input placeholder="Ex.: Grupo principal" />
@@ -9285,10 +9544,20 @@ export function AppShell() {
             setCreateGroupOpen(false);
           }}
         >
-          <Form.Item name="name" label="Nome" rules={[{ required: true, message: "Informe o nome da lista." }]}>
+          <Form.Item
+            name="name"
+            label="Nome"
+            tooltip="Nome da coluna onde as tarefas serao organizadas (ex.: Em andamento, Revisao)."
+            rules={[{ required: true, message: "Informe o nome da lista." }]}
+          >
             <Input placeholder="Ex.: Em andamento" />
           </Form.Item>
-          <Form.Item name="wip_limit" label="Limite WIP" rules={[{ required: true }]}>
+          <Form.Item
+            name="wip_limit"
+            label="Limite WIP"
+            tooltip={HELP_TIPS.limiteWip}
+            rules={[{ required: true }]}
+          >
             <InputNumber min={1} style={{ width: "100%" }} />
           </Form.Item>
         </Form>
@@ -9420,13 +9689,14 @@ export function AppShell() {
           <Space orientation="vertical" size={12} style={{ width: "100%" }}>
             <Card size="small" title="Resumo">
               <Space wrap align="center" style={{ marginBottom: 8 }}>
-                <Button
+                <TipButton
+                  tip={HELP_TIPS.seguirTarefa}
                   size="small"
                   type={watchedTaskIds.has(selectedTask.id) ? "primary" : "default"}
                   onClick={() => void toggleTaskWatch(selectedTask.id, watchedTaskIds.has(selectedTask.id))}
                 >
                   {watchedTaskIds.has(selectedTask.id) ? "Seguindo" : "Seguir tarefa"}
-                </Button>
+                </TipButton>
               </Space>
               <Space wrap align="center">
                 <Typography.Text type="secondary">Status atual:</Typography.Text>
@@ -9460,36 +9730,40 @@ export function AppShell() {
                 {secondsToText(liveTaskTotalSeconds)}
               </Typography.Title>
               <Space wrap>
-                <Button
+                <TipButton
+                  tip={HELP_TIPS.timerIniciar}
                   icon={<PlayCircleOutlined />}
                   type={activeTimeLog ? "default" : "primary"}
                   disabled={selectedTask.status === "done" || Boolean(activeTimeLog)}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}
                 >
                   Iniciar
-                </Button>
-                <Button
+                </TipButton>
+                <TipButton
+                  tip={HELP_TIPS.timerPausar}
                   icon={<PauseCircleOutlined />}
                   disabled={selectedTask.status === "done" || !activeTimeLog}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/pause`, "POST", {})}
                 >
                   Pausar
-                </Button>
-                <Button
+                </TipButton>
+                <TipButton
+                  tip={HELP_TIPS.timerRetomar}
                   icon={<PlayCircleOutlined />}
                   disabled={selectedTask.status === "done" || !pausedTimeLog}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/resume`, "POST", {})}
                 >
                   Retomar
-                </Button>
-                <Button
+                </TipButton>
+                <TipButton
+                  tip={HELP_TIPS.timerConcluir}
                   icon={<CheckCircleOutlined />}
                   type="primary"
                   disabled={selectedTask.status === "done"}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/complete`, "POST", {})}
                 >
                   Concluir
-                </Button>
+                </TipButton>
               </Space>
               <Typography.Paragraph type="secondary" style={{ marginTop: 10, marginBottom: 0 }}>
                 Sessao ativa: {activeTimeLog ? "sim" : "nao"} | Sessao pausada: {pausedTimeLog ? "sim" : "nao"}
@@ -9518,9 +9792,9 @@ export function AppShell() {
                   <Form.Item label="Status" name="status" rules={[{ required: true }]}>
                     <Select options={statusOptions} />
                   </Form.Item>
-                  <Button type="primary" htmlType="submit">
+                  <TipButton tip={HELP_TIPS.salvarStatus} type="primary" htmlType="submit">
                     Salvar status
-                  </Button>
+                  </TipButton>
                 </Form>
               </Card>
             ) : null}
@@ -9923,6 +10197,7 @@ export function AppShell() {
           </Space>
         )}
       </Drawer>
+      <ReportProblemWidget token={token} workspaceId={selectedWorkspaceId} />
     </>
   );
 }

@@ -161,6 +161,32 @@ def test_me_collaborator_profile_linked_and_missing():
     assert empty.data["data"]["profile"] is None
 
 
+def test_me_collaborator_profile_patch_auto_provisions_link():
+    user = UserFactory.create(
+        password=STRONG_PASSWORD,
+        is_staff=True,
+        is_active=True,
+        email="admin.auto@blackbeans.local",
+        name="Admin Auto",
+    )
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {RefreshToken.for_user(user).access_token}")
+    response = client.patch(
+        "/api/v1/me/collaborator-profile",
+        {
+            "display_name": "Admin Atualizado",
+            "professional_email": "admin.auto@blackbeans.local",
+            "phone": "+55 11 90000-0000",
+        },
+        format="json",
+    )
+    assert response.status_code == 200
+    profile = response.data["data"]["profile"]
+    assert profile["display_name"] == "Admin Atualizado"
+    assert profile["phone"] == "+55 11 90000-0000"
+    assert UserCollaboratorLink.objects.filter(user=user, is_active=True).exists()
+
+
 def test_non_staff_cannot_mutate_collaborators():
     user = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
     client = APIClient()
