@@ -88,6 +88,7 @@ LOCAL_APPS = [
     "blackbeans_api.users",
     "blackbeans_api.governance",
     "blackbeans_api.clients",
+    "blackbeans_api.feedback",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -354,6 +355,10 @@ FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:13000")
 NOTIFICATION_EMAIL_ENABLED = env.bool("NOTIFICATION_EMAIL_ENABLED", default=True)
 NOTIFICATION_DIGEST_HOUR = env.int("NOTIFICATION_DIGEST_HOUR", default=8)
 NOTIFICATION_APP_NAME = env("NOTIFICATION_APP_NAME", default="BlackBeans System")
+
+# Relatar problema (feedback com screenshot/gravacao)
+PROBLEM_REPORTS_FEEDBACK_ENABLED = env.bool("PROBLEM_REPORTS_FEEDBACK_ENABLED", default=True)
+PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR = env.int("PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR", default=10)
 
 # Permissoes em lote (story 1.7)
 BULK_PERMISSIONS_MAX_ITEMS = env.int("BULK_PERMISSIONS_MAX_ITEMS", default=500)

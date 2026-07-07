@@ -10,6 +10,7 @@ export type ApiResult<T = unknown> = {
   ok: boolean;
   status: number;
   data?: T;
+  meta?: Record<string, unknown>;
   error?: { code?: string; message: string; details?: unknown };
   correlationId?: string;
 };
@@ -55,6 +56,7 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
   const correlationId = response.headers.get("X-Correlation-ID") ?? undefined;
   const payload = (await response.json().catch(() => ({}))) as {
     data?: T;
+    meta?: Record<string, unknown>;
     error?: { code?: string; message?: string; details?: unknown };
   };
 
@@ -78,6 +80,7 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
     ok: true,
     status: response.status,
     data: payload.data,
+    meta: payload.meta,
     correlationId,
   };
 }

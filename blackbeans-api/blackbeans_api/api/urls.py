@@ -15,6 +15,9 @@ from blackbeans_api.api.collaborators_views import AdminCollaboratorListCreateVi
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
+from blackbeans_api.api.feedback_views import ProblemReportDetailView
+from blackbeans_api.api.feedback_views import ProblemReportFeedbackCreateView
+from blackbeans_api.api.feedback_views import ProblemReportsListView
 from blackbeans_api.api.bpo_views import ContractCancelView
 from blackbeans_api.api.bpo_views import ContractConfirmView
 from blackbeans_api.api.bpo_views import ContractReactivateView
@@ -236,4 +239,7 @@ urlpatterns = [
         name="users-detail",
     ),
     path("users", AdminUserListCreateView.as_view(), name="users-list-create"),
+    path("problem-reports/feedback", ProblemReportFeedbackCreateView.as_view(), name="problem-reports-feedback"),
+    path("problem-reports/<uuid:report_id>", ProblemReportDetailView.as_view(), name="problem-reports-detail"),
+    path("problem-reports", ProblemReportsListView.as_view(), name="problem-reports-list"),
 ]
