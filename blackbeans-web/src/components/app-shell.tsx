@@ -1153,6 +1153,9 @@ export function AppShell() {
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
   const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
   const [expandedTaskKeysByBoardId, setExpandedTaskKeysByBoardId] = useState<Record<string, string[]>>({});
+  const [expandedMyWorkTaskKeys, setExpandedMyWorkTaskKeys] = useState<string[]>([]);
+  const [expandedAdminTasksKeys, setExpandedAdminTasksKeys] = useState<string[]>([]);
+  const assigneeFilterInitializedRef = useRef(false);
   const [loadingSubtasksParentId, setLoadingSubtasksParentId] = useState<string | null>(null);
   const [createSubtaskOpen, setCreateSubtaskOpen] = useState(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<TaskItem | null>(null);
@@ -1414,6 +1417,13 @@ export function AppShell() {
     return taskSummary.total_seconds + deltaSeconds;
   }, [activeTimeLog, liveTickMs, selectedTask?.status, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
   const currentUserId = useMemo(() => getUserIdFromToken(token), [token]);
+
+  useEffect(() => {
+    if (currentUserId == null || assigneeFilterInitializedRef.current) return;
+    setTaskAssigneeFilter(String(currentUserId));
+    assigneeFilterInitializedRef.current = true;
+  }, [currentUserId]);
+
   const currentUserIdentity = useMemo(() => {
     const displayNameRaw =
       profileResult?.display_name ??
@@ -1589,6 +1599,7 @@ export function AppShell() {
     const sevenDaysFwdMs = nowMs + 7 * 24 * 60 * 60 * 1000;
     const normalizedSearch = taskSearchFilter.trim().toLowerCase();
     return tasksTabSource.filter((task) => {
+      if (task.parent_id) return false;
       if (taskStatusFilter !== "all" && task.status !== taskStatusFilter) return false;
       if (taskPriorityFilter !== "all" && task.priority !== taskPriorityFilter) return false;
       if (normalizedSearch.length > 0 && !task.title.toLowerCase().includes(normalizedSearch)) return false;
@@ -1707,6 +1718,7 @@ export function AppShell() {
     const endOfToday = startOfToday + 24 * 60 * 60 * 1000 - 1;
     const endOfWeek = startOfToday + 7 * 24 * 60 * 60 * 1000 - 1;
     return filteredTasks.filter((task) => {
+      if (task.parent_id) return false;
       const matchesPriority = myWorkPriorityFilter === "all" || task.priority === myWorkPriorityFilter;
       if (!matchesPriority) return false;
       const endMs = task.end_date ? new Date(task.end_date).getTime() : null;
@@ -3344,6 +3356,110 @@ export function AppShell() {
     }
   }
 
+  function nestedSubtasksForParent(parentId: string, onlyMine: boolean) {
+    const rows = subtasksByParentId[parentId] ?? [];
+    if (!onlyMine || currentUserId == null) return rows;
+    return rows.filter((task) => task.assignee_id === currentUserId);
+  }
+
+  function renderExpandableSubtasks(record: TaskItem, onlyMine: boolean) {
+    const nested = nestedSubtasksForParent(record.id, onlyMine);
+    const nestedLoading = loadingSubtasksParentId === record.id;
+    return (
+      <div
+        style={{
+          margin: "4px 0 8px 12px",
+          padding: "10px 12px",
+          borderLeft: "3px solid #d9d9d9",
+          background: "#fafafa",
+          borderRadius: 8,
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+          Subtarefas de {record.title}
+          {onlyMine ? " (somente as suas)" : ""}
+        </Typography.Text>
+        <Spin spinning={nestedLoading}>
+          <Table<TaskItem>
+            rowKey="id"
+            size="small"
+            pagination={false}
+            locale={{ emptyText: onlyMine ? "Nenhuma subtarefa atribuida a voce." : "Nenhuma subtarefa ainda." }}
+            dataSource={nested}
+            onRow={(subtask) => ({
+              onClick: () => void openTask(subtask),
+              style: { cursor: "pointer" },
+            })}
+            columns={[
+              { title: "Subtarefa", dataIndex: "title", ellipsis: true },
+              {
+                title: "Status",
+                dataIndex: "status",
+                width: 120,
+                render: (value: string) => renderStatusTag(value),
+              },
+              {
+                title: "Prioridade",
+                dataIndex: "priority",
+                width: 120,
+                render: (value: string) => renderPriorityTag(value),
+              },
+              {
+                title: "Prazo",
+                dataIndex: "end_date",
+                width: 140,
+                render: (value: string | null) => formatDate(value),
+              },
+              {
+                title: "Acoes",
+                width: 180,
+                render: (subtask: TaskItem) => (
+                  <Space size="small" onClick={(event) => event.stopPropagation()}>
+                    <TipButton
+                      tip={HELP_TIPS.editar}
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => openTask(subtask).catch(() => undefined)}
+                    >
+                      Editar
+                    </TipButton>
+                    <TipButton
+                      tip={HELP_TIPS.excluir}
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() =>
+                        openDeleteConfirmModal({
+                          title: "Excluir esta subtarefa?",
+                          onConfirm: async () => {
+                            const ok = await deleteTaskById(subtask.id);
+                            if (!ok) throw new Error("subtask_delete_failed");
+                            await refreshTaskSubtasks(record.id);
+                          },
+                        })
+                      }
+                    >
+                      Excluir
+                    </TipButton>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Spin>
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          style={{ marginTop: 10 }}
+          onClick={() => openCreateSubtaskModal(record)}
+        >
+          Adicionar subtarefa
+        </Button>
+      </div>
+    );
+  }
+
   async function taskAction(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
     if (!selectedTask) return;
     const response = await apiRequest(path, { method, token, body });
@@ -4315,12 +4431,36 @@ export function AppShell() {
                           rowKey="id"
                           dataSource={myWorkFilteredTasks}
                           pagination={{ pageSize: 8 }}
+                          expandable={{
+                            expandedRowKeys: expandedMyWorkTaskKeys,
+                            onExpand: (expanded, record) => {
+                              setExpandedMyWorkTaskKeys((prev) =>
+                                expanded
+                                  ? Array.from(new Set([...prev, record.id]))
+                                  : prev.filter((key) => key !== record.id),
+                              );
+                              if (expanded) void refreshTaskSubtasks(record.id);
+                            },
+                            rowExpandable: (record) => !record.parent_id,
+                            expandedRowRender: (record) => renderExpandableSubtasks(record, true),
+                          }}
                           onRow={(record) => ({
                             onClick: () => openTask(record),
                             style: { cursor: "pointer" },
                           })}
                           columns={[
-                            { title: "Titulo", dataIndex: "title" },
+                            {
+                              title: "Titulo",
+                              dataIndex: "title",
+                              render: (value: string, record: TaskItem) => (
+                                <Space size={6}>
+                                  <span>{value}</span>
+                                  {(record.subtasks_count ?? 0) > 0 ? (
+                                    <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+                                  ) : null}
+                                </Space>
+                              ),
+                            },
                             {
                               title: "Projeto",
                               render: (record: TaskItem) => taskContext(record).projectLabel,
@@ -4375,6 +4515,14 @@ export function AppShell() {
                               render: (record: TaskItem) => (
                                 <Space onClick={(event) => event.stopPropagation()}>
                                   <TipButton
+                                    tip="Adicionar subtarefa nesta tarefa"
+                                    size="small"
+                                    icon={<PlusOutlined />}
+                                    onClick={() => openCreateSubtaskModal(record)}
+                                  >
+                                    Subtarefa
+                                  </TipButton>
+                                  <TipButton
                                     tip={HELP_TIPS.editar}
                                     size="small"
                                     icon={<EditOutlined />}
@@ -4389,7 +4537,10 @@ export function AppShell() {
                                     icon={<DeleteOutlined />}
                                     onClick={() =>
                                       openDeleteConfirmModal({
-                                        title: "Excluir esta tarefa?",
+                                        title:
+                                          (record.subtasks_count ?? 0) > 0
+                                            ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                            : "Excluir esta tarefa?",
                                         onConfirm: async () => {
                                           const ok = await deleteTaskById(record.id);
                                           if (!ok) throw new Error("delete_failed");
@@ -4567,7 +4718,7 @@ export function AppShell() {
                             setTaskPriorityFilter("all");
                             setTaskProjectFilter("all");
                             setTaskBoardFilter("all");
-                            setTaskAssigneeFilter("all");
+                            setTaskAssigneeFilter(currentUserId != null ? String(currentUserId) : "all");
                             setTaskPeriodFilter("this_week");
                             setTaskSearchFilter("");
                           }}
@@ -4659,9 +4810,14 @@ export function AppShell() {
                         showSearch
                         optionFilterProp="label"
                         options={[
+                          ...(currentUserId != null
+                            ? [{ value: String(currentUserId), label: "Eu (meu responsavel)" }]
+                            : []),
                           { value: "all", label: "Todos os responsaveis" },
                           { value: "unassigned", label: "Sem responsavel" },
-                          ...adminUsersCache.map((u) => ({ value: String(u.id), label: u.name || u.email || `Usuario ${u.id}` })),
+                          ...adminUsersCache
+                            .filter((u) => currentUserId == null || u.id !== currentUserId)
+                            .map((u) => ({ value: String(u.id), label: u.name || u.email || `Usuario ${u.id}` })),
                         ]}
                       />
                       <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
@@ -4679,12 +4835,40 @@ export function AppShell() {
                       loading={allTasksLoading}
                       dataSource={tasksTabFiltered}
                       pagination={{ pageSize: 8 }}
+                      expandable={{
+                        expandedRowKeys: expandedAdminTasksKeys,
+                        onExpand: (expanded, record) => {
+                          setExpandedAdminTasksKeys((prev) =>
+                            expanded
+                              ? Array.from(new Set([...prev, record.id]))
+                              : prev.filter((key) => key !== record.id),
+                          );
+                          if (expanded) void refreshTaskSubtasks(record.id);
+                        },
+                        rowExpandable: (record) => !record.parent_id,
+                        expandedRowRender: (record) =>
+                          renderExpandableSubtasks(
+                            record,
+                            currentUserId != null && taskAssigneeFilter === String(currentUserId),
+                          ),
+                      }}
                       onRow={(record) => ({
                         onClick: () => openTask(record),
                         style: { cursor: "pointer" },
                       })}
                       columns={[
-                        { title: "Titulo", dataIndex: "title" },
+                        {
+                          title: "Titulo",
+                          dataIndex: "title",
+                          render: (value: string, record: TaskItem) => (
+                            <Space size={6}>
+                              <span>{value}</span>
+                              {(record.subtasks_count ?? 0) > 0 ? (
+                                <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+                              ) : null}
+                            </Space>
+                          ),
+                        },
                         {
                           title: "Projeto",
                           render: (record: TaskItem) => taskContext(record).projectLabel,
@@ -4723,6 +4907,14 @@ export function AppShell() {
                           render: (record: TaskItem) => (
                             <Space onClick={(event) => event.stopPropagation()}>
                               <TipButton
+                                tip="Adicionar subtarefa nesta tarefa"
+                                size="small"
+                                icon={<PlusOutlined />}
+                                onClick={() => openCreateSubtaskModal(record)}
+                              >
+                                Subtarefa
+                              </TipButton>
+                              <TipButton
                                 tip={HELP_TIPS.editar}
                                 size="small"
                                 icon={<EditOutlined />}
@@ -4737,7 +4929,10 @@ export function AppShell() {
                                 icon={<DeleteOutlined />}
                                 onClick={() =>
                                   openDeleteConfirmModal({
-                                    title: "Excluir esta tarefa?",
+                                    title:
+                                      (record.subtasks_count ?? 0) > 0
+                                        ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                        : "Excluir esta tarefa?",
                                     onConfirm: async () => {
                                       const ok = await deleteTaskById(record.id);
                                       if (!ok) throw new Error("delete_failed");
