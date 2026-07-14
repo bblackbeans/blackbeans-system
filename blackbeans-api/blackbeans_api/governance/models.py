@@ -246,6 +246,13 @@ class Task(models.Model):
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     board = ForeignKey(Board, on_delete=CASCADE, related_name="tasks")
     group = ForeignKey(BoardGroup, on_delete=CASCADE, related_name="tasks")
+    parent = ForeignKey(
+        "self",
+        on_delete=CASCADE,
+        null=True,
+        blank=True,
+        related_name="subtasks",
+    )
     title = CharField(max_length=255)
     description = TextField(blank=True, default="")
     status = CharField(max_length=24, choices=Status.choices, default=Status.TODO)
@@ -269,6 +276,7 @@ class Task(models.Model):
         indexes = [
             models.Index(fields=["board", "status"]),
             models.Index(fields=["assignee", "status"]),
+            models.Index(fields=["parent"]),
         ]
 
     def __str__(self) -> str:

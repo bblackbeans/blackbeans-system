@@ -4,8 +4,9 @@ import logging
 from datetime import timedelta
 from uuid import UUID
 
-from django.utils import timezone
 from django.db import transaction
+from django.db.models import Count
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -827,7 +828,12 @@ class BoardDetailView(APIView):
                 http_status=status.HTTP_403_FORBIDDEN,
             )
 
-        tasks = Task.objects.filter(board=board).select_related("group", "assignee").order_by("group__position", "created_at")
+        tasks = (
+            Task.objects.filter(board=board, parent__isnull=True)
+            .select_related("group", "assignee")
+            .annotate(subtasks_count=Count("subtasks"))
+            .order_by("group__position", "created_at")
+        )
         if view == "list":
             payload = {"view": "list", "tasks": [task_to_representation(t) for t in tasks]}
         elif view == "kanban":
@@ -879,16 +885,26 @@ class TaskListCreateView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        queryset = Task.objects.select_related("group", "board").order_by("created_at")
+        queryset = (
+            Task.objects.select_related("group", "board")
+            .annotate(subtasks_count=Count("subtasks"))
+            .order_by("created_at")
+        )
         board_id = request.query_params.get("board_id")
         group_id = request.query_params.get("group_id")
+        parent_id = request.query_params.get("parent_id")
         status_filter = request.query_params.get("status")
         search = (request.query_params.get("search") or "").strip()
+        roots_only = (request.query_params.get("roots_only") or "").strip().lower()
 
         if board_id:
             queryset = queryset.filter(board_id=board_id)
         if group_id:
             queryset = queryset.filter(group_id=group_id)
+        if parent_id:
+            queryset = queryset.filter(parent_id=parent_id)
+        elif roots_only in {"1", "true", "yes"}:
+            queryset = queryset.filter(parent__isnull=True)
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         if search:
@@ -910,6 +926,7 @@ class TaskListCreateView(APIView):
             event_type="task.created",
             summary=f"Tarefa criada com status={task.status}.",
         )
+        task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
         return success_response(
             correlation_id=correlation_id,
             data={"task": task_to_representation(task)},
@@ -932,6 +949,7 @@ class TaskDetailView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
 
     def patch(self, request: Request, task_id: UUID):
@@ -952,7 +970,7 @@ class TaskDetailView(APIView):
         before_priority = task.priority
         changed_fields = sorted(serializer.validated_data.keys())
         serializer.save()
-        task.refresh_from_db()
+        task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
         if "priority" in serializer.validated_data and task.priority != before_priority:
             dispatch_task_priority_changed(
                 task=task,
@@ -1056,7 +1074,11 @@ class MyTasksView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        qs = Task.objects.filter(assignee=request.user).order_by("-updated_at")
+        qs = (
+            Task.objects.filter(assignee=request.user)
+            .annotate(subtasks_count=Count("subtasks"))
+            .order_by("-updated_at")
+        )
         status_filter = request.query_params.get("status")
         priority_filter = request.query_params.get("priority")
         if status_filter:

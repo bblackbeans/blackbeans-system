@@ -274,13 +274,15 @@ def board_group_to_representation(group: BoardGroup) -> dict:
 
 
 class TaskWriteSerializer(serializers.ModelSerializer):
-    group_id = serializers.UUIDField()
+    group_id = serializers.UUIDField(required=False)
+    parent_id = serializers.UUIDField(required=False, allow_null=True)
     assignee_id = serializers.IntegerField(required=False, allow_null=True)
 
     class Meta:
         model = Task
         fields = (
             "group_id",
+            "parent_id",
             "title",
             "description",
             "status",
@@ -304,6 +306,16 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Grupo nao encontrado.")
         return value
 
+    def validate_parent_id(self, value):
+        if value is None:
+            return None
+        parent = Task.objects.filter(pk=value).first()
+        if parent is None:
+            raise serializers.ValidationError("Tarefa pai nao encontrada.")
+        if parent.parent_id is not None:
+            raise serializers.ValidationError("Subtarefas nao podem ter subtarefas.")
+        return value
+
     def validate_assignee_id(self, value):
         if value is None:
             return None
@@ -316,20 +328,40 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         end = attrs.get("end_date")
         if start and end and end < start:
             raise serializers.ValidationError({"end_date": "Data final deve ser maior ou igual a inicial."})
+
+        if self.instance is None:
+            parent_id = attrs.get("parent_id")
+            group_id = attrs.get("group_id")
+            if parent_id is None and group_id is None:
+                raise serializers.ValidationError(
+                    {"group_id": "Informe o grupo do quadro ou a tarefa pai (parent_id)."}
+                )
         return attrs
 
     def create(self, validated_data):
-        group_id = validated_data.pop("group_id")
+        parent_id = validated_data.pop("parent_id", None)
         assignee_id = validated_data.pop("assignee_id", None)
-        group = BoardGroup.objects.select_related("board").get(pk=group_id)
+        group_id = validated_data.pop("group_id", None)
+
+        parent = None
+        if parent_id is not None:
+            parent = Task.objects.select_related("board", "group").get(pk=parent_id)
+            group = parent.group
+            board = parent.board
+        else:
+            group = BoardGroup.objects.select_related("board").get(pk=group_id)
+            board = group.board
+
         return Task.objects.create(
             group=group,
-            board=group.board,
+            board=board,
+            parent=parent,
             assignee_id=assignee_id,
             **validated_data,
         )
 
     def update(self, instance, validated_data):
+        validated_data.pop("parent_id", None)
         if "group_id" in validated_data:
             group = BoardGroup.objects.select_related("board").get(pk=validated_data.pop("group_id"))
             instance.group = group
@@ -346,10 +378,16 @@ def task_to_representation(task: Task) -> dict:
     def _iso(v):
         return v.isoformat().replace("+00:00", "Z") if v else None
 
+    subtasks_count = getattr(task, "subtasks_count", None)
+    if subtasks_count is None:
+        subtasks_count = task.subtasks.count() if getattr(task, "pk", None) else 0
+
     return {
         "id": str(task.pk),
         "board_id": str(task.board_id),
         "group_id": str(task.group_id),
+        "parent_id": str(task.parent_id) if task.parent_id else None,
+        "subtasks_count": int(subtasks_count),
         "title": task.title,
         "description": task.description,
         "status": task.status,
