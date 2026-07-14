@@ -103,11 +103,11 @@ const HELP_TIPS = {
   novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
   novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
   novoProjeto: "Entrega vinculada a um cliente existente dentro do portfolio.",
-  novoGrupo: "Quadro de tarefas do projeto (ex.: Sprint, Campanha, Operacao).",
-  novaLista: "Coluna do quadro (ex.: Em andamento, Revisao). Tarefas sao organizadas aqui.",
-  novaTarefa: "Cria um card de trabalho na lista escolhida deste quadro.",
-  excluirGrupo: "Remove o quadro inteiro e suas listas.",
-  moverSelecionadas: "Move tarefas marcadas para outro quadro ou lista.",
+  novoGrupo: "Grupo de tarefas do projeto (ex.: Backlog, Liberado, Em andamento).",
+  novaLista: "So no modo Colunas: cria uma coluna dentro do grupo (organizacao interna).",
+  novaTarefa: "Cria a tarefa neste grupo. Ela aparece automaticamente nesta secao.",
+  excluirGrupo: "Remove o grupo inteiro e suas tarefas.",
+  moverSelecionadas: "Move tarefas marcadas para outro grupo do projeto.",
   novoCliente: "Cadastra cliente no catalogo global; vincule ao criar um projeto.",
   novoServico: "Item do catalogo de servicos para precificar vendas.",
   novaVenda: "Inicia contrato comercial com cliente, servicos e financeiro.",
@@ -267,6 +267,8 @@ type TaskItem = {
   end_date: string | null;
   board_id: string;
   group_id: string;
+  parent_id?: string | null;
+  subtasks_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -1148,6 +1150,9 @@ export function AppShell() {
     [],
   );
   const [taskComments, setTaskComments] = useState<TaskCommentItem[]>([]);
+  const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
+  const [subtaskTitleDraft, setSubtaskTitleDraft] = useState("");
+  const [subtaskSaving, setSubtaskSaving] = useState(false);
   const [taskCommentDraft, setTaskCommentDraft] = useState("");
   const [taskCommentReplyTo, setTaskCommentReplyTo] = useState<TaskCommentItem | null>(null);
   const [taskCommentEditingId, setTaskCommentEditingId] = useState<string | null>(null);
@@ -2247,29 +2252,77 @@ export function AppShell() {
     async (boardId: string) => {
       if (!boardId || !token) {
         setBoardGroupSelectOptions([]);
-        return;
+        return [] as { value: string; label: string }[];
       }
       const response = await apiRequest<{ groups: GroupItem[] }>(`/boards/${boardId}/groups`, { token });
       if (!response.ok) {
         setBoardGroupSelectOptions([]);
-        return;
+        return [] as { value: string; label: string }[];
       }
       const options = [...(response.data?.groups ?? [])]
         .sort((a, b) => a.position - b.position)
         .map((group) => ({ value: group.id, label: formatColumnLabel(group.name) }));
       setBoardGroupSelectOptions(options);
+      return options;
     },
     [token],
+  );
+
+  const ensureDefaultGroupForBoard = useCallback(
+    async (boardId: string): Promise<{ value: string; label: string }[]> => {
+      let options = await loadBoardGroupSelectOptions(boardId);
+      if (options.length > 0) return options;
+
+      const createDefaultGroup = await apiRequest<{ group?: { id?: string; name?: string } }>(
+        `/boards/${boardId}/groups`,
+        {
+          method: "POST",
+          token,
+          body: { name: "Lista principal", wip_limit: 50 },
+        },
+      );
+      if (!createDefaultGroup.ok) {
+        apiMessage.error(
+          createDefaultGroup.error?.message ?? "Falha ao preparar a lista padrao do quadro.",
+        );
+        return [];
+      }
+
+      options = await loadBoardGroupSelectOptions(boardId);
+      if (options.length === 0) {
+        const createdId = String(createDefaultGroup.data?.group?.id ?? "");
+        if (createdId) {
+          options = [{ value: createdId, label: "Lista principal" }];
+          setBoardGroupSelectOptions(options);
+        }
+      }
+      return options;
+    },
+    [apiMessage, loadBoardGroupSelectOptions, token],
   );
 
   useEffect(() => {
     if (!createTaskOpen || !token) return;
     void hydrateTaskAssigneePickList();
     const targetBoardId = composeBoardId ?? selectedBoardId;
-    if (targetBoardId) {
-      void loadBoardGroupSelectOptions(targetBoardId);
-    }
-  }, [composeBoardId, createTaskOpen, hydrateTaskAssigneePickList, loadBoardGroupSelectOptions, selectedBoardId, token]);
+    if (!targetBoardId) return;
+    void (async () => {
+      const options = await ensureDefaultGroupForBoard(targetBoardId);
+      const currentGroupId = createTaskForm.getFieldValue("group_id");
+      const stillValid = options.some((option) => option.value === currentGroupId);
+      if (!stillValid && options[0]) {
+        createTaskForm.setFieldsValue({ group_id: options[0].value });
+      }
+    })();
+  }, [
+    composeBoardId,
+    createTaskForm,
+    createTaskOpen,
+    ensureDefaultGroupForBoard,
+    hydrateTaskAssigneePickList,
+    selectedBoardId,
+    token,
+  ]);
 
   useEffect(() => {
     if (!token || !selectedBoardId) {
@@ -3144,13 +3197,18 @@ export function AppShell() {
     setTaskCommentReplyTo(null);
     setTaskCommentEditingId(null);
     setTaskCommentEditingContent("");
+    setSubtaskTitleDraft("");
+    setTaskSubtasks([]);
     void hydrateTaskAssigneePickList();
     void fetchNotificationSubscriptions();
-    const [activityResp, summaryResp, groupsResp, commentsResp] = await Promise.all([
+    const [activityResp, summaryResp, groupsResp, commentsResp, subtasksResp] = await Promise.all([
       apiRequest<{ activities: TaskActivity[] }>(`/tasks/${task.id}/activity`, { token }),
       apiRequest<{ total_seconds: number; logs: TimeLog[] }>(`/tasks/${task.id}/time-summary`, { token }),
       apiRequest<{ groups: GroupItem[] }>(`/boards/${task.board_id}/groups`, { token }),
       apiRequest<{ comments: TaskCommentItem[] }>(`/tasks/${task.id}/comments`, { token }),
+      task.parent_id
+        ? Promise.resolve({ ok: true, status: 200, data: { tasks: [] as TaskItem[] } })
+        : apiRequest<{ tasks: TaskItem[] }>(`/tasks?parent_id=${encodeURIComponent(task.id)}`, { token }),
     ]);
     setTaskActivity(activityResp.data?.activities ?? []);
     setTaskSummary({
@@ -3161,14 +3219,67 @@ export function AppShell() {
     setTaskSummaryFetchedAtMs(nowTick);
     setLiveTickMs(nowTick);
     setTaskComments(commentsResp.data?.comments ?? []);
-    if (!activityResp.ok || !summaryResp.ok || !groupsResp.ok || !commentsResp.ok) {
+    setTaskSubtasks(subtasksResp.data?.tasks ?? []);
+    if (!activityResp.ok || !summaryResp.ok || !groupsResp.ok || !commentsResp.ok || !subtasksResp.ok) {
+      const subtasksError =
+        "error" in subtasksResp ? subtasksResp.error?.message : undefined;
       setGlobalError(
         activityResp.error?.message ??
           summaryResp.error?.message ??
           groupsResp.error?.message ??
           commentsResp.error?.message ??
+          subtasksError ??
           "Falha ao carregar detalhes da tarefa.",
       );
+    }
+  }
+
+  async function refreshTaskSubtasks(taskId: string) {
+    const response = await apiRequest<{ tasks: TaskItem[] }>(`/tasks?parent_id=${taskId}`, { token });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao carregar subtarefas.");
+      return false;
+    }
+    setTaskSubtasks(response.data?.tasks ?? []);
+    return true;
+  }
+
+  async function createSubtaskForSelected() {
+    if (!selectedTask || selectedTask.parent_id) return;
+    const title = subtaskTitleDraft.trim();
+    if (title.length < 2) {
+      apiMessage.warning("Informe o titulo da subtarefa.");
+      return;
+    }
+    setSubtaskSaving(true);
+    try {
+      const response = await apiRequest<{ task: TaskItem }>("/tasks", {
+        method: "POST",
+        token,
+        body: {
+          parent_id: selectedTask.id,
+          title,
+          status: "todo",
+          priority: selectedTask.priority,
+          assignee_id: selectedTask.assignee_id,
+        },
+      });
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao criar subtarefa.");
+        return;
+      }
+      apiMessage.success("Subtarefa criada.");
+      setSubtaskTitleDraft("");
+      await refreshTaskSubtasks(selectedTask.id);
+      setSelectedTask((prev) =>
+        prev && prev.id === selectedTask.id
+          ? { ...prev, subtasks_count: (prev.subtasks_count ?? 0) + 1 }
+          : prev,
+      );
+      await fetchTasks();
+      await refreshBoardViewsForProject(selectedProjectId);
+    } finally {
+      setSubtaskSaving(false);
     }
   }
 
@@ -7716,8 +7827,9 @@ export function AppShell() {
                                     <Select
                                       value={boardViewModeForBoard}
                                       style={{ minWidth: 180 }}
+                                      aria-label="Como visualizar este grupo"
                                       options={[
-                                        { value: "list", label: "Lista" },
+                                        { value: "list", label: "Tabela" },
                                         { value: "kanban", label: "Colunas" },
                                         ...(isSuperuser ? [{ value: "timeline" as const, label: "Linha do tempo" }] : []),
                                       ]}
@@ -7733,7 +7845,7 @@ export function AppShell() {
                                             <Select
                                               size="small"
                                               style={{ minWidth: 210 }}
-                                              placeholder="Selecione o board destino"
+                                              placeholder="Selecione o grupo destino"
                                               allowClear
                                               value={targetBoardIdForBoard}
                                               options={projectBoardOptionsExcludingCurrent}
@@ -8044,6 +8156,9 @@ export function AppShell() {
                                                     }
                                                   >
                                                     <Typography.Text strong>{task.title}</Typography.Text>
+                                                    {(task.subtasks_count ?? 0) > 0 ? (
+                                                      <Tag style={{ marginLeft: 6 }}>{task.subtasks_count} subtarefas</Tag>
+                                                    ) : null}
                                                     {task.description ? (
                                                       <Typography.Paragraph
                                                         ellipsis={{ rows: 2 }}
@@ -8094,7 +8209,7 @@ export function AppShell() {
                                     <Table<TaskItem>
                                       rowKey="id"
                                       dataSource={boardListTasks}
-                                      locale={{ emptyText: "Nenhuma tarefa neste quadro." }}
+                                      locale={{ emptyText: "Nenhuma tarefa neste grupo." }}
                                       pagination={{ pageSize: 8 }}
                                       rowSelection={{
                                         selectedRowKeys: selectedTaskIdsByBoardId[boardId] ?? [],
@@ -8109,7 +8224,18 @@ export function AppShell() {
                                         style: { cursor: "pointer" },
                                       })}
                                       columns={[
-                                        { title: "Titulo", dataIndex: "title" },
+                                        {
+                                          title: "Titulo",
+                                          dataIndex: "title",
+                                          render: (value: string, record: TaskItem) => (
+                                            <Space size={6}>
+                                              <span>{value}</span>
+                                              {(record.subtasks_count ?? 0) > 0 ? (
+                                                <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+                                              ) : null}
+                                            </Space>
+                                          ),
+                                        },
                                         { title: "Status", dataIndex: "status", render: (value: string) => renderStatusTag(value) },
                                         { title: "Prioridade", dataIndex: "priority", render: (value: string) => renderPriorityTag(value) },
                                         { title: "Prazo", dataIndex: "end_date", render: (value: string | null) => formatDate(value) },
@@ -9586,8 +9712,18 @@ export function AppShell() {
               apiMessage.error("Selecione um grupo valido.");
               return;
             }
+            let groupId = String(values.group_id ?? "");
+            if (!groupId) {
+              const options = await ensureDefaultGroupForBoard(targetBoardId);
+              groupId = options[0]?.value ?? "";
+            }
+            if (!groupId) {
+              apiMessage.error("Nao foi possivel preparar o grupo para criar a tarefa.");
+              return;
+            }
             const ok = await createTask({
               ...values,
+              group_id: groupId,
               effort_points: values.effort_points ?? 1,
               end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
               project_id: targetBoard.project_id,
@@ -9616,11 +9752,9 @@ export function AppShell() {
                 <Input.TextArea rows={2} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="group_id" label="Lista" rules={[{ required: true, message: "Selecione a lista." }]}>
-                <Select options={boardGroupSelectOptions} placeholder="Selecione o quadro e a lista" />
-              </Form.Item>
-            </Col>
+            <Form.Item name="group_id" hidden>
+              <Input />
+            </Form.Item>
             <Col xs={24} md={12}>
               <Form.Item name="priority" label="Prioridade">
                 <Select
@@ -9680,7 +9814,13 @@ export function AppShell() {
       </Modal>
 
       <Drawer
-        title={selectedTask ? `Tarefa: ${selectedTask.title}` : "Tarefa"}
+        title={
+          selectedTask
+            ? selectedTask.parent_id
+              ? `Subtarefa: ${selectedTask.title}`
+              : `Tarefa: ${selectedTask.title}`
+            : "Tarefa"
+        }
         open={Boolean(selectedTask)}
         onClose={() => setSelectedTask(null)}
         size="large"
@@ -9777,6 +9917,61 @@ export function AppShell() {
                 <Typography.Text type="secondary">Sem descricao cadastrada.</Typography.Text>
               )}
             </Card>
+
+            {selectedTask.parent_id ? (
+              <Alert
+                type="info"
+                showIcon
+                title="Esta e uma subtarefa"
+                description="Abra a tarefa pai para ver o conjunto completo de subtarefas."
+              />
+            ) : (
+              <Card
+                size="small"
+                title={`Subtarefas (${taskSubtasks.length || selectedTask.subtasks_count || 0})`}
+              >
+                <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Input
+                      value={subtaskTitleDraft}
+                      placeholder="Nova subtarefa..."
+                      maxLength={255}
+                      onChange={(event) => setSubtaskTitleDraft(event.target.value)}
+                      onPressEnter={() => void createSubtaskForSelected()}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      loading={subtaskSaving}
+                      onClick={() => void createSubtaskForSelected()}
+                    >
+                      Adicionar
+                    </Button>
+                  </Space.Compact>
+                  {taskSubtasks.length === 0 ? (
+                    <Typography.Text type="secondary">Nenhuma subtarefa ainda.</Typography.Text>
+                  ) : (
+                    taskSubtasks.map((subtask) => (
+                      <Card
+                        key={subtask.id}
+                        type="inner"
+                        size="small"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => void openTask(subtask)}
+                        extra={
+                          <Space size={4} onClick={(event) => event.stopPropagation()}>
+                            {renderStatusTag(subtask.status)}
+                            {renderPriorityTag(subtask.priority)}
+                          </Space>
+                        }
+                      >
+                        <Typography.Text strong>{subtask.title}</Typography.Text>
+                      </Card>
+                    ))
+                  )}
+                </Space>
+              </Card>
+            )}
 
             {(isAdmin || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
               <Card size="small" title="Alterar status">
