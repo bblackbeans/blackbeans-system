@@ -1151,8 +1151,13 @@ export function AppShell() {
   );
   const [taskComments, setTaskComments] = useState<TaskCommentItem[]>([]);
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
-  const [subtaskTitleDraft, setSubtaskTitleDraft] = useState("");
+  const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
+  const [expandedTaskKeysByBoardId, setExpandedTaskKeysByBoardId] = useState<Record<string, string[]>>({});
+  const [loadingSubtasksParentId, setLoadingSubtasksParentId] = useState<string | null>(null);
+  const [createSubtaskOpen, setCreateSubtaskOpen] = useState(false);
+  const [createSubtaskParent, setCreateSubtaskParent] = useState<TaskItem | null>(null);
   const [subtaskSaving, setSubtaskSaving] = useState(false);
+  const [createSubtaskForm] = Form.useForm();
   const [taskCommentDraft, setTaskCommentDraft] = useState("");
   const [taskCommentReplyTo, setTaskCommentReplyTo] = useState<TaskCommentItem | null>(null);
   const [taskCommentEditingId, setTaskCommentEditingId] = useState<string | null>(null);
@@ -3197,7 +3202,6 @@ export function AppShell() {
     setTaskCommentReplyTo(null);
     setTaskCommentEditingId(null);
     setTaskCommentEditingContent("");
-    setSubtaskTitleDraft("");
     setTaskSubtasks([]);
     void hydrateTaskAssigneePickList();
     void fetchNotificationSubscriptions();
@@ -3219,7 +3223,11 @@ export function AppShell() {
     setTaskSummaryFetchedAtMs(nowTick);
     setLiveTickMs(nowTick);
     setTaskComments(commentsResp.data?.comments ?? []);
-    setTaskSubtasks(subtasksResp.data?.tasks ?? []);
+    const loadedSubtasks = subtasksResp.data?.tasks ?? [];
+    setTaskSubtasks(loadedSubtasks);
+    if (!task.parent_id) {
+      setSubtasksByParentId((prev) => ({ ...prev, [task.id]: loadedSubtasks }));
+    }
     if (!activityResp.ok || !summaryResp.ok || !groupsResp.ok || !commentsResp.ok || !subtasksResp.ok) {
       const subtasksError =
         "error" in subtasksResp ? subtasksResp.error?.message : undefined;
@@ -3235,33 +3243,70 @@ export function AppShell() {
   }
 
   async function refreshTaskSubtasks(taskId: string) {
-    const response = await apiRequest<{ tasks: TaskItem[] }>(`/tasks?parent_id=${taskId}`, { token });
-    if (!response.ok) {
-      apiMessage.error(response.error?.message ?? "Falha ao carregar subtarefas.");
-      return false;
+    setLoadingSubtasksParentId(taskId);
+    try {
+      const response = await apiRequest<{ tasks: TaskItem[] }>(
+        `/tasks?parent_id=${encodeURIComponent(taskId)}`,
+        { token },
+      );
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao carregar subtarefas.");
+        return false;
+      }
+      const rows = response.data?.tasks ?? [];
+      setSubtasksByParentId((prev) => ({ ...prev, [taskId]: rows }));
+      if (selectedTask?.id === taskId) {
+        setTaskSubtasks(rows);
+      }
+      return true;
+    } finally {
+      setLoadingSubtasksParentId(null);
     }
-    setTaskSubtasks(response.data?.tasks ?? []);
-    return true;
   }
 
-  async function createSubtaskForSelected() {
-    if (!selectedTask || selectedTask.parent_id) return;
-    const title = subtaskTitleDraft.trim();
-    if (title.length < 2) {
-      apiMessage.warning("Informe o titulo da subtarefa.");
+  function openCreateSubtaskModal(parent: TaskItem) {
+    if (parent.parent_id) {
+      apiMessage.warning("Subtarefas nao podem ter subtarefas.");
       return;
     }
+    setCreateSubtaskParent(parent);
+    createSubtaskForm.setFieldsValue({
+      title: "",
+      description: "",
+      priority: parent.priority || "medium",
+      status: "todo",
+      effort_points: 1,
+      assignee_id: parent.assignee_id ?? undefined,
+      end_date: undefined,
+    });
+    void hydrateTaskAssigneePickList();
+    setCreateSubtaskOpen(true);
+  }
+
+  async function submitCreateSubtask(values: {
+    title: string;
+    description?: string;
+    priority?: string;
+    status?: string;
+    effort_points?: number;
+    assignee_id?: number | null;
+    end_date?: string | Date | null;
+  }) {
+    if (!createSubtaskParent) return;
     setSubtaskSaving(true);
     try {
       const response = await apiRequest<{ task: TaskItem }>("/tasks", {
         method: "POST",
         token,
         body: {
-          parent_id: selectedTask.id,
-          title,
-          status: "todo",
-          priority: selectedTask.priority,
-          assignee_id: selectedTask.assignee_id,
+          parent_id: createSubtaskParent.id,
+          title: values.title,
+          description: values.description ?? "",
+          status: values.status ?? "todo",
+          priority: values.priority ?? createSubtaskParent.priority,
+          effort_points: values.effort_points ?? 1,
+          assignee_id: values.assignee_id ?? null,
+          end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
         },
       });
       if (!response.ok) {
@@ -3269,13 +3314,29 @@ export function AppShell() {
         return;
       }
       apiMessage.success("Subtarefa criada.");
-      setSubtaskTitleDraft("");
-      await refreshTaskSubtasks(selectedTask.id);
+      createSubtaskForm.resetFields();
+      setCreateSubtaskOpen(false);
+      const parentId = createSubtaskParent.id;
+      const parentBoardId = createSubtaskParent.board_id;
+      setCreateSubtaskParent(null);
+      await refreshTaskSubtasks(parentId);
       setSelectedTask((prev) =>
-        prev && prev.id === selectedTask.id
-          ? { ...prev, subtasks_count: (prev.subtasks_count ?? 0) + 1 }
-          : prev,
+        prev && prev.id === parentId ? { ...prev, subtasks_count: (prev.subtasks_count ?? 0) + 1 } : prev,
       );
+      setBoardListTasksByBoardId((prev) => {
+        const next = { ...prev };
+        for (const [boardId, rows] of Object.entries(next)) {
+          next[boardId] = rows.map((task) =>
+            task.id === parentId ? { ...task, subtasks_count: (task.subtasks_count ?? 0) + 1 } : task,
+          );
+        }
+        return next;
+      });
+      setExpandedTaskKeysByBoardId((prev) => {
+        const current = prev[parentBoardId] ?? [];
+        if (current.map(String).includes(parentId)) return prev;
+        return { ...prev, [parentBoardId]: [...current, parentId] };
+      });
       await fetchTasks();
       await refreshBoardViewsForProject(selectedProjectId);
     } finally {
@@ -8219,6 +8280,136 @@ export function AppShell() {
                                             [boardId]: selectedRowKeys.map((key) => String(key)),
                                           })),
                                       }}
+                                      expandable={{
+                                        expandedRowKeys: expandedTaskKeysByBoardId[boardId] ?? [],
+                                        onExpand: (expanded, record) => {
+                                          setExpandedTaskKeysByBoardId((prev) => {
+                                            const current = prev[boardId] ?? [];
+                                            const nextKeys = expanded
+                                              ? Array.from(new Set([...current, record.id]))
+                                              : current.filter((key) => key !== record.id);
+                                            return { ...prev, [boardId]: nextKeys };
+                                          });
+                                          if (expanded && !record.parent_id) {
+                                            void refreshTaskSubtasks(record.id);
+                                          }
+                                        },
+                                        rowExpandable: (record) => !record.parent_id,
+                                        expandedRowRender: (record) => {
+                                          const nested = subtasksByParentId[record.id] ?? [];
+                                          const nestedLoading = loadingSubtasksParentId === record.id;
+                                          return (
+                                            <div
+                                              style={{
+                                                margin: "4px 0 8px 12px",
+                                                padding: "10px 12px",
+                                                borderLeft: "3px solid #d9d9d9",
+                                                background: "#fafafa",
+                                                borderRadius: 8,
+                                              }}
+                                              onClick={(event) => event.stopPropagation()}
+                                            >
+                                              <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                                                Subtarefas de {record.title}
+                                              </Typography.Text>
+                                              <Spin spinning={nestedLoading}>
+                                                <Table<TaskItem>
+                                                  rowKey="id"
+                                                  size="small"
+                                                  pagination={false}
+                                                  locale={{ emptyText: "Nenhuma subtarefa ainda." }}
+                                                  dataSource={nested}
+                                                  onRow={(subtask) => ({
+                                                    onClick: () => void openTask(subtask),
+                                                    style: { cursor: "pointer" },
+                                                  })}
+                                                  columns={[
+                                                    {
+                                                      title: "Subtarefa",
+                                                      dataIndex: "title",
+                                                      ellipsis: true,
+                                                    },
+                                                    {
+                                                      title: "Status",
+                                                      dataIndex: "status",
+                                                      width: 120,
+                                                      render: (value: string) => renderStatusTag(value),
+                                                    },
+                                                    {
+                                                      title: "Prioridade",
+                                                      dataIndex: "priority",
+                                                      width: 120,
+                                                      render: (value: string) => renderPriorityTag(value),
+                                                    },
+                                                    {
+                                                      title: "Prazo",
+                                                      dataIndex: "end_date",
+                                                      width: 120,
+                                                      render: (value: string | null) => formatDate(value),
+                                                    },
+                                                    {
+                                                      title: "Acoes",
+                                                      width: 180,
+                                                      render: (subtask: TaskItem) => (
+                                                        <Space size="small" onClick={(event) => event.stopPropagation()}>
+                                                          <TipButton
+                                                            tip={HELP_TIPS.editar}
+                                                            size="small"
+                                                            icon={<EditOutlined />}
+                                                            onClick={() => openTask(subtask).catch(() => undefined)}
+                                                          >
+                                                            Editar
+                                                          </TipButton>
+                                                          <TipButton
+                                                            tip={HELP_TIPS.excluir}
+                                                            size="small"
+                                                            danger
+                                                            icon={<DeleteOutlined />}
+                                                            onClick={() =>
+                                                              openDeleteConfirmModal({
+                                                                title: "Excluir esta subtarefa?",
+                                                                onConfirm: async () => {
+                                                                  const ok = await deleteTaskById(subtask.id);
+                                                                  if (!ok) throw new Error("subtask_delete_failed");
+                                                                  await refreshTaskSubtasks(record.id);
+                                                                  setBoardListTasksByBoardId((prev) => ({
+                                                                    ...prev,
+                                                                    [boardId]: (prev[boardId] ?? []).map((task) =>
+                                                                      task.id === record.id
+                                                                        ? {
+                                                                            ...task,
+                                                                            subtasks_count: Math.max(
+                                                                              0,
+                                                                              (task.subtasks_count ?? 1) - 1,
+                                                                            ),
+                                                                          }
+                                                                        : task,
+                                                                    ),
+                                                                  }));
+                                                                },
+                                                              })
+                                                            }
+                                                          >
+                                                            Excluir
+                                                          </TipButton>
+                                                        </Space>
+                                                      ),
+                                                    },
+                                                  ]}
+                                                />
+                                              </Spin>
+                                              <Button
+                                                type="dashed"
+                                                icon={<PlusOutlined />}
+                                                style={{ marginTop: 10 }}
+                                                onClick={() => openCreateSubtaskModal(record)}
+                                              >
+                                                Adicionar subtarefa
+                                              </Button>
+                                            </div>
+                                          );
+                                        },
+                                      }}
                                       onRow={(record) => ({
                                         onClick: () => openTask(record),
                                         style: { cursor: "pointer" },
@@ -8247,6 +8438,14 @@ export function AppShell() {
                                               onClick={(event) => event.stopPropagation()}
                                             >
                                               <TipButton
+                                                tip="Adicionar subtarefa nesta tarefa"
+                                                size="small"
+                                                icon={<PlusOutlined />}
+                                                onClick={() => openCreateSubtaskModal(record)}
+                                              >
+                                                Subtarefa
+                                              </TipButton>
+                                              <TipButton
                                                 tip={HELP_TIPS.editar}
                                                 size="small"
                                                 icon={<EditOutlined />}
@@ -8261,7 +8460,10 @@ export function AppShell() {
                                                 icon={<DeleteOutlined />}
                                                 onClick={() =>
                                                   openDeleteConfirmModal({
-                                                    title: "Excluir esta tarefa?",
+                                                    title:
+                                                      (record.subtasks_count ?? 0) > 0
+                                                        ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                                        : "Excluir esta tarefa?",
                                                     onConfirm: async () => {
                                                       const ok = await deleteTaskById(record.id);
                                                       if (!ok) throw new Error("task_delete_failed");
@@ -9813,6 +10015,107 @@ export function AppShell() {
         </Form>
       </Modal>
 
+      <Modal
+        title={
+          createSubtaskParent
+            ? `Nova subtarefa em: ${createSubtaskParent.title}`
+            : "Nova subtarefa"
+        }
+        open={createSubtaskOpen}
+        confirmLoading={subtaskSaving}
+        onCancel={() => {
+          setCreateSubtaskOpen(false);
+          setCreateSubtaskParent(null);
+          createSubtaskForm.resetFields();
+        }}
+        onOk={() => createSubtaskForm.submit()}
+        okText="Criar subtarefa"
+        cancelText="Cancelar"
+        width={640}
+        destroyOnHidden={false}
+      >
+        <Form
+          layout="vertical"
+          form={createSubtaskForm}
+          initialValues={{ priority: "medium", status: "todo", effort_points: 1 }}
+          onFinish={(values) => void submitCreateSubtask(values)}
+        >
+          <Row gutter={[12, 0]}>
+            <Col xs={24}>
+              <Form.Item
+                name="title"
+                label="Titulo"
+                rules={[{ required: true, message: "Informe o titulo." }, { min: 2 }]}
+              >
+                <Input placeholder="Ex.: page views e sessoes por usuario" />
+              </Form.Item>
+            </Col>
+            <Col xs={24}>
+              <Form.Item name="description" label="Descricao">
+                <Input.TextArea rows={2} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="priority" label="Prioridade">
+                <Select
+                  options={[
+                    { value: "low", label: "Baixa" },
+                    { value: "medium", label: "Media" },
+                    { value: "high", label: "Alta" },
+                    { value: "critical", label: "Critica" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="status" label="Status inicial">
+                <Select options={statusOptions} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="effort_points" label="Esforco (horas previstas)">
+                <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="assignee_id" label="Responsavel">
+                <Select
+                  allowClear
+                  placeholder="Escolha o responsavel"
+                  showSearch
+                  filterOption={(input, option) => {
+                    const id = Number(option?.value ?? NaN);
+                    const row = taskAssigneePickList.find((u) => u.id === id);
+                    const haystack = `${row?.name ?? ""} ${row?.email ?? ""}`.toLowerCase();
+                    return haystack.includes(input.trim().toLowerCase());
+                  }}
+                  options={taskAssigneePickList.map((u) => {
+                    const initial = (u.name?.trim()?.[0] || u.email?.[0] || "?").toUpperCase();
+                    return {
+                      value: u.id,
+                      label: u.name,
+                      title: `${u.name} <${u.email}>`,
+                      searchLabel: `${u.name} ${u.email}`,
+                      children: (
+                        <Space size={8}>
+                          <Avatar size="small">{initial}</Avatar>
+                          <span>{u.name}</span>
+                        </Space>
+                      ),
+                    };
+                  })}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="end_date" label="Prazo final">
+                <Input type="datetime-local" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+
       <Drawer
         title={
           selectedTask
@@ -9929,47 +10232,48 @@ export function AppShell() {
               <Card
                 size="small"
                 title={`Subtarefas (${taskSubtasks.length || selectedTask.subtasks_count || 0})`}
+                extra={
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={() => openCreateSubtaskModal(selectedTask)}
+                  >
+                    Nova subtarefa
+                  </Button>
+                }
               >
-                <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-                  <Space.Compact style={{ width: "100%" }}>
-                    <Input
-                      value={subtaskTitleDraft}
-                      placeholder="Nova subtarefa..."
-                      maxLength={255}
-                      onChange={(event) => setSubtaskTitleDraft(event.target.value)}
-                      onPressEnter={() => void createSubtaskForSelected()}
-                    />
-                    <Button
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      loading={subtaskSaving}
-                      onClick={() => void createSubtaskForSelected()}
-                    >
-                      Adicionar
-                    </Button>
-                  </Space.Compact>
-                  {taskSubtasks.length === 0 ? (
-                    <Typography.Text type="secondary">Nenhuma subtarefa ainda.</Typography.Text>
-                  ) : (
-                    taskSubtasks.map((subtask) => (
-                      <Card
-                        key={subtask.id}
-                        type="inner"
-                        size="small"
-                        style={{ cursor: "pointer" }}
-                        onClick={() => void openTask(subtask)}
-                        extra={
-                          <Space size={4} onClick={(event) => event.stopPropagation()}>
-                            {renderStatusTag(subtask.status)}
-                            {renderPriorityTag(subtask.priority)}
-                          </Space>
-                        }
-                      >
-                        <Typography.Text strong>{subtask.title}</Typography.Text>
-                      </Card>
-                    ))
-                  )}
-                </Space>
+                {taskSubtasks.length === 0 ? (
+                  <Typography.Text type="secondary">
+                    Nenhuma subtarefa ainda. Use o botao para adicionar, ou expanda a tarefa na tabela do grupo.
+                  </Typography.Text>
+                ) : (
+                  <Table<TaskItem>
+                    rowKey="id"
+                    size="small"
+                    pagination={false}
+                    dataSource={taskSubtasks}
+                    onRow={(subtask) => ({
+                      onClick: () => void openTask(subtask),
+                      style: { cursor: "pointer" },
+                    })}
+                    columns={[
+                      { title: "Subtarefa", dataIndex: "title", ellipsis: true },
+                      {
+                        title: "Status",
+                        dataIndex: "status",
+                        width: 110,
+                        render: (value: string) => renderStatusTag(value),
+                      },
+                      {
+                        title: "Prioridade",
+                        dataIndex: "priority",
+                        width: 110,
+                        render: (value: string) => renderPriorityTag(value),
+                      },
+                    ]}
+                  />
+                )}
               </Card>
             )}
 
