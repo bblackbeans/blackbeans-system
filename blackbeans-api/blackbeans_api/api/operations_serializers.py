@@ -409,6 +409,32 @@ class TaskDependencyCreateSerializer(serializers.Serializer):
     depends_on_task_id = serializers.UUIDField()
 
 
+def task_attachment_to_representation(attachment: TaskAttachment, request=None) -> dict:
+    file_url = None
+    if attachment.file:
+        try:
+            file_url = attachment.file.url
+            if request is not None and file_url:
+                try:
+                    file_url = request.build_absolute_uri(file_url)
+                except Exception:
+                    # Em testes / hosts nao permitidos, devolve URL relativa.
+                    pass
+        except ValueError:
+            file_url = None
+    return {
+        "id": str(attachment.pk),
+        "task_id": str(attachment.task_id),
+        "comment_id": str(attachment.comment_id) if attachment.comment_id else None,
+        "author_id": attachment.author_id,
+        "filename": attachment.filename,
+        "content_type": attachment.content_type,
+        "size_bytes": attachment.size_bytes,
+        "url": file_url,
+        "created_at": attachment.created_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
 class TaskCommentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskComment
@@ -421,13 +447,17 @@ class TaskCommentUpdateSerializer(serializers.ModelSerializer):
         fields = ("content",)
 
 
-def task_comment_to_representation(comment: TaskComment) -> dict:
+def task_comment_to_representation(comment: TaskComment, request=None) -> dict:
+    attachments = getattr(comment, "_prefetched_objects_cache", {}).get("attachments")
+    if attachments is None:
+        attachments = comment.attachments.all()
     payload = {
         "id": str(comment.pk),
         "task_id": str(comment.task_id),
         "author_id": comment.author_id,
         "content": comment.content,
         "created_at": comment.created_at.isoformat().replace("+00:00", "Z"),
+        "attachments": [task_attachment_to_representation(item, request=request) for item in attachments],
     }
     # Compatibilidade: modelo antigo nao possui updated_at.
     payload["updated_at"] = payload["created_at"]
@@ -435,9 +465,11 @@ def task_comment_to_representation(comment: TaskComment) -> dict:
 
 
 class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
+    comment_id = serializers.UUIDField(required=False, allow_null=True)
+
     class Meta:
         model = TaskAttachment
-        fields = ("filename", "content_type", "size_bytes")
+        fields = ("filename", "content_type", "size_bytes", "comment_id")
 
     def validate_size_bytes(self, value):
         if value < 0:
@@ -445,6 +477,27 @@ class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
         if value > 20 * 1024 * 1024:
             raise serializers.ValidationError("Arquivo excede limite de 20MB.")
         return value
+
+    def validate_content_type(self, value):
+        raw = (value or "").strip().lower()
+        if not raw or raw == "application/octet-stream":
+            return raw
+        allowed_prefixes = ("image/", "application/pdf", "application/zip", "application/x-zip-compressed", "text/")
+        allowed_exact = {
+            "text/plain",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-powerpoint",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }
+        if raw.startswith(allowed_prefixes) or raw in allowed_exact:
+            return raw
+        raise serializers.ValidationError("Tipo de arquivo nao permitido.")
+
+
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 
 class TimeLogUpdateSerializer(serializers.Serializer):

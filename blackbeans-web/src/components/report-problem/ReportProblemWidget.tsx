@@ -42,9 +42,10 @@ import {
 type ReportProblemWidgetProps = {
   token: string;
   workspaceId?: string | null;
+  hidden?: boolean;
 };
 
-export function ReportProblemWidget({ token, workspaceId }: ReportProblemWidgetProps) {
+export function ReportProblemWidget({ token, workspaceId, hidden = false }: ReportProblemWidgetProps) {
   const [msg, msgHolder] = message.useMessage();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -274,7 +275,7 @@ export function ReportProblemWidget({ token, workspaceId }: ReportProblemWidgetP
   return (
     <>
       {msgHolder}
-      {!open ? (
+      {!open && !hidden ? (
         <div data-report-problem-ui style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100 }}>
           {isRecording ? (
             <Button

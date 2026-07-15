@@ -387,12 +387,31 @@ def test_story_3_8_comments_and_attachments(admin_client):
         format="json",
     )
     assert comment.status_code == status.HTTP_201_CREATED
+    comment_id = comment.data["data"]["comment"]["id"]
     attachment = admin_client.post(
         f"/api/v1/tasks/{task.pk}/attachments",
-        {"filename": "doc.txt", "content_type": "text/plain", "size_bytes": 10},
+        {"filename": "doc.txt", "content_type": "text/plain", "size_bytes": 10, "comment_id": comment_id},
         format="json",
     )
     assert attachment.status_code == status.HTTP_201_CREATED
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    uploaded = admin_client.post(
+        f"/api/v1/tasks/{task.pk}/attachments",
+        {
+            "comment_id": comment_id,
+            "file": SimpleUploadedFile("foto.png", b"\x89PNG\r\n\x1a\n", content_type="image/png"),
+        },
+        format="multipart",
+    )
+    assert uploaded.status_code == status.HTTP_201_CREATED
+    assert uploaded.data["data"]["attachment"]["filename"] == "foto.png"
+    assert uploaded.data["data"]["attachment"]["url"]
+
+    listed = admin_client.get(f"/api/v1/tasks/{task.pk}/comments")
+    assert listed.status_code == status.HTTP_200_OK
+    assert len(listed.data["data"]["comments"][0]["attachments"]) >= 2
 
 
 def test_story_3_9_task_activity_and_board_progress(admin_client):

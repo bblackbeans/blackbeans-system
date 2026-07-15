@@ -17,9 +17,11 @@ export type ApiResult<T = unknown> = {
 
 export async function apiRequest<T = unknown>(path: string, options: ApiOptions = {}): Promise<ApiResult<T>> {
   const { method = "GET", token, body } = options;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  const headers: Record<string, string> = {};
+  if (!isFormData) {
+    headers["Content-Type"] = "application/json";
+  }
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -32,7 +34,7 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
       response = await fetch(`${baseUrl}${path}`, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
         cache: "no-store",
       });
       break;
@@ -83,4 +85,19 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
     meta: payload.meta,
     correlationId,
   };
+}
+
+/** Resolve URL de media da API (relativa ou absoluta) para uso no browser. */
+export function resolveMediaUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (/^https?:\/\//i.test(url)) return url;
+  const path = url.startsWith("/") ? url : `/${url}`;
+  if (API_BASE_URL.startsWith("http")) {
+    try {
+      return `${new URL(API_BASE_URL).origin}${path}`;
+    } catch {
+      return path;
+    }
+  }
+  return path;
 }

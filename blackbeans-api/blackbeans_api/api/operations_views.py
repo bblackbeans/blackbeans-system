@@ -31,6 +31,8 @@ from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.operations_serializers import TimeLogUpdateSerializer
 from blackbeans_api.api.operations_serializers import time_log_to_representation
 from blackbeans_api.api.operations_serializers import task_comment_to_representation
+from blackbeans_api.api.operations_serializers import task_attachment_to_representation
+from blackbeans_api.api.operations_serializers import MAX_ATTACHMENT_BYTES
 from blackbeans_api.api.operations_serializers import portfolio_to_representation
 from blackbeans_api.api.operations_serializers import project_to_representation
 from blackbeans_api.api.operations_serializers import workspace_to_representation
@@ -1709,10 +1711,14 @@ class TaskCommentsView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        comments = TaskComment.objects.filter(task=task).order_by("created_at")
+        comments = (
+            TaskComment.objects.filter(task=task)
+            .prefetch_related("attachments")
+            .order_by("created_at")
+        )
         return success_response(
             correlation_id=correlation_id,
-            data={"comments": [task_comment_to_representation(item) for item in comments]},
+            data={"comments": [task_comment_to_representation(item, request=request) for item in comments]},
             meta={"total": comments.count()},
         )
 
@@ -1745,7 +1751,7 @@ class TaskCommentsView(APIView):
         )
         return success_response(
             correlation_id=correlation_id,
-            data={"comment": task_comment_to_representation(comment)},
+            data={"comment": task_comment_to_representation(comment, request=request)},
             http_status=status.HTTP_201_CREATED,
         )
 
@@ -1783,7 +1789,10 @@ class TaskCommentDetailView(APIView):
             event_type="task.comment_edited",
             summary=f"Comentario {comment.pk} editado.",
         )
-        return success_response(correlation_id=correlation_id, data={"comment": task_comment_to_representation(comment)})
+        return success_response(
+            correlation_id=correlation_id,
+            data={"comment": task_comment_to_representation(comment, request=request)},
+        )
 
     def delete(self, request: Request, task_id: UUID, comment_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1818,7 +1827,7 @@ class TaskCommentDetailView(APIView):
 
 
 class TaskAttachmentsView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1832,9 +1841,76 @@ class TaskAttachmentsView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        serializer = TaskAttachmentCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        attachment = TaskAttachment.objects.create(task=task, author=request.user, **serializer.validated_data)
+
+        uploaded = request.FILES.get("file")
+        comment = None
+        comment_id_raw = request.data.get("comment_id")
+        if comment_id_raw:
+            try:
+                comment = TaskComment.objects.get(pk=comment_id_raw, task_id=task.pk)
+            except (TaskComment.DoesNotExist, ValueError, TypeError):
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="comment_not_found",
+                    message="Comentario nao encontrado para esta tarefa.",
+                    details={},
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+
+        if uploaded is not None:
+            size_bytes = int(getattr(uploaded, "size", 0) or 0)
+            if size_bytes > MAX_ATTACHMENT_BYTES:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="file_too_large",
+                    message="Arquivo excede limite de 20MB.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            content_type = (getattr(uploaded, "content_type", None) or request.data.get("content_type") or "").strip()
+            filename = (getattr(uploaded, "name", None) or request.data.get("filename") or "arquivo").strip()
+            serializer = TaskAttachmentCreateSerializer(
+                data={
+                    "filename": filename[:255],
+                    "content_type": content_type,
+                    "size_bytes": size_bytes,
+                    "comment_id": comment.pk if comment else None,
+                },
+            )
+            serializer.is_valid(raise_exception=True)
+            attachment = TaskAttachment(
+                task=task,
+                author=request.user,
+                comment=comment,
+                filename=serializer.validated_data["filename"],
+                content_type=serializer.validated_data.get("content_type") or "",
+                size_bytes=serializer.validated_data["size_bytes"],
+            )
+            attachment.file = uploaded
+            attachment.save()
+        else:
+            serializer = TaskAttachmentCreateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            validated = serializer.validated_data
+            comment_id = validated.pop("comment_id", None)
+            if comment_id and comment is None:
+                try:
+                    comment = TaskComment.objects.get(pk=comment_id, task_id=task.pk)
+                except TaskComment.DoesNotExist:
+                    return error_response(
+                        correlation_id=correlation_id,
+                        code="comment_not_found",
+                        message="Comentario nao encontrado para esta tarefa.",
+                        details={},
+                        http_status=status.HTTP_404_NOT_FOUND,
+                    )
+            attachment = TaskAttachment.objects.create(
+                task=task,
+                author=request.user,
+                comment=comment,
+                **validated,
+            )
+
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
@@ -1843,17 +1919,7 @@ class TaskAttachmentsView(APIView):
         )
         return success_response(
             correlation_id=correlation_id,
-            data={
-                "attachment": {
-                    "id": str(attachment.pk),
-                    "task_id": str(task.pk),
-                    "author_id": attachment.author_id,
-                    "filename": attachment.filename,
-                    "content_type": attachment.content_type,
-                    "size_bytes": attachment.size_bytes,
-                    "created_at": attachment.created_at.isoformat().replace("+00:00", "Z"),
-                },
-            },
+            data={"attachment": task_attachment_to_representation(attachment, request=request)},
             http_status=status.HTTP_201_CREATED,
         )
 

@@ -18,6 +18,7 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  PaperClipOutlined,
   RightOutlined,
   SettingOutlined,
   ShopOutlined,
@@ -62,11 +63,12 @@ import {
 } from "antd";
 import type { SelectProps } from "antd/es/select";
 import type { MenuProps } from "antd";
+import type { UploadFile } from "antd/es/upload/interface";
 import type { ReactElement } from "react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiRequest } from "@/lib/api";
+import { apiRequest, resolveMediaUrl } from "@/lib/api";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { ProblemReportsPanel } from "@/components/report-problem/ProblemReportsPanel";
 import { ReportProblemWidget } from "@/components/report-problem/ReportProblemWidget";
@@ -142,11 +144,13 @@ const HELP_TIPS = {
   subirImagemPerfil: "Altera a foto exibida no perfil (salva localmente no navegador).",
   salvarPreferenciasEmail: "Grava como voce quer receber cada tipo de notificacao.",
   seguirTarefa: "Recebe avisos quando a tarefa for atualizada, comentada ou mudar de status.",
-  timerIniciar: "Inicia contagem de tempo nesta tarefa (so uma sessao ativa por vez).",
+  timerIniciar: "Inicia contagem de tempo nesta tarefa. Voce pode ter timers ativos em varias tarefas ao mesmo tempo.",
   timerPausar: "Pausa a contagem sem perder o tempo ja registrado.",
   timerRetomar: "Continua a contagem de onde parou.",
   timerConcluir: "Marca a tarefa como concluida e encerra timers abertos.",
   salvarStatus: "Atualiza o status da tarefa no servidor.",
+  salvarDescricao: "Salva a descricao da tarefa sem recarregar a pagina.",
+  salvarDetalhes: "Salva responsavel, prazo, prioridade e esforco.",
   marcarTodasLidas: "Remove o destaque de notificacoes nao lidas.",
   verTodasNotificacoes: "Abre a central completa de notificacoes.",
   buscarCliente: "Filtra clientes por nome, CNPJ ou contato.",
@@ -188,6 +192,81 @@ function menuLabel(text: string, tip: string) {
   return (
     <Tooltip title={tip} mouseEnterDelay={0.35}>
       <span>{text}</span>
+    </Tooltip>
+  );
+}
+
+const ASSIGNEE_AVATAR_COLORS = ["#1677ff", "#52c41a", "#fa8c16", "#eb2f96", "#722ed1", "#13c2c2", "#f5222d", "#2f54eb"];
+
+function assigneeAvatarColor(userId: number) {
+  return ASSIGNEE_AVATAR_COLORS[Math.abs(userId) % ASSIGNEE_AVATAR_COLORS.length];
+}
+
+function readStoredAvatarDataUrl(userId: number): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(`bb_profile_extra_${userId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { avatar_data_url?: string };
+    const value = String(parsed.avatar_data_url ?? "").trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function TaskAssigneeAvatar({
+  assigneeId,
+  users,
+  currentUserId,
+  currentUserName,
+  currentUserAvatarUrl,
+  size = "small",
+}: {
+  assigneeId: number | null | undefined;
+  users: Array<{ id: number; name: string; email?: string }>;
+  currentUserId: number | null;
+  currentUserName: string;
+  currentUserAvatarUrl: string | null;
+  size?: "small" | "default" | number;
+}) {
+  if (assigneeId == null) {
+    return (
+      <Tooltip title="Sem responsavel" mouseEnterDelay={0.2}>
+        <Avatar
+          size={size}
+          icon={<UserOutlined />}
+          style={{ backgroundColor: "#bfbfbf", color: "#fff" }}
+        />
+      </Tooltip>
+    );
+  }
+
+  const row = users.find((user) => user.id === assigneeId);
+  const isMe = currentUserId !== null && assigneeId === currentUserId;
+  const name = isMe
+    ? currentUserName
+    : row?.name?.trim() || row?.email?.trim() || `Usuario ${assigneeId}`;
+  const avatarUrl =
+    (isMe ? currentUserAvatarUrl : null) ||
+    readStoredAvatarDataUrl(assigneeId) ||
+    null;
+  const initial = (name.trim().charAt(0) || "?").toUpperCase();
+
+  return (
+    <Tooltip title={name} mouseEnterDelay={0.2}>
+      <Avatar
+        size={size}
+        src={avatarUrl || undefined}
+        style={{
+          backgroundColor: avatarUrl ? undefined : assigneeAvatarColor(assigneeId),
+          color: "#fff",
+          cursor: "default",
+          flexShrink: 0,
+        }}
+      >
+        {!avatarUrl ? initial : null}
+      </Avatar>
     </Tooltip>
   );
 }
@@ -279,6 +358,18 @@ type TaskActivity = {
   created_at: string;
 };
 
+type TaskCommentAttachment = {
+  id: string;
+  task_id: string;
+  comment_id?: string | null;
+  author_id: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  url?: string | null;
+  created_at: string;
+};
+
 type TaskCommentItem = {
   id: string;
   task_id: string;
@@ -286,6 +377,7 @@ type TaskCommentItem = {
   content: string;
   created_at: string;
   updated_at?: string;
+  attachments?: TaskCommentAttachment[];
 };
 
 type TimeLog = {
@@ -471,6 +563,28 @@ function isTokenExpired(token: string | null, nowMs: number = Date.now()): boole
 function formatDate(value: string | null | undefined) {
   if (!value) return "-";
   return new Date(value).toLocaleString("pt-BR");
+}
+
+/** Converte ISO UTC da API para valor de `<input type="datetime-local">` no fuso local. */
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Converte valor de datetime-local (horario local) para ISO UTC da API. */
+function fromDatetimeLocalValue(local: string | Date | null | undefined): string | null {
+  if (local == null || local === "") return null;
+  if (local instanceof Date) {
+    return Number.isNaN(local.getTime()) ? null : local.toISOString();
+  }
+  const raw = String(local).trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 function secondsToText(value: number) {
@@ -795,6 +909,40 @@ function parseCommentReplyMeta(content: string): { replyToId: string | null; cle
     };
   }
   return { replyToId: null, cleanContent: content };
+}
+
+function renderCommentAttachments(attachments: TaskCommentAttachment[] | undefined) {
+  if (!attachments || attachments.length === 0) return null;
+  return (
+    <Space wrap size={8} style={{ marginTop: 8 }}>
+      {attachments.map((file) => {
+        const isImage = (file.content_type || "").toLowerCase().startsWith("image/");
+        const href = resolveMediaUrl(file.url);
+        if (isImage && href) {
+          return (
+            <a key={file.id} href={href} target="_blank" rel="noreferrer" title={file.filename}>
+              <img
+                src={href}
+                alt={file.filename}
+                style={{
+                  width: 72,
+                  height: 72,
+                  objectFit: "cover",
+                  borderRadius: 8,
+                  border: "1px solid #f0f0f0",
+                }}
+              />
+            </a>
+          );
+        }
+        return (
+          <Button key={file.id} size="small" icon={<PaperClipOutlined />} href={href} target={href ? "_blank" : undefined}>
+            {file.filename}
+          </Button>
+        );
+      })}
+    </Space>
+  );
 }
 
 /** Rotulos PT para nomes de coluna do quadro vindos do banco (ex.: seed em ingles). */
@@ -1153,12 +1301,18 @@ export function AppShell() {
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
   const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
   const [expandedTaskKeysByBoardId, setExpandedTaskKeysByBoardId] = useState<Record<string, string[]>>({});
+  const [expandedMyWorkTaskKeys, setExpandedMyWorkTaskKeys] = useState<string[]>([]);
+  const [expandedAdminTasksKeys, setExpandedAdminTasksKeys] = useState<string[]>([]);
+  const assigneeFilterInitializedRef = useRef(false);
   const [loadingSubtasksParentId, setLoadingSubtasksParentId] = useState<string | null>(null);
   const [createSubtaskOpen, setCreateSubtaskOpen] = useState(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<TaskItem | null>(null);
   const [subtaskSaving, setSubtaskSaving] = useState(false);
   const [createSubtaskForm] = Form.useForm();
+  const [taskDetailsForm] = Form.useForm();
+  const [taskDescriptionForm] = Form.useForm();
   const [taskCommentDraft, setTaskCommentDraft] = useState("");
+  const [taskCommentFiles, setTaskCommentFiles] = useState<UploadFile[]>([]);
   const [taskCommentReplyTo, setTaskCommentReplyTo] = useState<TaskCommentItem | null>(null);
   const [taskCommentEditingId, setTaskCommentEditingId] = useState<string | null>(null);
   const [taskCommentEditingContent, setTaskCommentEditingContent] = useState("");
@@ -1414,6 +1568,13 @@ export function AppShell() {
     return taskSummary.total_seconds + deltaSeconds;
   }, [activeTimeLog, liveTickMs, selectedTask?.status, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
   const currentUserId = useMemo(() => getUserIdFromToken(token), [token]);
+
+  useEffect(() => {
+    if (currentUserId == null || assigneeFilterInitializedRef.current) return;
+    setTaskAssigneeFilter(String(currentUserId));
+    assigneeFilterInitializedRef.current = true;
+  }, [currentUserId]);
+
   const currentUserIdentity = useMemo(() => {
     const displayNameRaw =
       profileResult?.display_name ??
@@ -1428,10 +1589,39 @@ export function AppShell() {
           ? `Usuario ${currentUserId}`
           : "-";
     const avatarRaw = profileResult?.avatar_url ?? profileResult?.photo_url ?? profileResult?.image_url;
-    const avatarUrl = typeof avatarRaw === "string" && avatarRaw.trim().length > 0 ? avatarRaw : null;
+    const fromProfile = typeof avatarRaw === "string" && avatarRaw.trim().length > 0 ? avatarRaw.trim() : null;
+    const fromLocal = profileAvatarDataUrl.trim() || null;
+    const avatarUrl = fromLocal || fromProfile;
     const initial = displayName && displayName !== "-" ? displayName.charAt(0).toUpperCase() : "U";
     return { displayName, avatarUrl, initial };
-  }, [currentUserId, profileResult]);
+  }, [currentUserId, profileAvatarDataUrl, profileResult]);
+
+  const renderAssigneeAvatar = useCallback(
+    (assigneeId: number | null | undefined, size: "small" | "default" | number = "small") => (
+      <TaskAssigneeAvatar
+        assigneeId={assigneeId}
+        users={taskAssigneePickList}
+        currentUserId={currentUserId}
+        currentUserName={currentUserIdentity.displayName}
+        currentUserAvatarUrl={currentUserIdentity.avatarUrl}
+        size={size}
+      />
+    ),
+    [currentUserId, currentUserIdentity.avatarUrl, currentUserIdentity.displayName, taskAssigneePickList],
+  );
+
+  const assigneeColumn = useMemo(
+    () => ({
+      title: "Resp.",
+      key: "assignee",
+      width: 72,
+      align: "center" as const,
+      render: (_: unknown, record: TaskItem) => (
+        <span onClick={(event) => event.stopPropagation()}>{renderAssigneeAvatar(record.assignee_id)}</span>
+      ),
+    }),
+    [renderAssigneeAvatar],
+  );
   const resolveStatusMeta = useCallback(
     (value: string) => {
       const direct = statusPalette[value];
@@ -1589,6 +1779,7 @@ export function AppShell() {
     const sevenDaysFwdMs = nowMs + 7 * 24 * 60 * 60 * 1000;
     const normalizedSearch = taskSearchFilter.trim().toLowerCase();
     return tasksTabSource.filter((task) => {
+      if (task.parent_id) return false;
       if (taskStatusFilter !== "all" && task.status !== taskStatusFilter) return false;
       if (taskPriorityFilter !== "all" && task.priority !== taskPriorityFilter) return false;
       if (normalizedSearch.length > 0 && !task.title.toLowerCase().includes(normalizedSearch)) return false;
@@ -1707,6 +1898,7 @@ export function AppShell() {
     const endOfToday = startOfToday + 24 * 60 * 60 * 1000 - 1;
     const endOfWeek = startOfToday + 7 * 24 * 60 * 60 * 1000 - 1;
     return filteredTasks.filter((task) => {
+      if (task.parent_id) return false;
       const matchesPriority = myWorkPriorityFilter === "all" || task.priority === myWorkPriorityFilter;
       if (!matchesPriority) return false;
       const endMs = task.end_date ? new Date(task.end_date).getTime() : null;
@@ -2017,21 +2209,25 @@ export function AppShell() {
       const group = boardGroupsIndex[task.group_id];
       const projectName = board?.project_id ? projectNameById[board.project_id] ?? board.project_id : "-";
       const isCurrentUserTask = currentUserId !== null && task.assignee_id === currentUserId;
+      const pick = task.assignee_id != null ? taskAssigneePickList.find((u) => u.id === task.assignee_id) : null;
       const personLabel = isCurrentUserTask
         ? currentUserIdentity.displayName
-        : task.assignee_id
-          ? `Usuario ${task.assignee_id}`
-          : "-";
+        : pick?.name || (task.assignee_id ? `Usuario ${task.assignee_id}` : "Sem responsavel");
+      const personAvatarUrl = isCurrentUserTask
+        ? currentUserIdentity.avatarUrl
+        : task.assignee_id != null
+          ? readStoredAvatarDataUrl(task.assignee_id)
+          : null;
       return {
         personLabel,
-        personAvatarUrl: isCurrentUserTask ? currentUserIdentity.avatarUrl : null,
-        personInitial: isCurrentUserTask ? currentUserIdentity.initial : personLabel.charAt(0).toUpperCase(),
+        personAvatarUrl,
+        personInitial: personLabel.charAt(0).toUpperCase() || "?",
         projectLabel: projectName,
         boardLabel: board?.name ?? task.board_id,
         groupLabel: group?.name ?? task.group_id,
       };
     },
-    [boardById, boardGroupsIndex, currentUserId, currentUserIdentity, projectNameById],
+    [boardById, boardGroupsIndex, currentUserId, currentUserIdentity, projectNameById, taskAssigneePickList],
   );
 
   const fetchHealth = useCallback(async () => {
@@ -3202,7 +3398,19 @@ export function AppShell() {
     setTaskCommentReplyTo(null);
     setTaskCommentEditingId(null);
     setTaskCommentEditingContent("");
+    setTaskCommentDraft("");
+    setTaskCommentFiles([]);
     setTaskSubtasks([]);
+    taskDetailsForm.setFieldsValue({
+      title: task.title,
+      priority: task.priority,
+      effort_points: task.effort_points,
+      assignee_id: task.assignee_id ?? undefined,
+      end_date: toDatetimeLocalValue(task.end_date) || undefined,
+    });
+    taskDescriptionForm.setFieldsValue({
+      description: task.description ?? "",
+    });
     void hydrateTaskAssigneePickList();
     void fetchNotificationSubscriptions();
     const [activityResp, summaryResp, groupsResp, commentsResp, subtasksResp] = await Promise.all([
@@ -3240,6 +3448,38 @@ export function AppShell() {
           "Falha ao carregar detalhes da tarefa.",
       );
     }
+  }
+
+  function applyUpdatedTaskLocally(updated: TaskItem) {
+    const merge = (list: TaskItem[]) =>
+      list.map((row) => (row.id === updated.id ? { ...row, ...updated } : row));
+    setTasks((prev) => merge(prev));
+    setAllTasks((prev) => merge(prev));
+    setBoardListTasksByBoardId((prev) => {
+      const next: Record<string, TaskItem[]> = { ...prev };
+      for (const boardId of Object.keys(next)) {
+        next[boardId] = merge(next[boardId] ?? []);
+      }
+      return next;
+    });
+    setBoardKanbanByBoardId((prev) => {
+      const next: Record<string, KanbanGroup[]> = { ...prev };
+      for (const boardId of Object.keys(next)) {
+        next[boardId] = (next[boardId] ?? []).map((group) => ({
+          ...group,
+          tasks: merge(group.tasks),
+        }));
+      }
+      return next;
+    });
+    setSubtasksByParentId((prev) => {
+      const next: Record<string, TaskItem[]> = { ...prev };
+      for (const parentId of Object.keys(next)) {
+        next[parentId] = merge(next[parentId] ?? []);
+      }
+      return next;
+    });
+    setTaskSubtasks((prev) => merge(prev));
   }
 
   async function refreshTaskSubtasks(taskId: string) {
@@ -3306,7 +3546,7 @@ export function AppShell() {
           priority: values.priority ?? createSubtaskParent.priority,
           effort_points: values.effort_points ?? 1,
           assignee_id: values.assignee_id ?? null,
-          end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
+          end_date: fromDatetimeLocalValue(values.end_date),
         },
       });
       if (!response.ok) {
@@ -3344,9 +3584,114 @@ export function AppShell() {
     }
   }
 
+  function nestedSubtasksForParent(parentId: string, onlyMine: boolean) {
+    const rows = subtasksByParentId[parentId] ?? [];
+    if (!onlyMine || currentUserId == null) return rows;
+    return rows.filter((task) => task.assignee_id === currentUserId);
+  }
+
+  function renderExpandableSubtasks(record: TaskItem, onlyMine: boolean) {
+    const nested = nestedSubtasksForParent(record.id, onlyMine);
+    const nestedLoading = loadingSubtasksParentId === record.id;
+    return (
+      <div
+        style={{
+          margin: "4px 0 8px 12px",
+          padding: "10px 12px",
+          borderLeft: "3px solid #d9d9d9",
+          background: "#fafafa",
+          borderRadius: 8,
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+          Subtarefas de {record.title}
+          {onlyMine ? " (somente as suas)" : ""}
+        </Typography.Text>
+        <Spin spinning={nestedLoading}>
+          <Table<TaskItem>
+            rowKey="id"
+            size="small"
+            pagination={false}
+            locale={{ emptyText: onlyMine ? "Nenhuma subtarefa atribuida a voce." : "Nenhuma subtarefa ainda." }}
+            dataSource={nested}
+            onRow={(subtask) => ({
+              onClick: () => void openTask(subtask),
+              style: { cursor: "pointer" },
+            })}
+            columns={[
+              { title: "Subtarefa", dataIndex: "title", ellipsis: true },
+              assigneeColumn,
+              {
+                title: "Status",
+                dataIndex: "status",
+                width: 120,
+                render: (value: string) => renderStatusTag(value),
+              },
+              {
+                title: "Prioridade",
+                dataIndex: "priority",
+                width: 120,
+                render: (value: string) => renderPriorityTag(value),
+              },
+              {
+                title: "Prazo",
+                dataIndex: "end_date",
+                width: 140,
+                render: (value: string | null) => formatDate(value),
+              },
+              {
+                title: "Acoes",
+                width: 180,
+                render: (subtask: TaskItem) => (
+                  <Space size="small" onClick={(event) => event.stopPropagation()}>
+                    <TipButton
+                      tip={HELP_TIPS.editar}
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => openTask(subtask).catch(() => undefined)}
+                    >
+                      Editar
+                    </TipButton>
+                    <TipButton
+                      tip={HELP_TIPS.excluir}
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() =>
+                        openDeleteConfirmModal({
+                          title: "Excluir esta subtarefa?",
+                          onConfirm: async () => {
+                            const ok = await deleteTaskById(subtask.id);
+                            if (!ok) throw new Error("subtask_delete_failed");
+                            await refreshTaskSubtasks(record.id);
+                          },
+                        })
+                      }
+                    >
+                      Excluir
+                    </TipButton>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Spin>
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          style={{ marginTop: 10 }}
+          onClick={() => openCreateSubtaskModal(record)}
+        >
+          Adicionar subtarefa
+        </Button>
+      </div>
+    );
+  }
+
   async function taskAction(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
     if (!selectedTask) return;
-    const response = await apiRequest(path, { method, token, body });
+    const response = await apiRequest<{ task?: TaskItem }>(path, { method, token, body });
     if (!response.ok) {
       apiMessage.error(response.error?.message ?? "Falha na acao da tarefa.");
       setGlobalError(response.error?.message ?? "Falha na acao da tarefa.");
@@ -3354,9 +3699,36 @@ export function AppShell() {
     }
     setGlobalError(null);
     apiMessage.success("Acao executada com sucesso.");
+    const updatedFromApi = response.data?.task;
+    const nextTask: TaskItem = updatedFromApi
+      ? { ...selectedTask, ...updatedFromApi }
+      : selectedTask;
+    if (updatedFromApi) {
+      applyUpdatedTaskLocally(nextTask);
+      setSelectedTask(nextTask);
+      taskDetailsForm.setFieldsValue({
+        title: nextTask.title,
+        priority: nextTask.priority,
+        effort_points: nextTask.effort_points,
+        assignee_id: nextTask.assignee_id ?? undefined,
+        end_date: toDatetimeLocalValue(nextTask.end_date) || undefined,
+      });
+      taskDescriptionForm.setFieldsValue({
+        description: nextTask.description ?? "",
+      });
+    }
     await fetchTasks();
-    await openTask(selectedTask);
+    if (isAdmin) {
+      await fetchAllTasks().catch(() => undefined);
+    }
+    const projectId =
+      selectedProjectId ??
+      boards.find((board) => board.id === nextTask.board_id)?.project_id ??
+      null;
+    await refreshBoardViewsForProject(projectId);
+    await openTask(nextTask, taskDrawerTab);
   }
+
   async function refreshTaskComments(taskId: string) {
     const response = await apiRequest<{ comments: TaskCommentItem[] }>(`/tasks/${taskId}/comments`, { token });
     if (!response.ok) {
@@ -3366,8 +3738,27 @@ export function AppShell() {
     setTaskComments(response.data?.comments ?? []);
     return true;
   }
+
+  async function uploadCommentAttachments(taskId: string, commentId: string, files: UploadFile[]) {
+    for (const item of files) {
+      const blob = item.originFileObj;
+      if (!blob) continue;
+      const formData = new FormData();
+      formData.append("file", blob as File);
+      formData.append("comment_id", commentId);
+      const uploadResp = await apiRequest(`/tasks/${taskId}/attachments`, {
+        method: "POST",
+        token,
+        body: formData,
+      });
+      if (!uploadResp.ok) {
+        apiMessage.error(uploadResp.error?.message ?? `Falha ao enviar ${item.name || "anexo"}.`);
+      }
+    }
+  }
+
   async function createTaskComment(taskId: string, rawContent: string) {
-    const content = rawContent.trim();
+    const content = rawContent.trim() || (taskCommentFiles.length > 0 ? "Anexo(s)" : "");
     if (!content) return;
     const payload = taskCommentReplyTo
       ? `[reply_to:${taskCommentReplyTo.id}] ${content}`
@@ -3381,7 +3772,12 @@ export function AppShell() {
       apiMessage.error(response.error?.message ?? "Falha ao adicionar comentario.");
       return;
     }
+    const commentId = response.data?.comment?.id;
+    if (commentId && taskCommentFiles.length > 0) {
+      await uploadCommentAttachments(taskId, commentId, taskCommentFiles);
+    }
     setTaskCommentDraft("");
+    setTaskCommentFiles([]);
     setTaskCommentReplyTo(null);
     await refreshTaskComments(taskId);
     apiMessage.success("Atualizacao registrada.");
@@ -4315,12 +4711,37 @@ export function AppShell() {
                           rowKey="id"
                           dataSource={myWorkFilteredTasks}
                           pagination={{ pageSize: 8 }}
+                          expandable={{
+                            expandedRowKeys: expandedMyWorkTaskKeys,
+                            onExpand: (expanded, record) => {
+                              setExpandedMyWorkTaskKeys((prev) =>
+                                expanded
+                                  ? Array.from(new Set([...prev, record.id]))
+                                  : prev.filter((key) => key !== record.id),
+                              );
+                              if (expanded) void refreshTaskSubtasks(record.id);
+                            },
+                            rowExpandable: (record) => !record.parent_id,
+                            expandedRowRender: (record) => renderExpandableSubtasks(record, true),
+                          }}
                           onRow={(record) => ({
                             onClick: () => openTask(record),
                             style: { cursor: "pointer" },
                           })}
                           columns={[
-                            { title: "Titulo", dataIndex: "title" },
+                            {
+                              title: "Titulo",
+                              dataIndex: "title",
+                              render: (value: string, record: TaskItem) => (
+                                <Space size={6}>
+                                  <span>{value}</span>
+                                  {(record.subtasks_count ?? 0) > 0 ? (
+                                    <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+                                  ) : null}
+                                </Space>
+                              ),
+                            },
+                            assigneeColumn,
                             {
                               title: "Projeto",
                               render: (record: TaskItem) => taskContext(record).projectLabel,
@@ -4375,6 +4796,14 @@ export function AppShell() {
                               render: (record: TaskItem) => (
                                 <Space onClick={(event) => event.stopPropagation()}>
                                   <TipButton
+                                    tip="Adicionar subtarefa nesta tarefa"
+                                    size="small"
+                                    icon={<PlusOutlined />}
+                                    onClick={() => openCreateSubtaskModal(record)}
+                                  >
+                                    Subtarefa
+                                  </TipButton>
+                                  <TipButton
                                     tip={HELP_TIPS.editar}
                                     size="small"
                                     icon={<EditOutlined />}
@@ -4389,7 +4818,10 @@ export function AppShell() {
                                     icon={<DeleteOutlined />}
                                     onClick={() =>
                                       openDeleteConfirmModal({
-                                        title: "Excluir esta tarefa?",
+                                        title:
+                                          (record.subtasks_count ?? 0) > 0
+                                            ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                            : "Excluir esta tarefa?",
                                         onConfirm: async () => {
                                           const ok = await deleteTaskById(record.id);
                                           if (!ok) throw new Error("delete_failed");
@@ -4463,7 +4895,7 @@ export function AppShell() {
                                 status: values.status,
                                 effort_points: values.effort_points ?? 1,
                                 assignee_id: currentUserId,
-                                end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
+                                end_date: fromDatetimeLocalValue(values.end_date),
                                 project_id: selectedBoard.project_id,
                               },
                               "Tarefa criada e atribuida a voce.",
@@ -4567,7 +4999,7 @@ export function AppShell() {
                             setTaskPriorityFilter("all");
                             setTaskProjectFilter("all");
                             setTaskBoardFilter("all");
-                            setTaskAssigneeFilter("all");
+                            setTaskAssigneeFilter(currentUserId != null ? String(currentUserId) : "all");
                             setTaskPeriodFilter("this_week");
                             setTaskSearchFilter("");
                           }}
@@ -4659,9 +5091,14 @@ export function AppShell() {
                         showSearch
                         optionFilterProp="label"
                         options={[
+                          ...(currentUserId != null
+                            ? [{ value: String(currentUserId), label: "Eu (meu responsavel)" }]
+                            : []),
                           { value: "all", label: "Todos os responsaveis" },
                           { value: "unassigned", label: "Sem responsavel" },
-                          ...adminUsersCache.map((u) => ({ value: String(u.id), label: u.name || u.email || `Usuario ${u.id}` })),
+                          ...adminUsersCache
+                            .filter((u) => currentUserId == null || u.id !== currentUserId)
+                            .map((u) => ({ value: String(u.id), label: u.name || u.email || `Usuario ${u.id}` })),
                         ]}
                       />
                       <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
@@ -4679,12 +5116,41 @@ export function AppShell() {
                       loading={allTasksLoading}
                       dataSource={tasksTabFiltered}
                       pagination={{ pageSize: 8 }}
+                      expandable={{
+                        expandedRowKeys: expandedAdminTasksKeys,
+                        onExpand: (expanded, record) => {
+                          setExpandedAdminTasksKeys((prev) =>
+                            expanded
+                              ? Array.from(new Set([...prev, record.id]))
+                              : prev.filter((key) => key !== record.id),
+                          );
+                          if (expanded) void refreshTaskSubtasks(record.id);
+                        },
+                        rowExpandable: (record) => !record.parent_id,
+                        expandedRowRender: (record) =>
+                          renderExpandableSubtasks(
+                            record,
+                            currentUserId != null && taskAssigneeFilter === String(currentUserId),
+                          ),
+                      }}
                       onRow={(record) => ({
                         onClick: () => openTask(record),
                         style: { cursor: "pointer" },
                       })}
                       columns={[
-                        { title: "Titulo", dataIndex: "title" },
+                        {
+                          title: "Titulo",
+                          dataIndex: "title",
+                          render: (value: string, record: TaskItem) => (
+                            <Space size={6}>
+                              <span>{value}</span>
+                              {(record.subtasks_count ?? 0) > 0 ? (
+                                <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+                              ) : null}
+                            </Space>
+                          ),
+                        },
+                        assigneeColumn,
                         {
                           title: "Projeto",
                           render: (record: TaskItem) => taskContext(record).projectLabel,
@@ -4723,6 +5189,14 @@ export function AppShell() {
                           render: (record: TaskItem) => (
                             <Space onClick={(event) => event.stopPropagation()}>
                               <TipButton
+                                tip="Adicionar subtarefa nesta tarefa"
+                                size="small"
+                                icon={<PlusOutlined />}
+                                onClick={() => openCreateSubtaskModal(record)}
+                              >
+                                Subtarefa
+                              </TipButton>
+                              <TipButton
                                 tip={HELP_TIPS.editar}
                                 size="small"
                                 icon={<EditOutlined />}
@@ -4737,7 +5211,10 @@ export function AppShell() {
                                 icon={<DeleteOutlined />}
                                 onClick={() =>
                                   openDeleteConfirmModal({
-                                    title: "Excluir esta tarefa?",
+                                    title:
+                                      (record.subtasks_count ?? 0) > 0
+                                        ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                        : "Excluir esta tarefa?",
                                     onConfirm: async () => {
                                       const ok = await deleteTaskById(record.id);
                                       if (!ok) throw new Error("delete_failed");
@@ -8233,16 +8710,9 @@ export function AppShell() {
                                                       {renderStatusTag(task.status)}
                                                       {renderPriorityTag(task.priority)}
                                                       <Tag color="purple">Horas {formatEffortHoursDisplay(task.effort_points)}</Tag>
-                                                      {task.assignee_id ? (
-                                                        <Tag color="blue">
-                                                          Resp.:{" "}
-                                                          {(() => {
-                                                            const sid = task.assignee_id;
-                                                            const row = taskAssigneePickList.find((u) => u.id === sid);
-                                                            return row ? row.name : `Usuario ${sid}`;
-                                                          })()}
-                                                        </Tag>
-                                                      ) : null}
+                                                      <span style={{ display: "inline-flex", verticalAlign: "middle", marginRight: 4 }}>
+                                                        {renderAssigneeAvatar(task.assignee_id, 26)}
+                                                      </span>
                                                       {task.end_date ? <Tag color="orange">Prazo {formatDate(task.end_date)}</Tag> : null}
                                                     </div>
                                                     <div onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
@@ -8295,120 +8765,7 @@ export function AppShell() {
                                           }
                                         },
                                         rowExpandable: (record) => !record.parent_id,
-                                        expandedRowRender: (record) => {
-                                          const nested = subtasksByParentId[record.id] ?? [];
-                                          const nestedLoading = loadingSubtasksParentId === record.id;
-                                          return (
-                                            <div
-                                              style={{
-                                                margin: "4px 0 8px 12px",
-                                                padding: "10px 12px",
-                                                borderLeft: "3px solid #d9d9d9",
-                                                background: "#fafafa",
-                                                borderRadius: 8,
-                                              }}
-                                              onClick={(event) => event.stopPropagation()}
-                                            >
-                                              <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                                                Subtarefas de {record.title}
-                                              </Typography.Text>
-                                              <Spin spinning={nestedLoading}>
-                                                <Table<TaskItem>
-                                                  rowKey="id"
-                                                  size="small"
-                                                  pagination={false}
-                                                  locale={{ emptyText: "Nenhuma subtarefa ainda." }}
-                                                  dataSource={nested}
-                                                  onRow={(subtask) => ({
-                                                    onClick: () => void openTask(subtask),
-                                                    style: { cursor: "pointer" },
-                                                  })}
-                                                  columns={[
-                                                    {
-                                                      title: "Subtarefa",
-                                                      dataIndex: "title",
-                                                      ellipsis: true,
-                                                    },
-                                                    {
-                                                      title: "Status",
-                                                      dataIndex: "status",
-                                                      width: 120,
-                                                      render: (value: string) => renderStatusTag(value),
-                                                    },
-                                                    {
-                                                      title: "Prioridade",
-                                                      dataIndex: "priority",
-                                                      width: 120,
-                                                      render: (value: string) => renderPriorityTag(value),
-                                                    },
-                                                    {
-                                                      title: "Prazo",
-                                                      dataIndex: "end_date",
-                                                      width: 120,
-                                                      render: (value: string | null) => formatDate(value),
-                                                    },
-                                                    {
-                                                      title: "Acoes",
-                                                      width: 180,
-                                                      render: (subtask: TaskItem) => (
-                                                        <Space size="small" onClick={(event) => event.stopPropagation()}>
-                                                          <TipButton
-                                                            tip={HELP_TIPS.editar}
-                                                            size="small"
-                                                            icon={<EditOutlined />}
-                                                            onClick={() => openTask(subtask).catch(() => undefined)}
-                                                          >
-                                                            Editar
-                                                          </TipButton>
-                                                          <TipButton
-                                                            tip={HELP_TIPS.excluir}
-                                                            size="small"
-                                                            danger
-                                                            icon={<DeleteOutlined />}
-                                                            onClick={() =>
-                                                              openDeleteConfirmModal({
-                                                                title: "Excluir esta subtarefa?",
-                                                                onConfirm: async () => {
-                                                                  const ok = await deleteTaskById(subtask.id);
-                                                                  if (!ok) throw new Error("subtask_delete_failed");
-                                                                  await refreshTaskSubtasks(record.id);
-                                                                  setBoardListTasksByBoardId((prev) => ({
-                                                                    ...prev,
-                                                                    [boardId]: (prev[boardId] ?? []).map((task) =>
-                                                                      task.id === record.id
-                                                                        ? {
-                                                                            ...task,
-                                                                            subtasks_count: Math.max(
-                                                                              0,
-                                                                              (task.subtasks_count ?? 1) - 1,
-                                                                            ),
-                                                                          }
-                                                                        : task,
-                                                                    ),
-                                                                  }));
-                                                                },
-                                                              })
-                                                            }
-                                                          >
-                                                            Excluir
-                                                          </TipButton>
-                                                        </Space>
-                                                      ),
-                                                    },
-                                                  ]}
-                                                />
-                                              </Spin>
-                                              <Button
-                                                type="dashed"
-                                                icon={<PlusOutlined />}
-                                                style={{ marginTop: 10 }}
-                                                onClick={() => openCreateSubtaskModal(record)}
-                                              >
-                                                Adicionar subtarefa
-                                              </Button>
-                                            </div>
-                                          );
-                                        },
+                                        expandedRowRender: (record) => renderExpandableSubtasks(record, false),
                                       }}
                                       onRow={(record) => ({
                                         onClick: () => openTask(record),
@@ -8429,6 +8786,7 @@ export function AppShell() {
                                         },
                                         { title: "Status", dataIndex: "status", render: (value: string) => renderStatusTag(value) },
                                         { title: "Prioridade", dataIndex: "priority", render: (value: string) => renderPriorityTag(value) },
+                                        assigneeColumn,
                                         { title: "Prazo", dataIndex: "end_date", render: (value: string | null) => formatDate(value) },
                                         {
                                           title: "Acoes",
@@ -9927,7 +10285,7 @@ export function AppShell() {
               ...values,
               group_id: groupId,
               effort_points: values.effort_points ?? 1,
-              end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
+              end_date: fromDatetimeLocalValue(values.end_date),
               project_id: targetBoard.project_id,
             });
             if (ok) {
@@ -10146,15 +10504,17 @@ export function AppShell() {
                 {renderStatusTag(selectedTask.status)}
                 {renderPriorityTag(selectedTask.priority)}
                 <Tag color="purple">Esforco: {formatEffortHoursDisplay(selectedTask.effort_points)}</Tag>
-                <Tag color="blue">
-                  Responsavel:{" "}
-                  {(() => {
-                    const sid = selectedTask.assignee_id;
-                    if (sid == null) return "—";
-                    const opt = taskAssigneePickList.find((u) => u.id === sid);
-                    return opt ? opt.name : `Usuario ${sid}`;
-                  })()}
-                </Tag>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  {renderAssigneeAvatar(selectedTask.assignee_id, 28)}
+                  <Typography.Text>
+                    {(() => {
+                      const sid = selectedTask.assignee_id;
+                      if (sid == null) return "Sem responsavel";
+                      const opt = taskAssigneePickList.find((u) => u.id === sid);
+                      return opt ? opt.name : `Usuario ${sid}`;
+                    })()}
+                  </Typography.Text>
+                </span>
                 <Tag>Inicio: {formatDate(selectedTask.start_date)}</Tag>
                 <Tag>Prazo: {formatDate(selectedTask.end_date)}</Tag>
               </Space>
@@ -10177,7 +10537,7 @@ export function AppShell() {
                   tip={HELP_TIPS.timerIniciar}
                   icon={<PlayCircleOutlined />}
                   type={activeTimeLog ? "default" : "primary"}
-                  disabled={selectedTask.status === "done" || Boolean(activeTimeLog)}
+                  disabled={Boolean(activeTimeLog)}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}
                 >
                   Iniciar
@@ -10185,7 +10545,7 @@ export function AppShell() {
                 <TipButton
                   tip={HELP_TIPS.timerPausar}
                   icon={<PauseCircleOutlined />}
-                  disabled={selectedTask.status === "done" || !activeTimeLog}
+                  disabled={!activeTimeLog}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/pause`, "POST", {})}
                 >
                   Pausar
@@ -10193,7 +10553,7 @@ export function AppShell() {
                 <TipButton
                   tip={HELP_TIPS.timerRetomar}
                   icon={<PlayCircleOutlined />}
-                  disabled={selectedTask.status === "done" || !pausedTimeLog}
+                  disabled={!pausedTimeLog}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/resume`, "POST", {})}
                 >
                   Retomar
@@ -10214,12 +10574,121 @@ export function AppShell() {
             </Card>
 
             <Card size="small" title="Descricao">
-              {selectedTask.description ? (
+              {(isAdmin || selectedTask.assignee_id == null || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
+                <Form
+                  key={`task-description-${selectedTask.id}-${selectedTask.updated_at ?? selectedTask.description}`}
+                  form={taskDescriptionForm}
+                  layout="vertical"
+                  initialValues={{ description: selectedTask.description ?? "" }}
+                  onFinish={(values) =>
+                    void taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
+                      description: values.description ?? "",
+                    })
+                  }
+                >
+                  <Form.Item name="description" style={{ marginBottom: 8 }}>
+                    <Input.TextArea rows={4} placeholder="Clique para editar a descricao..." />
+                  </Form.Item>
+                  <TipButton tip={HELP_TIPS.salvarDescricao} type="primary" htmlType="submit">
+                    Salvar descricao
+                  </TipButton>
+                </Form>
+              ) : selectedTask.description ? (
                 <Typography.Paragraph style={{ marginBottom: 0 }}>{selectedTask.description}</Typography.Paragraph>
               ) : (
                 <Typography.Text type="secondary">Sem descricao cadastrada.</Typography.Text>
               )}
             </Card>
+
+            {(isAdmin || selectedTask.assignee_id == null || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
+              <Card size="small" title="Detalhes">
+                <Form
+                  key={`task-details-${selectedTask.id}-${selectedTask.updated_at ?? ""}`}
+                  form={taskDetailsForm}
+                  layout="vertical"
+                  initialValues={{
+                    title: selectedTask.title,
+                    priority: selectedTask.priority,
+                    effort_points: selectedTask.effort_points,
+                    assignee_id: selectedTask.assignee_id ?? undefined,
+                    end_date: toDatetimeLocalValue(selectedTask.end_date) || undefined,
+                  }}
+                  onFinish={(values) =>
+                    void taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
+                      title: values.title,
+                      priority: values.priority,
+                      effort_points:
+                        values.effort_points === undefined || values.effort_points === null
+                          ? selectedTask.effort_points
+                          : Number(values.effort_points),
+                      assignee_id:
+                        values.assignee_id === undefined || values.assignee_id === null || values.assignee_id === ""
+                          ? null
+                          : Number(values.assignee_id),
+                      end_date: fromDatetimeLocalValue(values.end_date),
+                    })
+                  }
+                >
+                  <Form.Item label="Titulo" name="title" rules={[{ required: true, message: "Informe o titulo." }]}>
+                    <Input />
+                  </Form.Item>
+                  <Row gutter={12}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item label="Responsavel" name="assignee_id">
+                        <Select
+                          allowClear
+                          placeholder="Sem responsavel"
+                          showSearch
+                          filterOption={(input, option) => {
+                            const id = Number(option?.value ?? NaN);
+                            const row = taskAssigneePickList.find((u) => u.id === id);
+                            const haystack = `${row?.name ?? ""} ${row?.email ?? ""}`.toLowerCase();
+                            return haystack.includes(input.trim().toLowerCase());
+                          }}
+                          options={taskAssigneePickList.map((u) => {
+                            const initial = u.name.trim().slice(0, 1).toUpperCase() || "?";
+                            return {
+                              value: u.id,
+                              label: (
+                                <Space size={8}>
+                                  <Avatar size="small">{initial}</Avatar>
+                                  <span>{u.name}</span>
+                                </Space>
+                              ),
+                            };
+                          })}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item label="Prazo final" name="end_date">
+                        <Input type="datetime-local" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item label="Prioridade" name="priority" rules={[{ required: true }]}>
+                        <Select
+                          options={[
+                            { label: "Baixa", value: "low" },
+                            { label: "Media", value: "medium" },
+                            { label: "Alta", value: "high" },
+                            { label: "Critica", value: "critical" },
+                          ]}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item label="Esforco previsto (h)" name="effort_points">
+                        <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <TipButton tip={HELP_TIPS.salvarDetalhes} type="primary" htmlType="submit">
+                    Salvar detalhes
+                  </TipButton>
+                </Form>
+              </Card>
+            ) : null}
 
             {selectedTask.parent_id ? (
               <Alert
@@ -10259,6 +10728,7 @@ export function AppShell() {
                     })}
                     columns={[
                       { title: "Subtarefa", dataIndex: "title", ellipsis: true },
+                      assigneeColumn,
                       {
                         title: "Status",
                         dataIndex: "status",
@@ -10277,7 +10747,7 @@ export function AppShell() {
               </Card>
             )}
 
-            {(isAdmin || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
+            {(isAdmin || selectedTask.assignee_id == null || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
               <Card size="small" title="Alterar status">
                 <Form
                   key={`task-status-form-${selectedTask.id}`}
@@ -10295,84 +10765,6 @@ export function AppShell() {
                     Salvar status
                   </TipButton>
                 </Form>
-              </Card>
-            ) : null}
-
-            {isAdmin ? (
-              <Card size="small" title="Edicao rapida">
-            <Form
-              key={`quick-edit-${selectedTask.id}`}
-              layout="vertical"
-              onFinish={(values) =>
-                taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
-                  title: values.title,
-                  description: values.description,
-                  priority: values.priority,
-                  effort_points: values.effort_points,
-                  assignee_id: values.assignee_id ?? null,
-                  end_date: values.end_date ? new Date(values.end_date).toISOString() : null,
-                })
-              }
-              initialValues={{
-                title: selectedTask.title,
-                description: selectedTask.description,
-                priority: selectedTask.priority,
-                effort_points: selectedTask.effort_points,
-                assignee_id: selectedTask.assignee_id ?? undefined,
-                end_date: selectedTask.end_date ? selectedTask.end_date.slice(0, 16) : null,
-              }}
-            >
-              <Form.Item label="Titulo" name="title" rules={[{ required: true }]}>
-                <Input />
-              </Form.Item>
-              <Form.Item label="Descricao" name="description">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-              <Form.Item label="Prioridade" name="priority" rules={[{ required: true }]}>
-                <Select
-                  options={[
-                    { label: "Baixa", value: "low" },
-                    { label: "Media", value: "medium" },
-                    { label: "Alta", value: "high" },
-                    { label: "Critica", value: "critical" },
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item label="Esforco (horas previstas)" name="effort_points">
-                <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
-              </Form.Item>
-              <Form.Item label="Responsavel" name="assignee_id">
-                <Select
-                  allowClear
-                  placeholder="Escolha o responsavel"
-                  showSearch
-                  filterOption={(input, option) => {
-                    const id = Number(option?.value ?? NaN);
-                    const row = taskAssigneePickList.find((u) => u.id === id);
-                    const haystack = `${row?.name ?? ""} ${row?.email ?? ""}`.toLowerCase();
-                    return haystack.includes(input.trim().toLowerCase());
-                  }}
-                  options={taskAssigneePickList.map((u) => {
-                    const initial = u.name.trim().slice(0, 1).toUpperCase() || "?";
-                    return {
-                      value: u.id,
-                      label: (
-                        <Space size={8}>
-                          <Avatar size="small">{initial}</Avatar>
-                          <span>{u.name}</span>
-                        </Space>
-                      ),
-                    };
-                  })}
-                />
-              </Form.Item>
-              <Form.Item label="Prazo final" name="end_date">
-                <Input type="datetime-local" />
-              </Form.Item>
-              <Button type="primary" htmlType="submit">
-                Salvar edicao rapida
-              </Button>
-            </Form>
               </Card>
             ) : null}
 
@@ -10446,17 +10838,27 @@ export function AppShell() {
                             onChange={(event) => setTaskCommentDraft(event.target.value)}
                             placeholder="Escreva uma atualizacao da tarefa..."
                           />
+                          <Upload
+                            multiple
+                            beforeUpload={() => false}
+                            fileList={taskCommentFiles}
+                            onChange={({ fileList }) => setTaskCommentFiles(fileList)}
+                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt"
+                          >
+                            <Button icon={<PaperClipOutlined />}>Anexar imagens ou arquivos</Button>
+                          </Upload>
                           <Space>
                             <Button
                               type="primary"
                               onClick={() => createTaskComment(selectedTask.id, taskCommentDraft)}
-                              disabled={!taskCommentDraft.trim()}
+                              disabled={!taskCommentDraft.trim() && taskCommentFiles.length === 0}
                             >
                               Publicar atualizacao
                             </Button>
                             <Button
                               onClick={() => {
                                 setTaskCommentDraft("");
+                                setTaskCommentFiles([]);
                                 setTaskCommentReplyTo(null);
                               }}
                             >
@@ -10582,9 +10984,12 @@ export function AppShell() {
                                     </Space>
                                   </Space>
                                 ) : (
-                                  <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                    {root.cleanContent}
-                                  </Typography.Paragraph>
+                                  <>
+                                    <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                      {root.cleanContent}
+                                    </Typography.Paragraph>
+                                    {renderCommentAttachments(rootComment.attachments)}
+                                  </>
                                 )}
                                 {replies.map((reply) => {
                                   const replyAuthor = authoredBy(reply.comment.author_id);
@@ -10675,9 +11080,12 @@ export function AppShell() {
                                             </Space>
                                           </Space>
                                         ) : (
-                                          <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                            {reply.cleanContent}
-                                          </Typography.Paragraph>
+                                          <>
+                                            <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                              {reply.cleanContent}
+                                            </Typography.Paragraph>
+                                            {renderCommentAttachments(reply.comment.attachments)}
+                                          </>
                                         )}
                                       </Space>
                                     </div>
@@ -10696,7 +11104,11 @@ export function AppShell() {
           </Space>
         )}
       </Drawer>
-      <ReportProblemWidget token={token} workspaceId={selectedWorkspaceId} />
+      <ReportProblemWidget
+        token={token}
+        workspaceId={selectedWorkspaceId}
+        hidden={Boolean(selectedTask)}
+      />
     </>
   );
 }
