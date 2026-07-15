@@ -319,6 +319,13 @@ class TaskComment(models.Model):
 class TaskAttachment(models.Model):
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     task = ForeignKey(Task, on_delete=CASCADE, related_name="attachments")
+    comment = ForeignKey(
+        "TaskComment",
+        on_delete=CASCADE,
+        null=True,
+        blank=True,
+        related_name="attachments",
+    )
     author = ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=CASCADE,
@@ -327,6 +334,7 @@ class TaskAttachment(models.Model):
     filename = CharField(max_length=255)
     content_type = CharField(max_length=100, blank=True, default="")
     size_bytes = models.PositiveIntegerField(default=0)
+    file = models.FileField(upload_to="task_attachments/%Y/%m/", blank=True, null=True)
     created_at = DateTimeField(auto_now_add=True)
 
     class Meta:
