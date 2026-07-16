@@ -83,6 +83,8 @@ from blackbeans_api.api.users_views import AdminUserCollaboratorLinkView
 from blackbeans_api.api.users_views import AdminUserDetailView
 from blackbeans_api.api.users_views import AdminUserListCreateView
 from blackbeans_api.api.users_views import AdminUserWorkspaceAccessView
+from blackbeans_api.api.users_views import AssigneeDirectoryView
+from blackbeans_api.api.users_views import MeAvatarView
 from blackbeans_api.api.users_views import MeWorkspaceAccessView
 
 urlpatterns = [
@@ -158,6 +160,8 @@ urlpatterns = [
         name="me-workspace-access",
     ),
     path("me", MeView.as_view(), name="me"),
+    path("me/avatar", MeAvatarView.as_view(), name="me-avatar"),
+    path("assignees", AssigneeDirectoryView.as_view(), name="assignees-directory"),
     path(
         "permissions/bulk/preview",
         PermissionBulkPreviewView.as_view(),

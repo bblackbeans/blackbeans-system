@@ -15,6 +15,7 @@ from blackbeans_api.api.collaborators_serializers import CollaboratorUpdateSeria
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
+from blackbeans_api.api.users_serializers import user_to_representation
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.users.models import Collaborator
 from blackbeans_api.users.models import CollaboratorDepartmentLink
@@ -308,14 +309,16 @@ class MeView(APIView):
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
         user = request.user
+        payload = user_to_representation(user, request=request)
         return success_response(
             correlation_id=correlation_id,
             data={
                 "user": {
-                    "id": user.pk,
-                    "username": getattr(user, "username", ""),
-                    "email": getattr(user, "email", ""),
-                    "name": getattr(user, "first_name", "") or getattr(user, "username", ""),
+                    "id": payload["id"],
+                    "username": payload["username"],
+                    "email": payload["email"],
+                    "name": payload["name"],
+                    "avatar_url": payload["avatar_url"],
                     "is_staff": bool(getattr(user, "is_staff", False)),
                     "is_superuser": bool(getattr(user, "is_superuser", False)),
                     "is_active": bool(getattr(user, "is_active", True)),

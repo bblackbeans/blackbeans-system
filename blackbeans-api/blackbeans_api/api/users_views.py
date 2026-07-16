@@ -26,9 +26,80 @@ User = get_user_model()
 
 logger = logging.getLogger(__name__)
 
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+
 
 def _actor_id(request: Request) -> str:
     return str(request.user.pk)
+
+
+class AssigneeDirectoryView(APIView):
+    """Lista usuarios ativos para atribuicao de tarefas (qualquer autenticado)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        users = list(User.objects.filter(is_active=True).order_by("name", "email", "id"))
+        rows = [user_to_representation(item, request=request) for item in users]
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "users": [
+                    {
+                        "id": row["id"],
+                        "name": row["name"],
+                        "email": row["email"],
+                        "avatar_url": row["avatar_url"],
+                    }
+                    for row in rows
+                ],
+            },
+            meta={"total": len(rows)},
+        )
+
+
+class MeAvatarView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        uploaded = request.FILES.get("file") or request.FILES.get("avatar")
+        if uploaded is None:
+            return error_response(
+                correlation_id=correlation_id,
+                code="avatar_required",
+                message="Envie o arquivo da foto no campo file.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        size_bytes = int(getattr(uploaded, "size", 0) or 0)
+        if size_bytes <= 0 or size_bytes > MAX_AVATAR_BYTES:
+            return error_response(
+                correlation_id=correlation_id,
+                code="avatar_too_large",
+                message="Foto deve ter no maximo 5MB.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        content_type = (getattr(uploaded, "content_type", None) or "").lower()
+        if content_type and not content_type.startswith("image/"):
+            return error_response(
+                correlation_id=correlation_id,
+                code="avatar_invalid_type",
+                message="Envie apenas imagens.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        if user.avatar:
+            user.avatar.delete(save=False)
+        user.avatar = uploaded
+        user.save(update_fields=["avatar"])
+        return success_response(
+            correlation_id=correlation_id,
+            data={"user": user_to_representation(user, request=request)},
+        )
 
 
 class AdminUserListCreateView(APIView):
@@ -52,6 +123,9 @@ class AdminUserListCreateView(APIView):
             qs = qs.filter(is_staff=(is_staff_filter == "true"))
         if is_active_filter in {"true", "false"}:
             qs = qs.filter(is_active=(is_active_filter == "true"))
+        elif is_active_filter not in {"all", "any"}:
+            # Padrao: lista administrativa nao reexibe usuarios excluidos (inativos).
+            qs = qs.filter(is_active=True)
 
         total = qs.count()
         start = (page - 1) * page_size
@@ -60,7 +134,7 @@ class AdminUserListCreateView(APIView):
 
         return success_response(
             correlation_id=correlation_id,
-            data={"users": [user_to_representation(item) for item in page_items]},
+            data={"users": [user_to_representation(item, request=request) for item in page_items]},
             meta={
                 "total": total,
                 "page": page,

@@ -374,13 +374,35 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         return instance
 
 
-def task_to_representation(task: Task) -> dict:
+def task_to_representation(task: Task, request=None) -> dict:
     def _iso(v):
         return v.isoformat().replace("+00:00", "Z") if v else None
 
     subtasks_count = getattr(task, "subtasks_count", None)
     if subtasks_count is None:
         subtasks_count = task.subtasks.count() if getattr(task, "pk", None) else 0
+
+    assignee = getattr(task, "assignee", None)
+    assignee_name = None
+    assignee_email = None
+    assignee_avatar_url = None
+    if assignee is not None:
+        name = (getattr(assignee, "name", None) or "").strip()
+        email = (getattr(assignee, "email", None) or "").strip()
+        username = (getattr(assignee, "username", None) or "").strip()
+        assignee_name = name or username or email or f"Usuario {assignee.pk}"
+        assignee_email = email
+        avatar = getattr(assignee, "avatar", None)
+        if avatar:
+            try:
+                assignee_avatar_url = avatar.url
+                if request is not None and assignee_avatar_url:
+                    try:
+                        assignee_avatar_url = request.build_absolute_uri(assignee_avatar_url)
+                    except Exception:
+                        pass
+            except ValueError:
+                assignee_avatar_url = None
 
     return {
         "id": str(task.pk),
@@ -394,6 +416,9 @@ def task_to_representation(task: Task) -> dict:
         "priority": task.priority,
         "effort_points": task.effort_points,
         "assignee_id": task.assignee_id,
+        "assignee_name": assignee_name,
+        "assignee_email": assignee_email,
+        "assignee_avatar_url": assignee_avatar_url,
         "start_date": _iso(task.start_date),
         "end_date": _iso(task.end_date),
         "created_at": _iso(task.created_at),

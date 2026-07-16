@@ -25,6 +25,7 @@ class User(AbstractUser):
 
     # First and last name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
+    avatar = models.ImageField(_("Avatar"), upload_to="user_avatars/%Y/%m/", blank=True, null=True)
     totp_enabled = BooleanField(default=False)
     totp_secret = CharField(max_length=128, blank=True, default="")
     totp_pending_secret = CharField(max_length=128, blank=True, default="")
