@@ -221,13 +221,17 @@ function TaskAssigneeAvatar({
   currentUserId,
   currentUserName,
   currentUserAvatarUrl,
+  fallbackName,
+  fallbackAvatarUrl,
   size = "small",
 }: {
   assigneeId: number | null | undefined;
-  users: Array<{ id: number; name: string; email?: string }>;
+  users: Array<{ id: number; name: string; email?: string; avatar_url?: string | null }>;
   currentUserId: number | null;
   currentUserName: string;
   currentUserAvatarUrl: string | null;
+  fallbackName?: string | null;
+  fallbackAvatarUrl?: string | null;
   size?: "small" | "default" | number;
 }) {
   if (assigneeId == null) {
@@ -244,13 +248,21 @@ function TaskAssigneeAvatar({
 
   const row = users.find((user) => user.id === assigneeId);
   const isMe = currentUserId !== null && assigneeId === currentUserId;
-  const name = isMe
-    ? currentUserName
-    : row?.name?.trim() || row?.email?.trim() || `Usuario ${assigneeId}`;
+  const name = (
+    (isMe ? currentUserName : "") ||
+    row?.name?.trim() ||
+    fallbackName?.trim() ||
+    row?.email?.trim() ||
+    `Usuario ${assigneeId}`
+  ).trim();
   const avatarUrl =
-    (isMe ? currentUserAvatarUrl : null) ||
-    readStoredAvatarDataUrl(assigneeId) ||
-    null;
+    resolveMediaUrl(
+      (isMe ? currentUserAvatarUrl : null) ||
+        row?.avatar_url ||
+        fallbackAvatarUrl ||
+        readStoredAvatarDataUrl(assigneeId) ||
+        null,
+    ) || null;
   const initial = (name.trim().charAt(0) || "?").toUpperCase();
 
   return (
@@ -342,6 +354,9 @@ type TaskItem = {
   priority: string;
   effort_points: number;
   assignee_id: number | null;
+  assignee_name?: string | null;
+  assignee_email?: string | null;
+  assignee_avatar_url?: string | null;
   start_date: string | null;
   end_date: string | null;
   board_id: string;
@@ -1294,9 +1309,9 @@ export function AppShell() {
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [taskDrawerTab, setTaskDrawerTab] = useState<TaskDrawerTab>("summary");
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const [taskAssigneePickList, setTaskAssigneePickList] = useState<Array<{ id: number; name: string; email: string }>>(
-    [],
-  );
+  const [taskAssigneePickList, setTaskAssigneePickList] = useState<
+    Array<{ id: number; name: string; email: string; avatar_url?: string | null }>
+  >([]);
   const [taskComments, setTaskComments] = useState<TaskCommentItem[]>([]);
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
   const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
@@ -1591,37 +1606,11 @@ export function AppShell() {
     const avatarRaw = profileResult?.avatar_url ?? profileResult?.photo_url ?? profileResult?.image_url;
     const fromProfile = typeof avatarRaw === "string" && avatarRaw.trim().length > 0 ? avatarRaw.trim() : null;
     const fromLocal = profileAvatarDataUrl.trim() || null;
-    const avatarUrl = fromLocal || fromProfile;
+    const avatarUrl = resolveMediaUrl(fromLocal || fromProfile) || fromLocal || fromProfile;
     const initial = displayName && displayName !== "-" ? displayName.charAt(0).toUpperCase() : "U";
     return { displayName, avatarUrl, initial };
   }, [currentUserId, profileAvatarDataUrl, profileResult]);
 
-  const renderAssigneeAvatar = useCallback(
-    (assigneeId: number | null | undefined, size: "small" | "default" | number = "small") => (
-      <TaskAssigneeAvatar
-        assigneeId={assigneeId}
-        users={taskAssigneePickList}
-        currentUserId={currentUserId}
-        currentUserName={currentUserIdentity.displayName}
-        currentUserAvatarUrl={currentUserIdentity.avatarUrl}
-        size={size}
-      />
-    ),
-    [currentUserId, currentUserIdentity.avatarUrl, currentUserIdentity.displayName, taskAssigneePickList],
-  );
-
-  const assigneeColumn = useMemo(
-    () => ({
-      title: "Resp.",
-      key: "assignee",
-      width: 72,
-      align: "center" as const,
-      render: (_: unknown, record: TaskItem) => (
-        <span onClick={(event) => event.stopPropagation()}>{renderAssigneeAvatar(record.assignee_id)}</span>
-      ),
-    }),
-    [renderAssigneeAvatar],
-  );
   const resolveStatusMeta = useCallback(
     (value: string) => {
       const direct = statusPalette[value];
@@ -2310,8 +2299,32 @@ export function AppShell() {
 
   const hydrateTaskAssigneePickList = useCallback(async () => {
     if (!token) return;
+    const directoryResp = await apiRequest<{
+      users?: Array<{ id?: number; name?: string; email?: string; avatar_url?: string | null }>;
+    }>("/assignees", { token });
+    if (directoryResp.ok) {
+      const rows = directoryResp.data?.users ?? [];
+      setTaskAssigneePickList(
+        rows
+          .map((row) => {
+            const id = Number(row.id);
+            const nameRaw = String(row.name ?? "").trim();
+            const email = String(row.email ?? "").trim();
+            return {
+              id,
+              name: nameRaw || email || `Usuario ${id}`,
+              email,
+              avatar_url: row.avatar_url ?? null,
+            };
+          })
+          .filter((row) => Number.isFinite(row.id))
+          .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+      );
+      return;
+    }
+
     const resp = await apiRequest<{
-      users?: Array<{ id?: number; name?: string; email?: string }>;
+      users?: Array<{ id?: number; name?: string; email?: string; avatar_url?: string | null }>;
     }>("/users?page=1&page_size=200", { token });
     if (resp.ok) {
       const rows = resp.data?.users ?? [];
@@ -2325,6 +2338,7 @@ export function AppShell() {
               id,
               name: nameRaw || email || `Usuario ${id}`,
               email,
+              avatar_url: row.avatar_url ?? null,
             };
           })
           .filter((row) => Number.isFinite(row.id))
@@ -2337,17 +2351,32 @@ export function AppShell() {
         id: u.id,
         name: String(u.name ?? "").trim() || u.email || `Usuario ${u.id}`,
         email: u.email,
+        avatar_url: null as string | null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     if (fromAdmin.length > 0) {
       setTaskAssigneePickList(fromAdmin);
       return;
     }
-    const uniq = new Map<number, { id: number; name: string; email: string }>();
-    const ensure = (id: number | null | undefined, name: string) => {
+    const uniq = new Map<number, { id: number; name: string; email: string; avatar_url?: string | null }>();
+    const ensure = (
+      id: number | null | undefined,
+      name: string,
+      email = "",
+      avatarUrl: string | null = null,
+    ) => {
       if (id == null || !Number.isFinite(Number(id))) return;
       const n = Number(id);
-      if (!uniq.has(n)) uniq.set(n, { id: n, name, email: "" });
+      const prev = uniq.get(n);
+      if (!prev) {
+        uniq.set(n, { id: n, name, email, avatar_url: avatarUrl });
+        return;
+      }
+      if (prev.name.startsWith("Usuario ") && name && !name.startsWith("Usuario ")) {
+        prev.name = name;
+      }
+      if (!prev.email && email) prev.email = email;
+      if (!prev.avatar_url && avatarUrl) prev.avatar_url = avatarUrl;
     };
     for (const task of [...tasks, ...allTasks]) {
       if (task.assignee_id == null) continue;
@@ -2355,14 +2384,54 @@ export function AppShell() {
         task.assignee_id,
         task.assignee_id === currentUserId
           ? currentUserIdentity.displayName
-          : `Usuario ${task.assignee_id}`,
+          : String(task.assignee_name ?? "").trim() || `Usuario ${task.assignee_id}`,
+        String(task.assignee_email ?? "").trim(),
+        task.assignee_avatar_url ?? null,
       );
     }
     if (currentUserId != null) {
-      ensure(currentUserId, currentUserIdentity.displayName);
+      ensure(currentUserId, currentUserIdentity.displayName, "", currentUserIdentity.avatarUrl);
     }
     setTaskAssigneePickList(Array.from(uniq.values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
-  }, [token, adminUsersCache, tasks, allTasks, currentUserId, currentUserIdentity.displayName]);
+  }, [token, adminUsersCache, tasks, allTasks, currentUserId, currentUserIdentity.avatarUrl, currentUserIdentity.displayName]);
+
+  const renderAssigneeAvatar = useCallback(
+    (
+      assigneeId: number | null | undefined,
+      size: "small" | "default" | number = "small",
+      extras?: { name?: string | null; avatarUrl?: string | null },
+    ) => (
+      <TaskAssigneeAvatar
+        assigneeId={assigneeId}
+        users={taskAssigneePickList}
+        currentUserId={currentUserId}
+        currentUserName={currentUserIdentity.displayName}
+        currentUserAvatarUrl={currentUserIdentity.avatarUrl}
+        fallbackName={extras?.name}
+        fallbackAvatarUrl={extras?.avatarUrl}
+        size={size}
+      />
+    ),
+    [currentUserId, currentUserIdentity.avatarUrl, currentUserIdentity.displayName, taskAssigneePickList],
+  );
+
+  const assigneeColumn = useMemo(
+    () => ({
+      title: "Resp.",
+      key: "assignee",
+      width: 72,
+      align: "center" as const,
+      render: (_: unknown, record: TaskItem) => (
+        <span onClick={(event) => event.stopPropagation()}>
+          {renderAssigneeAvatar(record.assignee_id, "small", {
+            name: record.assignee_name,
+            avatarUrl: record.assignee_avatar_url,
+          })}
+        </span>
+      ),
+    }),
+    [renderAssigneeAvatar],
+  );
 
   const fetchAuditOverview = useCallback(async () => {
     const overviewResp = await apiRequest<Record<string, unknown>>("/audit/dashboard", { token });
@@ -3210,7 +3279,7 @@ export function AppShell() {
           results?: Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>;
           data?: Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>;
         }
-    >("/users?page=1&page_size=200", { method: "GET", token });
+    >("/users?page=1&page_size=200&is_active=true", { method: "GET", token });
     setAdminUsersLoading(false);
     if (!response.ok) {
       apiMessage.error(response.error?.message ?? "Falha ao consultar usuarios.");
@@ -5329,6 +5398,7 @@ export function AppShell() {
                                                       throw new Error("user_delete_failed");
                                                     }
                                                     setAdminUsersCache((prev) => prev.filter((row) => row.id !== record.id));
+                                                    await fetchAdminUsers().catch(() => undefined);
                                                     apiMessage.success("Usuario excluido (inativado).");
                                                   },
                                                 })
@@ -5594,6 +5664,8 @@ export function AppShell() {
                                               throw new Error("disable_profile_failed");
                                             }
                                             setAdminOpsResult(disableResp.data as Record<string, unknown>);
+                                            setAdminUsersCache((prev) => prev.filter((row) => row.id !== Number(userId)));
+                                            await fetchAdminUsers().catch(() => undefined);
                                             apiMessage.success("Perfil excluido (inativado).");
                                           },
                                         });
@@ -6548,6 +6620,8 @@ export function AppShell() {
                                               throw new Error("disable_profile_failed");
                                             }
                                             setAdminOpsResult(disableResp.data as Record<string, unknown>);
+                                            setAdminUsersCache((prev) => prev.filter((row) => row.id !== Number(userId)));
+                                            await fetchAdminUsers().catch(() => undefined);
                                             apiMessage.success("Perfil excluido (inativado).");
                                           },
                                         });
@@ -7266,21 +7340,50 @@ export function AppShell() {
                                     apiMessage.error("Selecione apenas imagem.");
                                     return Upload.LIST_IGNORE;
                                   }
-                                  const reader = new FileReader();
-                                  reader.onload = () => {
-                                    const result = String(reader.result ?? "");
-                                    setProfileAvatarDataUrl(result);
+                                  if (file.size > 5 * 1024 * 1024) {
+                                    apiMessage.error("Foto deve ter no maximo 5MB.");
+                                    return Upload.LIST_IGNORE;
+                                  }
+                                  void (async () => {
+                                    const formData = new FormData();
+                                    formData.append("file", file);
+                                    const response = await apiRequest<{ user?: { avatar_url?: string | null } }>(
+                                      "/me/avatar",
+                                      { method: "POST", token, body: formData },
+                                    );
+                                    if (!response.ok) {
+                                      apiMessage.error(response.error?.message ?? "Falha ao enviar foto.");
+                                      return;
+                                    }
+                                    const remoteUrl = resolveMediaUrl(response.data?.user?.avatar_url ?? null) ?? "";
+                                    if (remoteUrl) {
+                                      setProfileAvatarDataUrl(remoteUrl);
+                                      setProfileResult((prev) =>
+                                        prev ? { ...prev, avatar_url: response.data?.user?.avatar_url ?? remoteUrl } : prev,
+                                      );
+                                    } else {
+                                      const reader = new FileReader();
+                                      reader.onload = () => {
+                                        const result = String(reader.result ?? "");
+                                        setProfileAvatarDataUrl(result);
+                                      };
+                                      reader.readAsDataURL(file);
+                                    }
                                     if (typeof window !== "undefined" && currentUserId) {
                                       const raw = localStorage.getItem(`bb_profile_extra_${currentUserId}`);
                                       const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
                                       localStorage.setItem(
                                         `bb_profile_extra_${currentUserId}`,
-                                        JSON.stringify({ ...parsed, avatar_data_url: result }),
+                                        JSON.stringify({
+                                          ...parsed,
+                                          avatar_data_url: remoteUrl || undefined,
+                                          avatar_url: response.data?.user?.avatar_url ?? remoteUrl,
+                                        }),
                                       );
                                     }
+                                    void hydrateTaskAssigneePickList();
                                     apiMessage.success("Imagem de perfil atualizada.");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  })();
                                   return false;
                                 }}
                               >
@@ -8711,7 +8814,10 @@ export function AppShell() {
                                                       {renderPriorityTag(task.priority)}
                                                       <Tag color="purple">Horas {formatEffortHoursDisplay(task.effort_points)}</Tag>
                                                       <span style={{ display: "inline-flex", verticalAlign: "middle", marginRight: 4 }}>
-                                                        {renderAssigneeAvatar(task.assignee_id, 26)}
+                                                        {renderAssigneeAvatar(task.assignee_id, 26, {
+                                                          name: task.assignee_name,
+                                                          avatarUrl: task.assignee_avatar_url,
+                                                        })}
                                                       </span>
                                                       {task.end_date ? <Tag color="orange">Prazo {formatDate(task.end_date)}</Tag> : null}
                                                     </div>
@@ -10351,11 +10457,14 @@ export function AppShell() {
                   }}
                   options={taskAssigneePickList.map((u) => {
                     const initial = u.name.trim().slice(0, 1).toUpperCase() || "?";
+                    const src = resolveMediaUrl(u.avatar_url ?? null);
                     return {
                       value: u.id,
                       label: (
                         <Space size={8}>
-                          <Avatar size="small">{initial}</Avatar>
+                          <Avatar size="small" src={src || undefined} style={src ? undefined : undefined}>
+                            {src ? null : initial}
+                          </Avatar>
                           <span>{u.name}</span>
                         </Space>
                       ),
@@ -10505,11 +10614,15 @@ export function AppShell() {
                 {renderPriorityTag(selectedTask.priority)}
                 <Tag color="purple">Esforco: {formatEffortHoursDisplay(selectedTask.effort_points)}</Tag>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  {renderAssigneeAvatar(selectedTask.assignee_id, 28)}
+                  {renderAssigneeAvatar(selectedTask.assignee_id, 28, {
+                    name: selectedTask.assignee_name,
+                    avatarUrl: selectedTask.assignee_avatar_url,
+                  })}
                   <Typography.Text>
                     {(() => {
                       const sid = selectedTask.assignee_id;
                       if (sid == null) return "Sem responsavel";
+                      if (String(selectedTask.assignee_name ?? "").trim()) return selectedTask.assignee_name;
                       const opt = taskAssigneePickList.find((u) => u.id === sid);
                       return opt ? opt.name : `Usuario ${sid}`;
                     })()}
@@ -10647,11 +10760,12 @@ export function AppShell() {
                           }}
                           options={taskAssigneePickList.map((u) => {
                             const initial = u.name.trim().slice(0, 1).toUpperCase() || "?";
+                    const src = resolveMediaUrl(u.avatar_url ?? null);
                             return {
                               value: u.id,
                               label: (
                                 <Space size={8}>
-                                  <Avatar size="small">{initial}</Avatar>
+                                  <Avatar size="small" src={src || undefined}>{src ? null : initial}</Avatar>
                                   <span>{u.name}</span>
                                 </Space>
                               ),

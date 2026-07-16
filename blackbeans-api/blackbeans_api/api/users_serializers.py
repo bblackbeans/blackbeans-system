@@ -11,12 +11,28 @@ from blackbeans_api.users.models import Collaborator
 User = get_user_model()
 
 
-def user_to_representation(user) -> dict:
+def user_to_representation(user, request=None) -> dict:
+    avatar_url = None
+    avatar = getattr(user, "avatar", None)
+    if avatar:
+        try:
+            avatar_url = avatar.url
+            if request is not None and avatar_url:
+                try:
+                    avatar_url = request.build_absolute_uri(avatar_url)
+                except Exception:
+                    pass
+        except ValueError:
+            avatar_url = None
+    name = (getattr(user, "name", None) or "").strip()
+    email = (getattr(user, "email", None) or "").strip()
+    username = (getattr(user, "username", None) or "").strip()
     return {
         "id": user.pk,
-        "username": user.username,
-        "email": user.email or "",
-        "name": user.name or "",
+        "username": username,
+        "email": email,
+        "name": name or username or email or f"Usuario {user.pk}",
+        "avatar_url": avatar_url,
         "is_active": user.is_active,
         "is_staff": user.is_staff,
     }

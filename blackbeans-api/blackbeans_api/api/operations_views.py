@@ -888,7 +888,7 @@ class TaskListCreateView(APIView):
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
         queryset = (
-            Task.objects.select_related("group", "board")
+            Task.objects.select_related("group", "board", "assignee")
             .annotate(subtasks_count=Count("subtasks"))
             .order_by("created_at")
         )
@@ -1078,6 +1078,7 @@ class MyTasksView(APIView):
         correlation_id = get_correlation_id(request)
         qs = (
             Task.objects.filter(assignee=request.user)
+            .select_related("assignee", "group", "board")
             .annotate(subtasks_count=Count("subtasks"))
             .order_by("-updated_at")
         )
