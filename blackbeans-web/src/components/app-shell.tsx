@@ -20,6 +20,7 @@ import {
   PlusOutlined,
   PaperClipOutlined,
   RightOutlined,
+  RobotOutlined,
   SettingOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
@@ -70,6 +71,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiRequest, resolveMediaUrl } from "@/lib/api";
 import { installReportProblemCollectors } from "@/lib/report-problem";
+import { AgentsPanel } from "@/components/agents/AgentsPanel";
 import { ProblemReportsPanel } from "@/components/report-problem/ProblemReportsPanel";
 import { ReportProblemWidget } from "@/components/report-problem/ReportProblemWidget";
 
@@ -102,6 +104,7 @@ const HELP_TIPS = {
   menuStatus: "Paleta e rotulos dos status de tarefas em todo o sistema.",
   menuStats: "Indicadores e visao consolidada da operacao.",
   menuProblems: "Triagem de problemas reportados pelos usuarios (screenshot, gravacao, contexto).",
+  menuAgents: "Agentes autonomos administrativos: catalogo, agenda e relatorios automaticos.",
   novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
   novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
   novoProjeto: "Entrega vinculada a um cliente existente dentro do portfolio.",
@@ -466,6 +469,7 @@ type MenuKey =
   | "notifications"
   | "stats"
   | "problems"
+  | "agents"
   | "projects";
 
 const MENU_KEYS: MenuKey[] = [
@@ -483,6 +487,7 @@ const MENU_KEYS: MenuKey[] = [
   "notifications",
   "stats",
   "problems",
+  "agents",
   "projects",
 ];
 const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
@@ -496,6 +501,7 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "admin-settings",
   "stats",
   "problems",
+  "agents",
 ];
 
 const DEFAULT_STATUS_META: Record<string, { label: string; color: string }> = {
@@ -1520,6 +1526,7 @@ export function AppShell() {
             { key: "status-config", icon: <CheckCircleOutlined />, label: menuLabel("Status globais", HELP_TIPS.menuStatus) },
             { key: "stats", icon: <StockOutlined />, label: menuLabel("Estatisticas", HELP_TIPS.menuStats) },
             { key: "problems", icon: <BugOutlined />, label: menuLabel("Problemas", HELP_TIPS.menuProblems) },
+            { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) },
           ],
         },
       ];
@@ -7712,6 +7719,10 @@ export function AppShell() {
 
                 {activeKey === "problems" && isAdmin && token ? (
                   <ProblemReportsPanel token={token} />
+                ) : null}
+
+                {activeKey === "agents" && isAdmin && token ? (
+                  <AgentsPanel token={token} />
                 ) : null}
 
                 {activeKey === "stats" && isAdmin && (

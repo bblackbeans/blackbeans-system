@@ -403,6 +403,7 @@ class Notification(models.Model):
         STATUS_CHANGED = "task_status_changed", _("Task Status Changed")
         PRIORITY_CHANGED = "task_priority_changed", _("Task Priority Changed")
         UPDATED = "task_updated", _("Task Updated")
+        AGENT_REPORT = "agent_report", _("Agent Report")
 
     class Channel(models.TextChoices):
         IN_APP = "in_app", _("In App")
@@ -695,3 +696,62 @@ class PermissionConflictResolution(models.Model):
     class Meta:
         verbose_name = _("Permission conflict resolution")
         verbose_name_plural = _("Permission conflict resolutions")
+
+
+class AgentDefinition(models.Model):
+    """Catalogo de agentes autonomos administrativos (jobs com contrato claro)."""
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = CharField(max_length=64, unique=True)
+    title = CharField(max_length=255)
+    description = TextField(blank=True, default="")
+    schedule_hint = CharField(max_length=255, blank=True, default="")
+    is_enabled = models.BooleanField(default=True)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Agent definition")
+        verbose_name_plural = _("Agent definitions")
+        ordering = ["title"]
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class AgentRun(models.Model):
+    """Historico de execucao de um agente."""
+
+    class Status(models.TextChoices):
+        RUNNING = "running", _("Running")
+        SUCCESS = "success", _("Success")
+        FAILED = "failed", _("Failed")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    agent = ForeignKey(AgentDefinition, on_delete=CASCADE, related_name="runs")
+    status = CharField(max_length=16, choices=Status.choices, default=Status.RUNNING)
+    started_at = DateTimeField(auto_now_add=True)
+    finished_at = DateTimeField(null=True, blank=True)
+    summary_text = TextField(blank=True, default="")
+    report_json = JSONField(default=dict, blank=True)
+    correlation_id = CharField(max_length=64, blank=True, default="")
+    triggered_by = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_runs",
+    )
+    error_message = TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Agent run")
+        verbose_name_plural = _("Agent runs")
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["agent", "started_at"]),
+            models.Index(fields=["status", "started_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.agent.slug} @ {self.started_at} ({self.status})"

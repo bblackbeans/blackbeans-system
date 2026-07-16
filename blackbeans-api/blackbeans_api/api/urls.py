@@ -7,6 +7,10 @@ from blackbeans_api.api.auth_views import Auth2FADisableView
 from blackbeans_api.api.auth_views import Auth2FAEnrollConfirmView
 from blackbeans_api.api.auth_views import Auth2FAEnrollStartView
 from blackbeans_api.api.auth_views import Auth2FASettingsView
+from blackbeans_api.api.agents_views import AgentListView
+from blackbeans_api.api.agents_views import AgentRunDetailView
+from blackbeans_api.api.agents_views import AgentRunListView
+from blackbeans_api.api.agents_views import AgentRunNowView
 from blackbeans_api.api.audit_views import AuditDashboardView
 from blackbeans_api.api.audit_views import AuditLogsView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorDepartmentLinkView
@@ -133,6 +137,10 @@ urlpatterns = [
     path("notifications/unsubscribe", NotificationUnsubscribeView.as_view(), name="notifications-unsubscribe"),
     path("notifications/<uuid:notification_id>/read", NotificationReadView.as_view(), name="notifications-read"),
     path("notifications/deadline-scan", NotificationsDeadlineScanView.as_view(), name="notifications-deadline-scan"),
+    path("agents", AgentListView.as_view(), name="agents-list"),
+    path("agents/<slug:slug>/runs", AgentRunListView.as_view(), name="agents-runs"),
+    path("agents/<slug:slug>/runs/<uuid:run_id>", AgentRunDetailView.as_view(), name="agents-run-detail"),
+    path("agents/<slug:slug>/run", AgentRunNowView.as_view(), name="agents-run-now"),
     path("me/notification-preferences", MeNotificationPreferencesView.as_view(), name="me-notification-preferences"),
     path(
         "me/notification-subscriptions",

@@ -32,6 +32,7 @@ DEFAULT_EMAIL_MODES: dict[str, str] = {
     Notification.Type.STATUS_CHANGED: NotificationPreference.EmailMode.DAILY,
     Notification.Type.PRIORITY_CHANGED: NotificationPreference.EmailMode.DAILY,
     Notification.Type.UPDATED: NotificationPreference.EmailMode.DAILY,
+    Notification.Type.AGENT_REPORT: NotificationPreference.EmailMode.INSTANT,
 }
 
 DEFAULT_IN_APP: dict[str, bool] = {event: True for event in DEFAULT_EMAIL_MODES}
