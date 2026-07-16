@@ -21,6 +21,7 @@ EVENT_SUBJECT_PREFIX: dict[str, str] = {
     Notification.Type.STATUS_CHANGED: "[Status alterado]",
     Notification.Type.PRIORITY_CHANGED: "[Prioridade alterada]",
     Notification.Type.UPDATED: "[Tarefa atualizada]",
+    Notification.Type.AGENT_REPORT: "[Agente admin]",
 }
 
 EVENT_ACTION_TEXT: dict[str, str] = {
@@ -33,6 +34,7 @@ EVENT_ACTION_TEXT: dict[str, str] = {
     Notification.Type.STATUS_CHANGED: "{actor} alterou o status de",
     Notification.Type.PRIORITY_CHANGED: "{actor} alterou a prioridade de",
     Notification.Type.UPDATED: "{actor} atualizou",
+    Notification.Type.AGENT_REPORT: "Relatorio do agente:",
 }
 
 

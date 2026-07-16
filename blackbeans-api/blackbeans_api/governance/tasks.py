@@ -233,3 +233,22 @@ def send_weekly_notification_digests() -> dict:
         send_notification_digest.delay(str(user_id), NotificationPreference.EmailMode.WEEKLY)
         count += 1
     return {"queued": count}
+
+
+@shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def run_overdue_tasks_weekly_agent(*, correlation_id: str = "system", triggered_by_id: int | None = None) -> dict:
+    from blackbeans_api.governance.agent_service import execute_overdue_tasks_weekly_agent
+
+    triggered_by = None
+    if triggered_by_id is not None:
+        triggered_by = User.objects.filter(pk=triggered_by_id).first()
+    run = execute_overdue_tasks_weekly_agent(
+        correlation_id=correlation_id,
+        triggered_by=triggered_by,
+    )
+    return {
+        "run_id": str(run.pk),
+        "status": run.status,
+        "summary": run.summary_text,
+        "total_overdue": int((run.report_json or {}).get("total_overdue") or 0),
+    }
