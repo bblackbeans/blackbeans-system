@@ -511,7 +511,6 @@ def execute_blocked_stale_tasks_agent(
 ) -> AgentRun:
     """Executa detector de bloqueio / tarefas paradas."""
     corr = (correlation_id or str(uuid.uuid4())).strip()
-    stale_days = max(1, int(getattr(settings, "AGENT_STALE_DAYS", 7) or 7))
     agent = _ensure_agent(BLOCKED_STALE_AGENT_SLUG, BLOCKED_STALE_AGENT_DEFAULTS)
     if not agent.is_enabled and triggered_by is None:
         return AgentRun.objects.create(
