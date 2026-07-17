@@ -29,6 +29,8 @@ type AgentLastRun = {
   finished_at?: string | null;
   summary_text?: string;
   total_overdue?: number;
+  total_flagged?: number;
+  ai_mode?: string;
 };
 
 type AgentItem = {
@@ -41,16 +43,18 @@ type AgentItem = {
   last_run?: AgentLastRun | null;
 };
 
-type OverdueReportItem = {
+type ReportItem = {
   task_id: string;
   title: string;
   status: string;
   priority: string;
   end_date?: string | null;
-  days_overdue: number;
+  days_overdue?: number;
+  days_idle?: number;
+  reason?: string;
   assignee_name: string;
   project_name: string;
-  workspace_name: string;
+  workspace_name?: string;
 };
 
 type AgentRunDetail = {
@@ -62,9 +66,13 @@ type AgentRunDetail = {
   error_message?: string;
   report?: {
     total_overdue?: number;
+    total_flagged?: number;
+    ai_briefing?: string;
+    ai_mode?: string;
     by_project?: Array<{ project_name: string; count: number }>;
     by_assignee?: Array<{ assignee_name: string; count: number }>;
-    items?: OverdueReportItem[];
+    by_reason?: Array<{ reason: string; count: number }>;
+    items?: ReportItem[];
   };
 };
 
@@ -82,6 +90,12 @@ function statusColor(status: string) {
   if (status === "failed") return "error";
   if (status === "running") return "processing";
   return "default";
+}
+
+function reasonLabel(reason?: string) {
+  if (reason === "blocked") return "Bloqueada";
+  if (reason === "stale") return "Parada";
+  return reason || "-";
 }
 
 export function AgentsPanel({ token }: AgentsPanelProps) {
@@ -145,6 +159,11 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
     }
   };
 
+  const isBlockedAgent = selected?.slug === "blocked_stale_tasks";
+  const itemsTitle = isBlockedAgent
+    ? `Tarefas sinalizadas (${runDetail?.report?.total_flagged ?? 0})`
+    : `Tarefas atrasadas (${runDetail?.report?.total_overdue ?? 0})`;
+
   return (
     <>
       {msgHolder}
@@ -163,8 +182,8 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
           }
         >
           <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-            Jobs administrativos automaticos. Nesta fase o agente de atrasos gera um relatorio semanal
-            para admins (somente leitura — nao altera tarefas).
+            Jobs administrativos automaticos com briefing (OpenAI ou fallback). Somente leitura —
+            nao alteram tarefas.
           </Typography.Paragraph>
           <Spin spinning={loading}>
             <Row gutter={[16, 16]}>
@@ -189,8 +208,16 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
                         <Typography.Text type="secondary">
                           Ultima execucao: {formatDate(agent.last_run.started_at)}
                         </Typography.Text>
-                        {typeof agent.last_run.total_overdue === "number" ? (
+                        {typeof agent.last_run.total_overdue === "number" &&
+                        agent.last_run.total_overdue > 0 ? (
                           <Tag color="orange">{agent.last_run.total_overdue} atrasada(s)</Tag>
+                        ) : null}
+                        {typeof agent.last_run.total_flagged === "number" &&
+                        agent.last_run.total_flagged > 0 ? (
+                          <Tag color="volcano">{agent.last_run.total_flagged} sinalizada(s)</Tag>
+                        ) : null}
+                        {agent.last_run.ai_mode ? (
+                          <Tag>{agent.last_run.ai_mode === "openai" ? "IA" : "Fallback"}</Tag>
                         ) : null}
                       </Space>
                     ) : (
@@ -247,6 +274,11 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
             <Space orientation="vertical" size={16} style={{ width: "100%" }}>
               <Space wrap>
                 <Tag color={statusColor(runDetail.status)}>{runDetail.status}</Tag>
+                {runDetail.report?.ai_mode ? (
+                  <Tag color={runDetail.report.ai_mode === "openai" ? "purple" : "default"}>
+                    Briefing: {runDetail.report.ai_mode === "openai" ? "OpenAI" : "Fallback"}
+                  </Tag>
+                ) : null}
                 <Typography.Text type="secondary">
                   Inicio: {formatDate(runDetail.started_at)} | Fim: {formatDate(runDetail.finished_at)}
                 </Typography.Text>
@@ -254,6 +286,13 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
               <Typography.Paragraph>{runDetail.summary_text}</Typography.Paragraph>
               {runDetail.error_message ? (
                 <Typography.Text type="danger">{runDetail.error_message}</Typography.Text>
+              ) : null}
+              {runDetail.report?.ai_briefing ? (
+                <Card size="small" title="Analise IA">
+                  <Typography.Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>
+                    {runDetail.report.ai_briefing}
+                  </Typography.Paragraph>
+                </Card>
               ) : null}
               <Row gutter={12}>
                 <Col xs={24} md={12}>
@@ -285,24 +324,57 @@ export function AgentsPanel({ token }: AgentsPanelProps) {
                   </Card>
                 </Col>
               </Row>
-              <Card size="small" title={`Tarefas atrasadas (${runDetail.report?.total_overdue ?? 0})`}>
+              {isBlockedAgent && (runDetail.report?.by_reason?.length ?? 0) > 0 ? (
+                <Card size="small" title="Por motivo">
+                  <Table
+                    size="small"
+                    pagination={false}
+                    rowKey={(row) => row.reason}
+                    dataSource={runDetail.report?.by_reason ?? []}
+                    columns={[
+                      {
+                        title: "Motivo",
+                        dataIndex: "reason",
+                        render: (value: string) => reasonLabel(value),
+                      },
+                      { title: "Qtd", dataIndex: "count", width: 80 },
+                    ]}
+                  />
+                </Card>
+              ) : null}
+              <Card size="small" title={itemsTitle}>
                 <Table
                   size="small"
                   rowKey="task_id"
                   pagination={{ pageSize: 10 }}
                   dataSource={runDetail.report?.items ?? []}
-                  columns={[
-                    { title: "Tarefa", dataIndex: "title", ellipsis: true },
-                    { title: "Projeto", dataIndex: "project_name", width: 160, ellipsis: true },
-                    { title: "Responsavel", dataIndex: "assignee_name", width: 140, ellipsis: true },
-                    {
-                      title: "Prazo",
-                      dataIndex: "end_date",
-                      width: 150,
-                      render: (value: string | null) => formatDate(value),
-                    },
-                    { title: "Dias", dataIndex: "days_overdue", width: 70 },
-                  ]}
+                  columns={
+                    isBlockedAgent
+                      ? [
+                          { title: "Tarefa", dataIndex: "title", ellipsis: true },
+                          { title: "Projeto", dataIndex: "project_name", width: 160, ellipsis: true },
+                          { title: "Responsavel", dataIndex: "assignee_name", width: 140, ellipsis: true },
+                          {
+                            title: "Motivo",
+                            dataIndex: "reason",
+                            width: 110,
+                            render: (value: string) => reasonLabel(value),
+                          },
+                          { title: "Dias parada", dataIndex: "days_idle", width: 100 },
+                        ]
+                      : [
+                          { title: "Tarefa", dataIndex: "title", ellipsis: true },
+                          { title: "Projeto", dataIndex: "project_name", width: 160, ellipsis: true },
+                          { title: "Responsavel", dataIndex: "assignee_name", width: 140, ellipsis: true },
+                          {
+                            title: "Prazo",
+                            dataIndex: "end_date",
+                            width: 150,
+                            render: (value: string | null) => formatDate(value),
+                          },
+                          { title: "Dias", dataIndex: "days_overdue", width: 70 },
+                        ]
+                  }
                 />
               </Card>
             </Space>

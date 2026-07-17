@@ -11,10 +11,13 @@ from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
+from blackbeans_api.governance.agent_service import BLOCKED_STALE_AGENT_SLUG
 from blackbeans_api.governance.agent_service import OVERDUE_AGENT_SLUG
+from blackbeans_api.governance.agent_service import execute_blocked_stale_tasks_agent
 from blackbeans_api.governance.agent_service import execute_overdue_tasks_weekly_agent
 from blackbeans_api.governance.models import AgentDefinition
 from blackbeans_api.governance.models import AgentRun
+from blackbeans_api.governance.tasks import run_blocked_stale_tasks_agent
 from blackbeans_api.governance.tasks import run_overdue_tasks_weekly_agent
 
 
@@ -47,10 +50,13 @@ def agent_run_to_representation(run: AgentRun | None, *, include_report: bool = 
         "error_message": run.error_message,
         "triggered_by_id": run.triggered_by_id,
     }
+    report = run.report_json or {}
     if include_report:
-        payload["report"] = run.report_json or {}
+        payload["report"] = report
     else:
-        payload["total_overdue"] = int((run.report_json or {}).get("total_overdue") or 0)
+        payload["total_overdue"] = int(report.get("total_overdue") or 0)
+        payload["total_flagged"] = int(report.get("total_flagged") or 0)
+        payload["ai_mode"] = report.get("ai_mode")
     return payload
 
 
@@ -184,6 +190,27 @@ class AgentRunNowView(APIView):
                     http_status=status.HTTP_202_ACCEPTED,
                 )
             run = execute_overdue_tasks_weekly_agent(
+                correlation_id=correlation_id,
+                triggered_by=request.user,
+            )
+            return success_response(
+                correlation_id=correlation_id,
+                data={"run": agent_run_to_representation(run, include_report=True)},
+                http_status=status.HTTP_201_CREATED,
+            )
+
+        if slug == BLOCKED_STALE_AGENT_SLUG:
+            if async_flag:
+                run_blocked_stale_tasks_agent.delay(
+                    correlation_id=correlation_id,
+                    triggered_by_id=request.user.pk,
+                )
+                return success_response(
+                    correlation_id=correlation_id,
+                    data={"queued": True, "agent_slug": slug},
+                    http_status=status.HTTP_202_ACCEPTED,
+                )
+            run = execute_blocked_stale_tasks_agent(
                 correlation_id=correlation_id,
                 triggered_by=request.user,
             )

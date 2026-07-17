@@ -356,6 +356,13 @@ NOTIFICATION_EMAIL_ENABLED = env.bool("NOTIFICATION_EMAIL_ENABLED", default=True
 NOTIFICATION_DIGEST_HOUR = env.int("NOTIFICATION_DIGEST_HOUR", default=8)
 NOTIFICATION_APP_NAME = env("NOTIFICATION_APP_NAME", default="BlackBeans System")
 
+# Agentes com briefing via OpenAI (fallback deterministico se sem chave)
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
+OPENAI_API_BASE = env("OPENAI_API_BASE", default="https://api.openai.com/v1")
+AGENT_LLM_ENABLED = env.bool("AGENT_LLM_ENABLED", default=True)
+AGENT_STALE_DAYS = env.int("AGENT_STALE_DAYS", default=7)
+
 # Relatar problema (feedback com screenshot/gravacao)
 PROBLEM_REPORTS_FEEDBACK_ENABLED = env.bool("PROBLEM_REPORTS_FEEDBACK_ENABLED", default=True)
 PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR = env.int("PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR", default=10)
