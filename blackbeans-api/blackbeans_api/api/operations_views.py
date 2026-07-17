@@ -105,6 +105,30 @@ def _close_open_time_logs_for_task(task: Task, *, now=None) -> int:
     return closed
 
 
+def _resolve_time_log_for_user(
+    *,
+    task: Task,
+    user,
+    status_value: str,
+    allow_staff_fallback: bool = False,
+) -> TimeLog | None:
+    """Resolve sessao do usuario; staff pode operar sessao aberta de outro usuario."""
+    own = (
+        TimeLog.objects.filter(task=task, user=user, status=status_value)
+        .order_by("-updated_at")
+        .first()
+    )
+    if own is not None:
+        return own
+    if allow_staff_fallback and bool(getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
+        return (
+            TimeLog.objects.filter(task=task, status=status_value)
+            .order_by("-updated_at")
+            .first()
+        )
+    return None
+
+
 def _recalculate_dependents(task: Task) -> None:
     if task.end_date is None:
         return
@@ -971,8 +995,15 @@ class TaskDetailView(APIView):
         before_status = task.status
         before_priority = task.priority
         changed_fields = sorted(serializer.validated_data.keys())
-        serializer.save()
-        task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
+        with transaction.atomic():
+            serializer.save()
+            task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
+            if "status" in serializer.validated_data and task.status != before_status:
+                if task.status == Task.Status.DONE:
+                    _close_open_time_logs_for_task(task)
+                    if task.end_date is None:
+                        task.end_date = timezone.now()
+                        task.save(update_fields=["end_date", "updated_at"])
         if "priority" in serializer.validated_data and task.priority != before_priority:
             dispatch_task_priority_changed(
                 task=task,
@@ -1292,9 +1323,13 @@ class TaskTimePauseView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        try:
-            time_log = TimeLog.objects.get(task=task, user=request.user, status=TimeLog.Status.ACTIVE)
-        except TimeLog.DoesNotExist:
+        time_log = _resolve_time_log_for_user(
+            task=task,
+            user=request.user,
+            status_value=TimeLog.Status.ACTIVE,
+            allow_staff_fallback=True,
+        )
+        if time_log is None:
             return error_response(
                 correlation_id=correlation_id,
                 code="time_log_not_active",
@@ -1346,9 +1381,13 @@ class TaskTimeResumeView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        try:
-            time_log = TimeLog.objects.get(task=task, user=request.user, status=TimeLog.Status.PAUSED)
-        except TimeLog.DoesNotExist:
+        time_log = _resolve_time_log_for_user(
+            task=task,
+            user=request.user,
+            status_value=TimeLog.Status.PAUSED,
+            allow_staff_fallback=True,
+        )
+        if time_log is None:
             return error_response(
                 correlation_id=correlation_id,
                 code="time_log_not_paused",
@@ -1407,9 +1446,13 @@ class TaskCompleteView(APIView):
                 http_status=status.HTTP_409_CONFLICT,
             )
 
-        try:
-            time_log = TimeLog.objects.get(task=task, user=request.user, status=TimeLog.Status.ACTIVE)
-        except TimeLog.DoesNotExist:
+        time_log = _resolve_time_log_for_user(
+            task=task,
+            user=request.user,
+            status_value=TimeLog.Status.ACTIVE,
+            allow_staff_fallback=True,
+        )
+        if time_log is None:
             return error_response(
                 correlation_id=correlation_id,
                 code="time_log_not_active",
@@ -1419,24 +1462,12 @@ class TaskCompleteView(APIView):
             )
 
         now = timezone.now()
-        elapsed = int((now - time_log.current_started_at).total_seconds()) if time_log.current_started_at else 0
         with transaction.atomic():
-            time_log.accumulated_seconds += max(elapsed, 0)
-            time_log.current_started_at = None
-            time_log.ended_at = now
-            time_log.status = TimeLog.Status.COMPLETED
-            time_log.save(
-                update_fields=[
-                    "accumulated_seconds",
-                    "current_started_at",
-                    "ended_at",
-                    "status",
-                    "updated_at",
-                ],
-            )
+            _close_open_time_logs_for_task(task, now=now)
             task.status = Task.Status.DONE
             task.end_date = now
             task.save(update_fields=["status", "end_date", "updated_at"])
+        time_log.refresh_from_db()
 
         _log_task_activity(
             task=task,

@@ -442,6 +442,41 @@ def test_story_4_1_start_pause_resume_time_log(admin_client):
     assert resumed.data["data"]["time_log"]["status"] == TimeLog.Status.ACTIVE
 
 
+def test_admin_can_pause_another_users_active_time_log(admin_client):
+    board = Board.objects.create(project=ProjectFactory.create(), name="Board")
+    group = BoardGroup.objects.create(board=board, name="Doing", position=1, wip_limit=3)
+    task = Task.objects.create(board=board, group=group, title="Sessao alheia", status="in_progress")
+    other = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
+    now = timezone.now()
+    TimeLog.objects.create(
+        task=task,
+        user=other,
+        status=TimeLog.Status.ACTIVE,
+        started_at=now - timedelta(days=85),
+        current_started_at=now - timedelta(days=85),
+        accumulated_seconds=0,
+    )
+
+    paused = admin_client.post(f"/api/v1/tasks/{task.pk}/time/pause", {}, format="json")
+    assert paused.status_code == status.HTTP_200_OK
+    assert paused.data["data"]["time_log"]["status"] == TimeLog.Status.PAUSED
+    assert TimeLog.objects.filter(task=task, user=other, status=TimeLog.Status.PAUSED).exists()
+
+
+def test_task_detail_patch_done_closes_open_time_logs(admin_client):
+    board = Board.objects.create(project=ProjectFactory.create(), name="Board")
+    group = BoardGroup.objects.create(board=board, name="Doing", position=1, wip_limit=3)
+    task = Task.objects.create(board=board, group=group, title="Done sem fechar timer", status="in_progress")
+    admin_client.post(f"/api/v1/tasks/{task.pk}/time/start", {}, format="json")
+
+    patched = admin_client.patch(f"/api/v1/tasks/{task.pk}", {"status": "done"}, format="json")
+    assert patched.status_code == status.HTTP_200_OK
+    assert not TimeLog.objects.filter(
+        task=task,
+        status__in=[TimeLog.Status.ACTIVE, TimeLog.Status.PAUSED],
+    ).exists()
+
+
 def test_story_4_2_complete_task_closes_active_time_log(admin_client):
     board = Board.objects.create(project=ProjectFactory.create(), name="Board")
     group = BoardGroup.objects.create(board=board, name="Doing", position=1, wip_limit=3)

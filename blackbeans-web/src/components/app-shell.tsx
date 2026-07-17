@@ -1012,11 +1012,29 @@ function liveTotalSecondsFromSummary(
   logs: TimeLog[],
   fetchedAtMs: number,
   nowMs: number,
+  currentUserId?: number | null,
 ): number {
-  const active = logs.find((log) => String(log.status).toLowerCase() === "active");
+  const active = resolveControllableTimeLog(logs, "active", currentUserId ?? null, true);
   if (!active) return totalSeconds;
   const deltaSeconds = Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
   return totalSeconds + deltaSeconds;
+}
+
+function resolveControllableTimeLog(
+  logs: TimeLog[],
+  status: "active" | "paused",
+  currentUserId: number | null,
+  allowForeignFallback: boolean,
+): TimeLog | null {
+  const normalized = String(status).toLowerCase();
+  const byStatus = logs.filter((log) => String(log.status).toLowerCase() === normalized);
+  if (byStatus.length === 0) return null;
+  if (currentUserId != null) {
+    const own = byStatus.find((log) => Number(log.user_id) === Number(currentUserId));
+    if (own) return own;
+  }
+  if (allowForeignFallback) return byStatus[0] ?? null;
+  return null;
 }
 
 function renderPriorityTag(value: string) {
@@ -1574,22 +1592,22 @@ export function AppShell() {
     });
     return index;
   }, [contracts]);
+  const currentUserId = useMemo(() => getUserIdFromToken(token), [token]);
   const activeTimeLog = useMemo(
-    () => taskSummary.logs.find((log) => String(log.status).toLowerCase() === "active") ?? null,
-    [taskSummary.logs],
+    () => resolveControllableTimeLog(taskSummary.logs, "active", currentUserId, isAdmin),
+    [currentUserId, isAdmin, taskSummary.logs],
   );
   const pausedTimeLog = useMemo(
-    () => taskSummary.logs.find((log) => String(log.status).toLowerCase() === "paused") ?? null,
-    [taskSummary.logs],
+    () => resolveControllableTimeLog(taskSummary.logs, "paused", currentUserId, isAdmin),
+    [currentUserId, isAdmin, taskSummary.logs],
   );
   const liveTaskTotalSeconds = useMemo(() => {
-    if (selectedTask?.status === "done" || !activeTimeLog) {
+    if (!activeTimeLog) {
       return taskSummary.total_seconds;
     }
     const deltaSeconds = Math.max(0, Math.floor((liveTickMs - taskSummaryFetchedAtMs) / 1000));
     return taskSummary.total_seconds + deltaSeconds;
-  }, [activeTimeLog, liveTickMs, selectedTask?.status, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
-  const currentUserId = useMemo(() => getUserIdFromToken(token), [token]);
+  }, [activeTimeLog, liveTickMs, taskSummary.total_seconds, taskSummaryFetchedAtMs]);
 
   useEffect(() => {
     if (currentUserId == null || assigneeFilterInitializedRef.current) return;
@@ -1939,10 +1957,10 @@ export function AppShell() {
   );
   const anyTaskTimeSummaryActive = useMemo(
     () =>
-      Object.values(taskTimeSummaryByTaskId).some((row) =>
-        row.logs.some((log) => String(log.status).toLowerCase() === "active"),
+      Object.values(taskTimeSummaryByTaskId).some(
+        (row) => resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null,
       ),
-    [taskTimeSummaryByTaskId],
+    [currentUserId, isAdmin, taskTimeSummaryByTaskId],
   );
   const myWorkOverdueTasks = useMemo(() => {
     return tasks
@@ -4837,8 +4855,10 @@ export function AppShell() {
                                   row.logs,
                                   row.fetchedAtMs,
                                   now,
+                                  currentUserId,
                                 );
-                                const active = row.logs.some((log) => String(log.status).toLowerCase() === "active");
+                                const active =
+                                  resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                                 return (
                                   <Space orientation="vertical" size={0} onClick={(event) => event.stopPropagation()}>
                                     <Typography.Text>{secondsToText(display)}</Typography.Text>
@@ -5246,8 +5266,10 @@ export function AppShell() {
                               row.logs,
                               row.fetchedAtMs,
                               now,
+                              currentUserId,
                             );
-                            const active = row.logs.some((log) => String(log.status).toLowerCase() === "active");
+                            const active =
+                              resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                             return (
                               <Space orientation="vertical" size={0} onClick={(event) => event.stopPropagation()}>
                                 <Typography.Text>{secondsToText(display)}</Typography.Text>
@@ -10693,7 +10715,18 @@ export function AppShell() {
                 </TipButton>
               </Space>
               <Typography.Paragraph type="secondary" style={{ marginTop: 10, marginBottom: 0 }}>
-                Sessao ativa: {activeTimeLog ? "sim" : "nao"} | Sessao pausada: {pausedTimeLog ? "sim" : "nao"}
+                Sessao ativa: {activeTimeLog ? "sim" : "nao"}
+                {activeTimeLog &&
+                currentUserId != null &&
+                Number(activeTimeLog.user_id) !== Number(currentUserId)
+                  ? " (outro usuario)"
+                  : ""}{" "}
+                | Sessao pausada: {pausedTimeLog ? "sim" : "nao"}
+                {pausedTimeLog &&
+                currentUserId != null &&
+                Number(pausedTimeLog.user_id) !== Number(currentUserId)
+                  ? " (outro usuario)"
+                  : ""}
               </Typography.Paragraph>
             </Card>
 
