@@ -394,6 +394,34 @@ def _ensure_agent(slug: str, defaults: dict[str, Any]) -> AgentDefinition:
     return agent
 
 
+OVERDUE_AGENT_DEFAULTS: dict[str, Any] = {
+    "title": "Tarefas atrasadas (semanal)",
+    "description": (
+        "Varre tarefas com prazo vencido, gera briefing (IA ou fallback) "
+        "e notifica administradores."
+    ),
+    "schedule_hint": "Toda segunda-feira as 09:50 (America/Sao_Paulo)",
+    "is_enabled": True,
+}
+
+BLOCKED_STALE_AGENT_DEFAULTS: dict[str, Any] = {
+    "title": "Detector de bloqueio (diario)",
+    "description": (
+        "Identifica tarefas blocked ou sem movimento ha 7 dias, "
+        "gera briefing (IA ou fallback) e notifica administradores (somente leitura)."
+    ),
+    "schedule_hint": "Todo dia as 10:00 (America/Sao_Paulo)",
+    "is_enabled": True,
+}
+
+
+def ensure_agent_catalog() -> list[AgentDefinition]:
+    """Garante que os agentes conhecidos existam no catalogo (idempotente)."""
+    overdue = _ensure_agent(OVERDUE_AGENT_SLUG, OVERDUE_AGENT_DEFAULTS)
+    blocked = _ensure_agent(BLOCKED_STALE_AGENT_SLUG, BLOCKED_STALE_AGENT_DEFAULTS)
+    return [overdue, blocked]
+
+
 def _finish_failed_run(run: AgentRun, *, summary: str, error: str) -> AgentRun:
     run.status = AgentRun.Status.FAILED
     run.error_message = error[:2000]
@@ -410,18 +438,7 @@ def execute_overdue_tasks_weekly_agent(
 ) -> AgentRun:
     """Executa o agente de atrasos: grava AgentRun, briefing IA, notifica admins."""
     corr = (correlation_id or str(uuid.uuid4())).strip()
-    agent = _ensure_agent(
-        OVERDUE_AGENT_SLUG,
-        {
-            "title": "Tarefas atrasadas (semanal)",
-            "description": (
-                "Varre tarefas com prazo vencido, gera briefing (IA ou fallback) "
-                "e notifica administradores."
-            ),
-            "schedule_hint": "Toda segunda-feira as 09:50 (America/Sao_Paulo)",
-            "is_enabled": True,
-        },
-    )
+    agent = _ensure_agent(OVERDUE_AGENT_SLUG, OVERDUE_AGENT_DEFAULTS)
     if not agent.is_enabled and triggered_by is None:
         return AgentRun.objects.create(
             agent=agent,
@@ -495,18 +512,7 @@ def execute_blocked_stale_tasks_agent(
     """Executa detector de bloqueio / tarefas paradas."""
     corr = (correlation_id or str(uuid.uuid4())).strip()
     stale_days = max(1, int(getattr(settings, "AGENT_STALE_DAYS", 7) or 7))
-    agent = _ensure_agent(
-        BLOCKED_STALE_AGENT_SLUG,
-        {
-            "title": "Detector de bloqueio (diario)",
-            "description": (
-                f"Identifica tarefas blocked ou sem movimento ha {stale_days} dias, "
-                "gera briefing e notifica administradores (somente leitura)."
-            ),
-            "schedule_hint": "Todo dia as 10:00 (America/Sao_Paulo)",
-            "is_enabled": True,
-        },
-    )
+    agent = _ensure_agent(BLOCKED_STALE_AGENT_SLUG, BLOCKED_STALE_AGENT_DEFAULTS)
     if not agent.is_enabled and triggered_by is None:
         return AgentRun.objects.create(
             agent=agent,
