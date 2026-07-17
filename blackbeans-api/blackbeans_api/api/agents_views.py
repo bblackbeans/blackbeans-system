@@ -13,6 +13,7 @@ from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.governance.agent_service import BLOCKED_STALE_AGENT_SLUG
 from blackbeans_api.governance.agent_service import OVERDUE_AGENT_SLUG
+from blackbeans_api.governance.agent_service import ensure_agent_catalog
 from blackbeans_api.governance.agent_service import execute_blocked_stale_tasks_agent
 from blackbeans_api.governance.agent_service import execute_overdue_tasks_weekly_agent
 from blackbeans_api.governance.models import AgentDefinition
@@ -65,6 +66,7 @@ class AgentListView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        ensure_agent_catalog()
         agents = list(AgentDefinition.objects.all().order_by("title"))
         last_runs: dict[str, AgentRun] = {}
         for run in (
