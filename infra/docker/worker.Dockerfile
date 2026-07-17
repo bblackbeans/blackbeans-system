@@ -14,4 +14,4 @@ COPY blackbeans-api /app
 RUN uv sync --group dev
 RUN mkdir -p /app/staticfiles
 
-CMD ["uv", "run", "celery", "-A", "config.celery_app", "worker", "-l", "INFO"]
+CMD ["uv", "run", "celery", "-A", "config.celery_app", "worker", "-B", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler", "-l", "INFO"]
