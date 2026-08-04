@@ -730,6 +730,18 @@ function formatDateOnly(value: string | null | undefined) {
   return date.toLocaleDateString("pt-BR");
 }
 
+/** Mais atrasado primeiro; sem prazo vai pro final. */
+function compareTaskEndDateAsc(
+  a: { end_date?: string | null },
+  b: { end_date?: string | null },
+): number {
+  const aMs = a.end_date ? new Date(a.end_date).getTime() : Number.POSITIVE_INFINITY;
+  const bMs = b.end_date ? new Date(b.end_date).getTime() : Number.POSITIVE_INFINITY;
+  const aValid = Number.isFinite(aMs) ? aMs : Number.POSITIVE_INFINITY;
+  const bValid = Number.isFinite(bMs) ? bMs : Number.POSITIVE_INFINITY;
+  return aValid - bValid;
+}
+
 const MONTH_SHORT_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 /** Pill de intervalo estilo Monday (sem hora). */
@@ -2279,7 +2291,8 @@ export function AppShell() {
       const equals = selected === actual;
       return taskFilterMode === "include" ? equals : !equals;
     };
-    return tasksTabSource.filter((task) => {
+    return tasksTabSource
+      .filter((task) => {
       if (task.parent_id) return false;
       if (!matchValue(taskStatusFilter, String(task.status ?? ""))) return false;
       if (!matchValue(taskPriorityFilter, String(task.priority ?? ""))) return false;
@@ -2336,7 +2349,9 @@ export function AppShell() {
           break;
       }
       return true;
-    });
+    })
+      .slice()
+      .sort(compareTaskEndDateAsc);
   }, [
     boardById,
     nowMs,
@@ -2509,6 +2524,9 @@ export function AppShell() {
       list.push({ ...task });
       childrenByParent.set(parentId, list);
     });
+    childrenByParent.forEach((kids, parentId) => {
+      childrenByParent.set(parentId, kids.slice().sort(compareTaskEndDateAsc));
+    });
 
     const roots: MyWorkTaskRow[] = [];
     const seenRoots = new Set<string>();
@@ -2535,7 +2553,7 @@ export function AppShell() {
       if (parent) considerRoot(parent);
     });
 
-    return roots;
+    return roots.slice().sort(compareTaskEndDateAsc);
   }, [matchesMyWorkTaskFilters, tasks]);
   const taskTimeSummaryTargets = useMemo(() => {
     const map = new Map<string, TaskItem>();
@@ -6042,7 +6060,8 @@ export function AppShell() {
                             {
                               title: "Prazo fim",
                               dataIndex: "end_date",
-                              sorter: (a, b) => new Date(a.end_date ?? 0).getTime() - new Date(b.end_date ?? 0).getTime(),
+                              defaultSortOrder: "ascend",
+                              sorter: compareTaskEndDateAsc,
                               render: (v: string | null) => formatDateOnly(v),
                             },
                             {
