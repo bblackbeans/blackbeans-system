@@ -2,6 +2,11 @@
 @import "tailwindcss" source("..");
 
 :root {
+  --background: #141414;
+  --foreground: #ededed;
+}
+
+html[data-bb-theme="light"] {
   --background: #f4f0ed;
   --foreground: #141312;
 }
@@ -16,13 +21,6 @@ html[data-bb-theme="dark"] {
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-bb-theme="light"]) {
-    --background: #141414;
-    --foreground: #ededed;
-  }
 }
 
 body {

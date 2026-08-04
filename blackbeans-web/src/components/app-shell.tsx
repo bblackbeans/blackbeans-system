@@ -1912,7 +1912,7 @@ export function AppShell() {
   const [manualTimeModalOpen, setManualTimeModalOpen] = useState(false);
   const [manualTimeForm] = Form.useForm();
   const [passwordChangeForm] = Form.useForm();
-  const [bbThemeMode, setBbThemeMode] = useState<"light" | "dark">("light");
+  const [bbThemeMode, setBbThemeMode] = useState<"light" | "dark">("dark");
   const { token: antToken } = theme.useToken();
   const [clientRequests, setClientRequests] = useState<Record<string, unknown>[]>([]);
   const [clientRequestsLoading, setClientRequestsLoading] = useState(false);
@@ -3673,7 +3673,7 @@ export function AppShell() {
       }
       setNowMs(new Date().getTime());
       const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-      setBbThemeMode(storedTheme === "dark" ? "dark" : "light");
+      setBbThemeMode(storedTheme === "light" ? "light" : "dark");
       setHydratedSession(true);
     }, 0);
     return () => window.clearTimeout(timer);
