@@ -13,6 +13,8 @@ export const RECORDING_MAX_MS = 60_000;
 
 const MAX_JS_ERRORS = 20;
 const MAX_FAILED_REQUESTS = 30;
+const AUTO_ERROR_DEDUPE_MS = 15 * 60 * 1000;
+const AUTH_TOKEN_STORAGE_KEY = "bb_access_token";
 
 export type MediaPayload = {
   mime: string;
@@ -45,6 +47,8 @@ export type TechnicalContext = {
   failed_requests?: FailedRequestEntry[];
   screenshot?: MediaPayload;
   screen_recording?: MediaPayload;
+  auto_error?: boolean;
+  fingerprint?: string;
 };
 
 export type ReportProblemDraft = {
@@ -88,6 +92,7 @@ let failedRequests: FailedRequestEntry[] = [];
 let originalFetch: typeof fetch | null = null;
 let activeRecordingSession: PageRecordingSession | null = null;
 let recordingEndedHandler: ((result: MediaPayload | null) => void) | null = null;
+const autoErrorFingerprints = new Map<string, number>();
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -101,18 +106,86 @@ function pushFifo<T>(list: T[], item: T, max: number): T[] {
   return next;
 }
 
+function shouldSkipAutoError(fingerprint: string): boolean {
+  const now = Date.now();
+  for (const [key, ts] of autoErrorFingerprints) {
+    if (now - ts > AUTO_ERROR_DEDUPE_MS) autoErrorFingerprints.delete(key);
+  }
+  const prev = autoErrorFingerprints.get(fingerprint);
+  if (prev != null && now - prev < AUTO_ERROR_DEDUPE_MS) return true;
+  autoErrorFingerprints.set(fingerprint, now);
+  return false;
+}
+
+function isProblemReportEndpoint(url: string): boolean {
+  return /\/problem-reports(\/|$|\?)/i.test(url);
+}
+
+async function autoCreateProblemReport(params: {
+  title: string;
+  description: string;
+  fingerprint: string;
+  failedRequest?: FailedRequestEntry;
+  jsError?: JsErrorEntry;
+}): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (shouldSkipAutoError(params.fingerprint)) return;
+  const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  if (!token) return;
+  const fetchImpl = originalFetch ?? window.fetch.bind(window);
+  const context: TechnicalContext = {
+    ...collectTechnicalContext(),
+    auto_error: true,
+    fingerprint: params.fingerprint,
+  };
+  if (params.failedRequest) {
+    context.failed_requests = [params.failedRequest];
+  }
+  if (params.jsError) {
+    context.js_errors = [params.jsError];
+  }
+  try {
+    await fetchImpl("/api/v1/problem-reports/feedback", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        titulo: params.title.slice(0, 200),
+        descricao: params.description.slice(0, 8000),
+        passos: "",
+        contexto: context,
+      }),
+      cache: "no-store",
+    });
+  } catch {
+    // Nao propagar: coleta automatica e best-effort.
+  }
+}
+
 function onWindowError(event: ErrorEvent) {
-  jsErrors = pushFifo(
-    jsErrors,
-    {
-      message: event.message || "Unknown error",
-      source: event.filename,
-      line: event.lineno,
-      col: event.colno,
-      ts: nowIso(),
-    },
-    MAX_JS_ERRORS,
-  );
+  const entry: JsErrorEntry = {
+    message: event.message || "Unknown error",
+    source: event.filename,
+    line: event.lineno,
+    col: event.colno,
+    ts: nowIso(),
+  };
+  jsErrors = pushFifo(jsErrors, entry, MAX_JS_ERRORS);
+  void autoCreateProblemReport({
+    title: `Erro JS: ${(entry.message || "desconhecido").slice(0, 120)}`,
+    description: [
+      entry.message,
+      entry.source ? `Arquivo: ${entry.source}` : null,
+      entry.line != null ? `Linha: ${entry.line}` : null,
+      entry.col != null ? `Coluna: ${entry.col}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    fingerprint: `js|${entry.message}|${entry.source ?? ""}|${entry.line ?? ""}`,
+    jsError: entry,
+  });
 }
 
 function onUnhandledRejection(event: PromiseRejectionEvent) {
@@ -123,14 +196,17 @@ function onUnhandledRejection(event: PromiseRejectionEvent) {
       : typeof reason === "string"
         ? reason
         : JSON.stringify(reason);
-  jsErrors = pushFifo(
-    jsErrors,
-    {
-      message: `Unhandled rejection: ${message}`,
-      ts: nowIso(),
-    },
-    MAX_JS_ERRORS,
-  );
+  const entry: JsErrorEntry = {
+    message: `Unhandled rejection: ${message}`,
+    ts: nowIso(),
+  };
+  jsErrors = pushFifo(jsErrors, entry, MAX_JS_ERRORS);
+  void autoCreateProblemReport({
+    title: `Promise rejeitada: ${message.slice(0, 100)}`,
+    description: entry.message,
+    fingerprint: `rejection|${message}`,
+    jsError: entry,
+  });
 }
 
 async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -140,7 +216,7 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
 
   try {
     const response = await fetchImpl(input, init);
-    if (response.status >= 400) {
+    if (response.status >= 400 && !isProblemReportEndpoint(url)) {
       let bodyPreview = "";
       try {
         const clone = response.clone();
@@ -149,31 +225,39 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
       } catch {
         bodyPreview = "";
       }
-      failedRequests = pushFifo(
-        failedRequests,
-        {
-          url,
-          method,
-          status: response.status,
-          ts: nowIso(),
-          body_preview: bodyPreview,
-        },
-        MAX_FAILED_REQUESTS,
-      );
+      const entry: FailedRequestEntry = {
+        url,
+        method,
+        status: response.status,
+        ts: nowIso(),
+        body_preview: bodyPreview,
+      };
+      failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
+      void autoCreateProblemReport({
+        title: `Falha ${response.status} ${method}`,
+        description: `${method} ${url}\nStatus: ${response.status}\n${bodyPreview}`.slice(0, 8000),
+        fingerprint: `http|${method}|${url}|${response.status}|${bodyPreview.slice(0, 120)}`,
+        failedRequest: entry,
+      });
     }
     return response;
   } catch (error) {
-    failedRequests = pushFifo(
-      failedRequests,
-      {
+    if (!isProblemReportEndpoint(url)) {
+      const entry: FailedRequestEntry = {
         url,
         method,
         status: 0,
         ts: nowIso(),
         body_preview: error instanceof Error ? error.message : String(error),
-      },
-      MAX_FAILED_REQUESTS,
-    );
+      };
+      failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
+      void autoCreateProblemReport({
+        title: `Rede: ${method} falhou`,
+        description: `${method} ${url}\n${entry.body_preview ?? ""}`.slice(0, 8000),
+        fingerprint: `net|${method}|${url}|${entry.body_preview ?? ""}`,
+        failedRequest: entry,
+      });
+    }
     throw error;
   }
 }
@@ -204,24 +288,12 @@ export function collectTechnicalContext(): TechnicalContext {
 }
 
 function shouldIgnoreElement(el: Element): boolean {
-  if (el.closest("[data-report-problem-ui]")) return true;
-  const node = el as HTMLElement;
-  const className = node.className;
-  if (typeof className === "string") {
-    if (
-      className.includes("ant-drawer-mask") ||
-      className.includes("ant-modal-mask") ||
-      className.includes("ant-drawer-content-wrapper") ||
-      className.includes("ant-modal-wrap")
-    ) {
-      return true;
-    }
-  }
-  return false;
+  // Soh a UI do proprio reporte fica de fora; modais/drawers do sistema entram na captura.
+  return Boolean(el.closest("[data-report-problem-ui]"));
 }
 
 function captureScreenshotTarget(): HTMLElement {
-  return document.getElementById("conteudo-principal") ?? document.body;
+  return document.documentElement;
 }
 
 function viewportSize(): { width: number; height: number } {

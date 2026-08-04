@@ -101,6 +101,7 @@ class ProblemReportFeedbackCreateView(APIView):
         workspace = _resolve_workspace(workspace_id)
         report_correlation_id = (data.get("correlation_id") or "").strip() or new_correlation_id()
         url = str(contexto.get("url") or "")[:2048]
+        source = "auto_error" if contexto.get("auto_error") else "feedback"
 
         report = ProblemReport.objects.create(
             user=user,
@@ -108,6 +109,7 @@ class ProblemReportFeedbackCreateView(APIView):
             title=data["titulo"],
             description=data["descricao"],
             steps=data.get("passos") or "",
+            source=source,
             url=url,
             correlation_id=report_correlation_id,
             context_json=contexto,

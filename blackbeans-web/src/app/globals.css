@@ -33,6 +33,27 @@ body {
   padding-block: 6px;
 }
 
+.bb-compact-table .bb-task-title-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.bb-compact-table .bb-task-title-cell .bb-task-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-compact-table .bb-task-title-cell .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
 .bb-mention {
   color: #2b76e5;
   background: rgba(43, 118, 229, 0.12);
@@ -70,6 +91,21 @@ html[data-bb-theme="dark"] .bb-monday-date-pill {
   background: rgba(218, 147, 48, 0.08);
 }
 
+.bb-mentions-expandable-wrap {
+  width: 100%;
+}
+
+.bb-mentions-expandable.ant-mentions,
+.bb-mentions-expandable {
+  width: 100%;
+}
+
+.bb-mentions-expandable textarea {
+  min-height: 168px !important;
+  resize: vertical !important;
+  overflow-y: auto !important;
+}
+
 .bb-rich-text {
   white-space: pre-wrap;
   word-break: break-word;
@@ -85,28 +121,28 @@ html[data-bb-theme="dark"] .bb-rich-link {
   color: #7eb6ff;
 }
 
-.bb-rich-image-wrap {
-  display: block;
-  margin: 8px 0;
-  max-width: 100%;
-}
-
-.bb-rich-image-wrap .ant-image {
-  display: block;
-  max-width: min(100%, 420px);
-}
-
-.bb-rich-image-wrap img {
-  max-width: 100%;
-  height: auto;
+.bb-rich-image-wrap--loading {
+  min-height: 120px;
+  min-width: 160px;
+  background: rgba(127, 127, 127, 0.12);
   border-radius: 8px;
 }
 
+.bb-rich-image-wrap img.bb-rich-image {
+  display: block !important;
+  max-width: min(100%, 520px) !important;
+  width: auto !important;
+  height: auto !important;
+  border-radius: 8px;
+  object-fit: contain;
+  background: rgba(127, 127, 127, 0.08);
+}
+
 .bb-rich-description {
-  border: 1px solid rgba(127, 127, 127, 0.28);
+  border: none;
   border-radius: 10px;
-  padding: 8px 10px 10px;
-  background: rgba(127, 127, 127, 0.06);
+  padding: 4px 0 6px;
+  background: transparent;
 }
 
 .bb-rich-description__bar {
@@ -118,20 +154,405 @@ html[data-bb-theme="dark"] .bb-rich-link {
 .bb-rich-description__body {
   min-height: 72px;
   cursor: text;
+  border: none;
+  outline: none;
+  box-shadow: none;
 }
 
 .bb-rich-description--editing {
-  border-color: #da9330;
+  border: none;
   background: transparent;
-  padding-bottom: 6px;
+  padding: 0 0 6px;
 }
 
+.bb-rich-preview__body {
+  border: 1px solid rgba(127, 127, 127, 0.28);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* Relatar problema sempre acima de Modal/Drawer do app */
+.bb-report-problem-drawer.ant-drawer {
+  z-index: 5000 !important;
+}
+.bb-report-problem-drawer .ant-drawer-mask {
+  z-index: 4999 !important;
+}
+.bb-report-problem-drawer .ant-drawer-content-wrapper {
+  z-index: 5000 !important;
+}
+
+/* Modal de novidades — shell segue o tema; scroll fino e discreto. */
 .bb-whats-new-modal .ant-modal-content {
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.bb-whats-new-modal--dark .ant-modal-content,
+.bb-whats-new-modal--dark .ant-modal-body {
+  background: #0a1218 !important;
+  background-color: #0a1218 !important;
+}
+
+.bb-whats-new-modal--light .ant-modal-content,
+.bb-whats-new-modal--light .ant-modal-body {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+}
+
+.bb-whats-new-modal .ant-modal-body {
+  padding: 0 !important;
+}
+
+.bb-whats-new-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bb-wn-scroll-thumb) var(--bb-wn-scroll-track);
+}
+
+.bb-whats-new-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.bb-whats-new-scroll::-webkit-scrollbar-track {
+  background: var(--bb-wn-scroll-track);
+  border-radius: 999px;
+  border: none;
+}
+
+.bb-whats-new-scroll::-webkit-scrollbar-thumb {
+  background: var(--bb-wn-scroll-thumb);
+  border-radius: 999px;
+  border: none;
+}
+
+.bb-whats-new-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Composer estilo Monday (TipTap) — sem borda branca no campo de escrita */
+.bb-monday-composer {
+  border: none;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.08);
+  overflow: visible;
+}
+
+.bb-monday-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 10px 10px 0 0;
+}
+
+.bb-monday-toolbar .ant-btn.is-active {
+  background: rgba(218, 147, 48, 0.18);
+  color: #da9330;
+}
+
+.bb-monday-toolbar__sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(127, 127, 127, 0.35);
+}
+
+.bb-monday-editor-shell {
+  min-height: 140px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px 12px;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.bb-monday-editor-shell.bb-drop-zone,
+.bb-monday-editor-shell.bb-drop-active {
+  border: none !important;
+  outline: none !important;
+}
+
+.bb-monday-editor-prose,
+.bb-monday-editor-prose.ProseMirror,
+.bb-monday-editor-prose:focus,
+.bb-monday-editor-prose.ProseMirror-focused {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  min-height: 120px;
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.bb-monday-editor-prose p {
+  margin: 0 0 0.5em;
+}
+
+.bb-monday-editor-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.bb-monday-editor-prose img.bb-composer-image,
+.bb-monday-editor-prose img,
+.bb-composer-image-wrap img.bb-composer-image {
+  max-width: min(100%, 480px);
+  height: auto;
+  border-radius: 8px;
+  display: block;
+  margin: 8px 0;
+}
+
+.bb-composer-image-wrap {
+  display: block;
+  line-height: 0;
+}
+
+.bb-composer-image-wrap.is-selected {
+  outline: 2px solid #da9330;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.bb-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  max-width: 280px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.bb-emoji-grid button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1.4;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.bb-emoji-grid button:hover {
+  background: rgba(218, 147, 48, 0.25);
+}
+
+.bb-monday-editor-prose .mention {
+  color: #4c8bf5;
+  background: rgba(76, 139, 245, 0.12);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-weight: 600;
+}
+
+html[data-bb-theme="dark"] .bb-monday-editor-prose .mention {
+  color: #7eb6ff;
+  background: rgba(126, 182, 255, 0.14);
+}
+
+.bb-monday-editor-prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.bb-monday-editor-prose ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.bb-monday-editor-prose p.is-editor-empty:first-child::before {
+  color: rgba(127, 127, 127, 0.75);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.bb-monday-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid rgba(127, 127, 127, 0.25);
+}
+
+.bb-upload-toast {
+  position: fixed;
+  /* Acima do FAB "Relatar problema" (bottom 24 + ~48px botao) */
+  right: 24px;
+  bottom: 96px;
+  z-index: 5200;
+  min-width: 240px;
+  max-width: 340px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #1c2430;
+  color: #f5f7fa;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.bb-upload-toast__title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
+.bb-upload-toast__list {
+  list-style: none;
+  margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bb-upload-toast__item {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.bb-upload-toast__name {
   overflow: hidden;
-  background: linear-gradient(165deg, #0c1a22 0%, #10252e 45%, #0a1218 100%);
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-upload-toast__item--done .bb-upload-toast__icon {
+  color: #52c41a;
+}
+
+.bb-upload-toast__item--error .bb-upload-toast__icon {
+  color: #ff7875;
+}
+
+.tippy-box[data-theme~="bb-mention"] {
+  background: transparent;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.tippy-box[data-theme~="bb-mention"] .tippy-content {
+  padding: 0;
+}
+
+.bb-mention-dropdown {
+  background: #141b24;
+  color: #f5f7fa;
+  border: 1px solid rgba(218, 147, 48, 0.45);
+  border-radius: 10px;
+  padding: 6px;
+  min-width: 240px;
+  max-width: 340px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+}
+
+.bb-mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f5f7fa;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 4px;
+  pointer-events: auto;
+}
+
+.bb-mention-item:last-child {
+  margin-bottom: 0;
+}
+
+.bb-mention-item:hover,
+.bb-mention-item.is-active {
+  background: rgba(218, 147, 48, 0.28);
+  border-color: rgba(218, 147, 48, 0.55);
+  color: #fff;
+}
+
+.bb-mention-item__avatar {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #da9330;
+  color: #111;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bb-mention-item__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-mention-empty {
+  padding: 8px;
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+.bb-rich-html {
+  word-break: break-word;
+  line-height: 1.55;
+}
+
+.bb-rich-html img,
+.bb-rich-html .bb-rich-image {
+  max-width: min(100%, 520px);
+  height: auto;
+  border-radius: 8px;
+}
+
+.bb-rich-html .mention,
+.bb-rich-html .bb-mention {
+  color: #7eb6ff;
+  background: rgba(126, 182, 255, 0.16);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+html[data-bb-theme="light"] .bb-rich-html .mention,
+html[data-bb-theme="light"] .bb-rich-html .bb-mention {
+  color: #2f6fed;
+  background: rgba(47, 111, 237, 0.12);
+}
+
+.bb-rich-html p {
+  margin: 0 0 0.5em;
+}
+
+.bb-rich-html p:last-child {
+  margin-bottom: 0;
 }
 
 

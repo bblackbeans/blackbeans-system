@@ -24,50 +24,95 @@ from blackbeans_api.users.models import UserCollaboratorLink
 from blackbeans_api.users.models import UserWorkspaceAccess
 
 
+def _ensure_user(*, username: str, email: str, name: str, password: str, staff: bool = False):
+    User = get_user_model()
+    user, _ = User.objects.get_or_create(
+        username=username,
+        defaults={"email": email, "name": name},
+    )
+    user.email = email
+    user.name = name
+    user.is_staff = staff
+    user.is_superuser = staff
+    user.is_active = True
+    user.set_password(password)
+    user.save()
+    return user
+
+
+def _ensure_collaborator(user, *, display_name: str, job_title: str, workspace: Workspace):
+    profile, _ = Collaborator.objects.get_or_create(
+        professional_email=user.email,
+        defaults={"display_name": display_name, "job_title": job_title},
+    )
+    if profile.display_name != display_name or profile.job_title != job_title:
+        profile.display_name = display_name
+        profile.job_title = job_title
+        profile.save(update_fields=["display_name", "job_title", "updated_at"])
+    UserCollaboratorLink.objects.update_or_create(
+        user=user,
+        collaborator=profile,
+        defaults={"is_active": True},
+    )
+    UserWorkspaceAccess.objects.get_or_create(user=user, workspace=workspace)
+    return profile
+
+
 class Command(BaseCommand):
     help = "Cria usuarios e dados [QA] para homologacao local."
 
     def handle(self, *args, **options):
-        User = get_user_model()
         now = timezone.now()
+        # Normaliza para meio-dia e evita flutuacao por horario
+        day = now.replace(hour=12, minute=0, second=0, microsecond=0)
 
-        admin, _ = User.objects.get_or_create(
+        admin = _ensure_user(
             username="admin.teste",
-            defaults={"email": "admin.teste@blackbeans.local", "name": "Admin Teste"},
+            email="admin.teste@blackbeans.local",
+            name="Admin Teste",
+            password="Admin!Teste2025#",
+            staff=True,
         )
-        admin.email = "admin.teste@blackbeans.local"
-        admin.name = "Admin Teste"
-        admin.is_staff = True
-        admin.is_superuser = True
-        admin.is_active = True
-        admin.set_password("Admin!Teste2025#")
-        admin.save()
-
-        colab, _ = User.objects.get_or_create(
+        colab = _ensure_user(
             username="colaborador_demo",
-            defaults={"email": "colaborador.demo@blackbeans.local", "name": "Colaborador Demo"},
+            email="colaborador.demo@blackbeans.local",
+            name="Colaborador Demo",
+            password="Colab!Demo2025#",
         )
-        colab.email = "colaborador.demo@blackbeans.local"
-        colab.name = "Colaborador Demo"
-        colab.is_staff = False
-        colab.is_superuser = False
-        colab.is_active = True
-        colab.set_password("Colab!Demo2025#")
-        colab.save()
-
-        collab_profile, _ = Collaborator.objects.get_or_create(
-            professional_email="colaborador.demo@blackbeans.local",
-            defaults={"display_name": "Colaborador Demo", "job_title": "Designer"},
+        barbara = _ensure_user(
+            username="barbara.thimoteo",
+            email="barbara.thimoteo@blackbeans.local",
+            name="Barbara Thimoteo",
+            password="Colab!Demo2025#",
         )
-        UserCollaboratorLink.objects.update_or_create(
-            user=colab,
-            collaborator=collab_profile,
-            defaults={"is_active": True},
+        felipe = _ensure_user(
+            username="felipe.santos",
+            email="felipe.santos@blackbeans.local",
+            name="Felipe Santos",
+            password="Colab!Demo2025#",
+        )
+        kaue = _ensure_user(
+            username="kaue.ronald",
+            email="kaue.ronald@blackbeans.local",
+            name="Kaue Ronald",
+            password="Colab!Demo2025#",
+        )
+        marina = _ensure_user(
+            username="marina.oliveira",
+            email="marina.oliveira@blackbeans.local",
+            name="Marina Oliveira",
+            password="Colab!Demo2025#",
         )
 
         ws, _ = Workspace.objects.get_or_create(name="Produção")
         Workspace.objects.get_or_create(name="Producao")
-        UserWorkspaceAccess.objects.get_or_create(user=colab, workspace=ws)
+
+        _ensure_collaborator(colab, display_name="Colaborador Demo", job_title="Designer", workspace=ws)
+        _ensure_collaborator(barbara, display_name="Barbara Thimoteo", job_title="PM", workspace=ws)
+        _ensure_collaborator(felipe, display_name="Felipe Santos", job_title="Dev", workspace=ws)
+        _ensure_collaborator(kaue, display_name="Kaue Ronald", job_title="Dev", workspace=ws)
+        _ensure_collaborator(marina, display_name="Marina Oliveira", job_title="QA", workspace=ws)
+        UserWorkspaceAccess.objects.get_or_create(user=admin, workspace=ws)
 
         client, _ = Client.objects.get_or_create(
             cnpj="12.345.678/0001-90",
@@ -93,8 +138,8 @@ class Command(BaseCommand):
                 "client": client,
                 "description": "Projeto com tarefas de teste",
                 "status": Project.Status.ACTIVE,
-                "start_date": now - timedelta(days=7),
-                "end_date": now + timedelta(days=30),
+                "start_date": day - timedelta(days=7),
+                "end_date": day + timedelta(days=30),
             },
         )
         if project.client_id != client.id:
@@ -102,132 +147,382 @@ class Command(BaseCommand):
             project.save(update_fields=["client", "updated_at"])
 
         board, _ = Board.objects.get_or_create(project=project, name="Board Demo")
-        group, _ = BoardGroup.objects.get_or_create(
+        group_todo, _ = BoardGroup.objects.get_or_create(
             board=board,
             position=1,
-            defaults={"name": "A fazer", "wip_limit": 20},
+            defaults={"name": "A fazer", "wip_limit": 40},
         )
-        BoardGroup.objects.get_or_create(board=board, position=2, defaults={"name": "Em andamento", "wip_limit": 10})
-        BoardGroup.objects.get_or_create(board=board, position=3, defaults={"name": "Concluido", "wip_limit": 50})
+        group_doing, _ = BoardGroup.objects.get_or_create(
+            board=board,
+            position=2,
+            defaults={"name": "Em andamento", "wip_limit": 20},
+        )
+        group_done, _ = BoardGroup.objects.get_or_create(
+            board=board,
+            position=3,
+            defaults={"name": "Concluido", "wip_limit": 80},
+        )
 
         Task.objects.filter(title__startswith="[QA]").delete()
         ClientRequest.objects.filter(title__startswith="[QA]").delete()
 
-        t1 = Task.objects.create(
-            board=board,
-            group=group,
-            title="[QA] Campanha Instagram — briefing",
-            description="Descricao com link https://example.com/briefing e mencao @colaborador_demo",
-            status=Task.Status.TODO,
-            priority=Task.Priority.HIGH,
-            assignee=colab,
-            effort_points=4,
-            start_date=now - timedelta(days=1),
-            end_date=now + timedelta(days=3),
-        )
-        t2 = Task.objects.create(
-            board=board,
-            group=group,
-            title="[QA] Produzir artes (recorrente)",
-            description="Tarefa recorrente semanal para testar spawn ao concluir.",
-            status=Task.Status.IN_PROGRESS,
-            priority=Task.Priority.MEDIUM,
-            assignee=colab,
-            effort_points=8,
-            start_date=now - timedelta(days=2),
-            end_date=now + timedelta(days=5),
-            is_recurring=True,
-            recurrence_frequency="weekly",
-        )
-        t3 = Task.objects.create(
-            board=board,
-            group=group,
-            title="[QA] Revisao cliente (depende do briefing)",
-            description="Depende da tarefa 1 — teste de cascata de prazo.",
-            status=Task.Status.TODO,
-            priority=Task.Priority.MEDIUM,
-            assignee=admin,
-            effort_points=3,
-            start_date=now + timedelta(days=3),
-            end_date=now + timedelta(days=6),
-        )
-        TaskDependency.objects.get_or_create(task=t3, depends_on=t1)
+        def create_task(
+            *,
+            title: str,
+            description: str,
+            status: str,
+            priority: str,
+            assignee,
+            effort: int,
+            start_offset: int,
+            end_offset: int,
+            group=None,
+            parent=None,
+            is_recurring: bool = False,
+            recurrence_frequency: str = "",
+        ):
+            if group is None:
+                if status == Task.Status.DONE:
+                    group = group_done
+                elif status == Task.Status.IN_PROGRESS:
+                    group = group_doing
+                else:
+                    group = group_todo
+            return Task.objects.create(
+                board=board,
+                group=group,
+                parent=parent,
+                title=title,
+                description=description,
+                status=status,
+                priority=priority,
+                assignee=assignee,
+                effort_points=effort,
+                start_date=day + timedelta(days=start_offset),
+                end_date=day + timedelta(days=end_offset),
+                is_recurring=is_recurring,
+                recurrence_frequency=recurrence_frequency,
+            )
 
-        Task.objects.create(
-            board=board,
-            group=group,
-            parent=t1,
+        specs = [
+            # Concluidas (passado)
+            dict(
+                title="[QA] Kickoff com cliente Demo",
+                description="Reuniao inicial — ja finalizada.",
+                status=Task.Status.DONE,
+                priority=Task.Priority.MEDIUM,
+                assignee=barbara,
+                effort=2,
+                start_offset=-20,
+                end_offset=-18,
+            ),
+            dict(
+                title="[QA] Setup ambiente de homologacao",
+                description="Infra basica liberada.",
+                status=Task.Status.DONE,
+                priority=Task.Priority.HIGH,
+                assignee=kaue,
+                effort=5,
+                start_offset=-16,
+                end_offset=-12,
+            ),
+            dict(
+                title="[QA] Wireframe landing page",
+                description="Aprovado pelo cliente.",
+                status=Task.Status.DONE,
+                priority=Task.Priority.MEDIUM,
+                assignee=colab,
+                effort=4,
+                start_offset=-14,
+                end_offset=-10,
+            ),
+            dict(
+                title="[QA] Checklist QA release 0.1",
+                description="Smoke tests ok.",
+                status=Task.Status.DONE,
+                priority=Task.Priority.LOW,
+                assignee=marina,
+                effort=3,
+                start_offset=-9,
+                end_offset=-7,
+            ),
+            dict(
+                title="[QA] Tarefa concluida",
+                description="Para dashboard de horas e filtros done.",
+                status=Task.Status.DONE,
+                priority=Task.Priority.LOW,
+                assignee=colab,
+                effort=2,
+                start_offset=-5,
+                end_offset=-4,
+            ),
+            # Em andamento (variados)
+            dict(
+                title="[QA] Campanha Instagram — briefing",
+                description="Descricao com link https://example.com/briefing e mencao @barbara.thimoteo",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.HIGH,
+                assignee=barbara,
+                effort=4,
+                start_offset=-3,
+                end_offset=2,
+            ),
+            dict(
+                title="[QA] Produzir artes (recorrente)",
+                description="Tarefa recorrente semanal para testar spawn ao concluir.",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.MEDIUM,
+                assignee=colab,
+                effort=8,
+                start_offset=-2,
+                end_offset=5,
+                is_recurring=True,
+                recurrence_frequency="weekly",
+            ),
+            dict(
+                title="[QA] Integracao API check-in",
+                description="PUT/update no fluxo de check-in — @felipe.santos",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.HIGH,
+                assignee=felipe,
+                effort=6,
+                start_offset=-1,
+                end_offset=4,
+            ),
+            dict(
+                title="[QA] Ajuste layout etiquetas",
+                description="Deploy pendente no sistema local.",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.MEDIUM,
+                assignee=kaue,
+                effort=3,
+                start_offset=0,
+                end_offset=3,
+            ),
+            dict(
+                title="[QA] Suite regressao sprint atual",
+                description="Casos criticos de login e tarefas.",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.HIGH,
+                assignee=marina,
+                effort=5,
+                start_offset=-4,
+                end_offset=1,
+            ),
+            dict(
+                title="[QA] Revisao cliente (depende do briefing)",
+                description="Depende do briefing — teste de cascata de prazo.",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.MEDIUM,
+                assignee=admin,
+                effort=3,
+                start_offset=1,
+                end_offset=6,
+            ),
+            # A fazer / futuro
+            dict(
+                title="[QA] Publicar landing v2",
+                description="Aguardando artes finais.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.MEDIUM,
+                assignee=colab,
+                effort=4,
+                start_offset=3,
+                end_offset=10,
+            ),
+            dict(
+                title="[QA] Treinamento do time no portal",
+                description="Sessao com o cliente.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.LOW,
+                assignee=barbara,
+                effort=2,
+                start_offset=7,
+                end_offset=8,
+            ),
+            dict(
+                title="[QA] Relatorio mensal de horas",
+                description="Exportar e validar com financeiro.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.MEDIUM,
+                assignee=marina,
+                effort=2,
+                start_offset=5,
+                end_offset=12,
+            ),
+            dict(
+                title="[QA] Refino performance listagens",
+                description="Tabelas Meu trabalho e projeto.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.HIGH,
+                assignee=kaue,
+                effort=5,
+                start_offset=2,
+                end_offset=9,
+            ),
+            dict(
+                title="[QA] Documentar webhooks do check-in",
+                description="Markdown interno + exemplos.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.LOW,
+                assignee=felipe,
+                effort=3,
+                start_offset=4,
+                end_offset=11,
+            ),
+            # Bloqueadas / atrasadas
+            dict(
+                title="[QA] Tarefa atrasada",
+                description="Para filtros overdue / agente.",
+                status=Task.Status.BLOCKED,
+                priority=Task.Priority.HIGH,
+                assignee=colab,
+                effort=2,
+                start_offset=-10,
+                end_offset=-2,
+            ),
+            dict(
+                title="[QA] Acesso VPN do cliente",
+                description="Aguardando liberacao de rede.",
+                status=Task.Status.BLOCKED,
+                priority=Task.Priority.CRITICAL,
+                assignee=felipe,
+                effort=1,
+                start_offset=-6,
+                end_offset=-1,
+            ),
+            dict(
+                title="[QA] Homologacao facial #2475",
+                description="Problema reconhecimento facial — depends do token.",
+                status=Task.Status.BLOCKED,
+                priority=Task.Priority.HIGH,
+                assignee=kaue,
+                effort=4,
+                start_offset=-3,
+                end_offset=0,
+            ),
+            # Sem prazo / prazos longos
+            dict(
+                title="[QA] Backlog: ideias de automacao",
+                description="Sem prazo definido — deve ir ao fim da ordenacao.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.LOW,
+                assignee=barbara,
+                effort=1,
+                start_offset=0,
+                end_offset=45,
+            ),
+            dict(
+                title="[QA] Planejamento Q4 campanhas",
+                description="Prazo longo para ordenacao.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.MEDIUM,
+                assignee=admin,
+                effort=6,
+                start_offset=20,
+                end_offset=40,
+            ),
+            dict(
+                title="[QA] Vencendo hoje — priorizar",
+                description="End date = hoje para testar urgencia.",
+                status=Task.Status.IN_PROGRESS,
+                priority=Task.Priority.CRITICAL,
+                assignee=marina,
+                effort=2,
+                start_offset=-2,
+                end_offset=0,
+            ),
+            dict(
+                title="[QA] Venceu ontem — follow-up",
+                description="Um dia atrasada.",
+                status=Task.Status.TODO,
+                priority=Task.Priority.HIGH,
+                assignee=felipe,
+                effort=2,
+                start_offset=-5,
+                end_offset=-1,
+            ),
+        ]
+
+        created: dict[str, Task] = {}
+        for spec in specs:
+            task = create_task(**spec)
+            created[spec["title"]] = task
+
+        briefing = created["[QA] Campanha Instagram — briefing"]
+        review = created["[QA] Revisao cliente (depende do briefing)"]
+        TaskDependency.objects.get_or_create(task=review, depends_on=briefing)
+
+        create_task(
             title="[QA] Subtarefa: coletar referencias",
             description="Subtarefa visivel nas listagens.",
             status=Task.Status.TODO,
             priority=Task.Priority.LOW,
             assignee=colab,
-            effort_points=1,
-            start_date=now,
-            end_date=now + timedelta(days=1),
+            effort=1,
+            start_offset=0,
+            end_offset=1,
+            parent=briefing,
+            group=group_doing,
         )
-
-        Task.objects.create(
-            board=board,
-            group=group,
-            title="[QA] Tarefa atrasada",
-            description="Para filtros overdue / agente.",
-            status=Task.Status.BLOCKED,
+        create_task(
+            title="[QA] Subtarefa: validar copy",
+            description="Copy da campanha Instagram.",
+            status=Task.Status.IN_PROGRESS,
+            priority=Task.Priority.MEDIUM,
+            assignee=barbara,
+            effort=1,
+            start_offset=-1,
+            end_offset=2,
+            parent=briefing,
+            group=group_doing,
+        )
+        create_task(
+            title="[QA] Subtarefa: casos de borda API",
+            description="Cenarios 4xx/5xx no check-in.",
+            status=Task.Status.TODO,
             priority=Task.Priority.HIGH,
-            assignee=colab,
-            effort_points=2,
-            start_date=now - timedelta(days=10),
-            end_date=now - timedelta(days=2),
+            assignee=marina,
+            effort=2,
+            start_offset=0,
+            end_offset=3,
+            parent=created["[QA] Integracao API check-in"],
+            group=group_doing,
         )
 
-        t5 = Task.objects.create(
-            board=board,
-            group=group,
-            title="[QA] Tarefa concluida",
-            description="Para dashboard de horas e filtros done.",
-            status=Task.Status.DONE,
-            priority=Task.Priority.LOW,
-            assignee=colab,
-            effort_points=2,
-            start_date=now - timedelta(days=5),
-            end_date=now - timedelta(days=4),
-        )
-
-        TimeLog.objects.create(
-            task=t2,
-            user=colab,
-            status=TimeLog.Status.COMPLETED,
-            started_at=now - timedelta(hours=3),
-            ended_at=now - timedelta(hours=1),
-            accumulated_seconds=7200,
-            is_manual=False,
-            source="timer",
-        )
-        TimeLog.objects.create(
-            task=t1,
-            user=colab,
-            status=TimeLog.Status.COMPLETED,
-            started_at=now - timedelta(hours=5),
-            ended_at=now - timedelta(hours=4),
-            accumulated_seconds=3600,
-            is_manual=True,
-            source="manual",
-        )
-        TimeLog.objects.create(
-            task=t5,
-            user=admin,
-            status=TimeLog.Status.COMPLETED,
-            started_at=now - timedelta(days=4, hours=2),
-            ended_at=now - timedelta(days=4),
-            accumulated_seconds=5400,
-            is_manual=False,
-            source="timer",
-        )
+        # Horas apontadas (consumidas) em tarefas variadas
+        time_samples = [
+            (created["[QA] Produzir artes (recorrente)"], colab, 3, 1, 7200),
+            (briefing, barbara, 5, 4, 3600),
+            (created["[QA] Tarefa concluida"], admin, 4 * 24 + 2, 4 * 24, 5400),
+            (created["[QA] Setup ambiente de homologacao"], kaue, 13 * 24, 12 * 24 + 20, 10800),
+            (created["[QA] Integracao API check-in"], felipe, 2, 1, 5400),
+            (created["[QA] Suite regressao sprint atual"], marina, 6, 4, 7200),
+            (created["[QA] Ajuste layout etiquetas"], kaue, 8, 6, 3600),
+            (created["[QA] Wireframe landing page"], colab, 12 * 24, 11 * 24, 9000),
+            (review, admin, 10, 8, 3600),
+        ]
+        for task, user, hours_ago_start, hours_ago_end, seconds in time_samples:
+            TimeLog.objects.create(
+                task=task,
+                user=user,
+                status=TimeLog.Status.COMPLETED,
+                started_at=now - timedelta(hours=hours_ago_start),
+                ended_at=now - timedelta(hours=hours_ago_end),
+                accumulated_seconds=seconds,
+                is_manual=False,
+                source="timer",
+            )
 
         TaskComment.objects.create(
-            task=t1,
+            task=briefing,
             author=admin,
-            content="Comentario de teste com link https://blackbeans.com.br e @colaborador_demo",
+            content="Comentario de teste com link https://blackbeans.com.br e @barbara.thimoteo",
+        )
+        TaskComment.objects.create(
+            task=created["[QA] Integracao API check-in"],
+            author=barbara,
+            content="@felipe.santos o PUT/update ainda retorna 500 no check-in. Pode olhar hoje?",
         )
 
         ClientRequest.objects.create(
@@ -248,10 +543,16 @@ class Command(BaseCommand):
             status=ClientRequest.Status.NEW,
         )
 
+        qa_count = Task.objects.filter(title__startswith="[QA]").count()
+        by_status = {
+            status: Task.objects.filter(title__startswith="[QA]", status=status).count()
+            for status, _ in Task.Status.choices
+        }
         self.stdout.write(self.style.SUCCESS("Seed QA concluido."))
-        self.stdout.write(f"- admin: admin.teste / admin.teste@blackbeans.local / Admin!Teste2025#")
-        self.stdout.write(f"- colab: colaborador_demo / colaborador.demo@blackbeans.local / Colab!Demo2025#")
+        self.stdout.write("- admin: admin.teste / Admin!Teste2025#")
+        self.stdout.write("- colabs (senha Colab!Demo2025#):")
+        self.stdout.write("  colaborador_demo, barbara.thimoteo, felipe.santos, kaue.ronald, marina.oliveira")
         self.stdout.write(f"- project: {project.name} ({project.pk})")
-        self.stdout.write(f"- tasks [QA]: {Task.objects.filter(title__startswith='[QA]').count()}")
+        self.stdout.write(f"- tasks [QA]: {qa_count} | por status: {by_status}")
         self.stdout.write(f"- pedidos [QA]: {ClientRequest.objects.filter(title__startswith='[QA]').count()}")
         self.stdout.write("- formulario publico: /pedido")

@@ -59,6 +59,7 @@ from blackbeans_api.governance.models import TimeLog
 from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.audit import log_audit_event
 from blackbeans_api.governance.notification_service import dispatch_task_comment
+from blackbeans_api.governance.notification_service import dispatch_task_mentions
 from blackbeans_api.governance.notification_service import dispatch_task_priority_changed
 from blackbeans_api.governance.notification_service import dispatch_task_status_changed
 from blackbeans_api.governance.notification_service import dispatch_task_updated
@@ -82,6 +83,63 @@ def _log_task_activity(*, task: Task, actor_id: int, event_type: str, summary: s
         summary=summary,
     )
 
+
+_TASK_FIELD_LABELS_PT = {
+    "title": "Titulo",
+    "description": "Descricao",
+    "status": "Status",
+    "priority": "Prioridade",
+    "effort_points": "Horas previstas",
+    "assignee_id": "Responsavel",
+    "assignee": "Responsavel",
+    "start_date": "Prazo de inicio",
+    "end_date": "Prazo final",
+    "is_recurring": "Recorrencia",
+    "recurrence_frequency": "Frequencia de recorrencia",
+    "board_id": "Quadro",
+    "group_id": "Grupo",
+    "parent_id": "Tarefa pai",
+}
+
+_TASK_STATUS_LABELS_PT = {
+    "todo": "A fazer",
+    "in_progress": "Em andamento",
+    "blocked": "Bloqueada",
+    "done": "Concluida",
+}
+
+_TASK_PRIORITY_LABELS_PT = {
+    "low": "Baixa",
+    "medium": "Media",
+    "high": "Alta",
+    "critical": "Critica",
+}
+
+
+def _status_label_pt(value: str | None) -> str:
+    key = str(value or "").strip().lower()
+    return _TASK_STATUS_LABELS_PT.get(key, str(value or "—"))
+
+
+def _priority_label_pt(value: str | None) -> str:
+    key = str(value or "").strip().lower()
+    return _TASK_PRIORITY_LABELS_PT.get(key, str(value or "—"))
+
+
+def _humanize_changed_fields(fields: list[str]) -> str:
+    labels = [_TASK_FIELD_LABELS_PT.get(field, field.replace("_", " ")) for field in fields]
+    if not labels:
+        return "Tarefa atualizada."
+    return f"Campos alterados: {', '.join(labels)}."
+
+
+def _comment_activity_snippet(content: str, *, limit: int = 140) -> str:
+    clean = " ".join(str(content or "").split())
+    if not clean:
+        return ""
+    if len(clean) <= limit:
+        return clean
+    return f"{clean[: limit - 1]}…"
 
 def _close_open_time_logs_for_task(task: Task, *, now=None) -> int:
     """Encerra logs ACTIVE/PAUSED da tarefa, acumulando tempo parcial."""
@@ -1025,7 +1083,7 @@ class TaskListCreateView(APIView):
 
 
 class TaskDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1058,6 +1116,7 @@ class TaskDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         before_status = task.status
         before_priority = task.priority
+        before_description = task.description or ""
         changed_fields = sorted(serializer.validated_data.keys())
         with transaction.atomic():
             serializer.save()
@@ -1092,11 +1151,19 @@ class TaskDetailView(APIView):
                 fields=other_fields,
                 correlation_id=correlation_id,
             )
+        if "description" in serializer.validated_data:
+            dispatch_task_mentions(
+                task=task,
+                actor=request.user,
+                content=task.description or "",
+                previous_content=before_description,
+                correlation_id=correlation_id,
+            )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.updated",
-            summary=f"Tarefa atualizada campos={','.join(changed_fields)}.",
+            summary=_humanize_changed_fields(changed_fields),
         )
         _recalculate_dependents(task)
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
@@ -1133,7 +1200,7 @@ class TaskDetailView(APIView):
 
 
 class TaskAssigneeView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1151,17 +1218,23 @@ class TaskAssigneeView(APIView):
         serializer.is_valid(raise_exception=True)
         task.assignee_id = serializer.validated_data["assignee_id"]
         task.save(update_fields=["assignee_id", "updated_at"])
+        task = Task.objects.select_related("assignee").get(pk=task.pk)
         dispatch_task_assigned_notification.delay(
             task_id=str(task.pk),
             assignee_id=task.assignee_id,
             actor_id=request.user.pk,
             correlation_id=correlation_id,
         )
+        assignee_label = (
+            str(getattr(task.assignee, "name", None) or getattr(task.assignee, "email", None) or task.assignee_id)
+            if task.assignee_id
+            else "sem responsavel"
+        )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.assignee_changed",
-            summary=f"Responsavel atualizado para user_id={task.assignee_id}.",
+            summary=f"Responsavel atualizado para {assignee_label}.",
         )
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
 
@@ -1322,7 +1395,9 @@ class TaskStatusView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.status_changed",
-            summary=f"Status alterado de {before} para {new_status}.",
+            summary=(
+                f"Status alterado de {_status_label_pt(before)} para {_status_label_pt(new_status)}."
+            ),
         )
         _recalculate_dependents(task)
         payload = {"task": task_to_representation(task)}
@@ -1386,7 +1461,7 @@ class TaskTimeStartView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.started",
-            summary=f"{actor_name} iniciou o cronometro (log={time_log.pk}).",
+            summary=f"{actor_name} iniciou o cronometro.",
         )
         log_audit_event(
             event_type="time.started",
@@ -1445,7 +1520,7 @@ class TaskTimePauseView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.paused",
-            summary=f"{actor_name} pausou o cronometro (log={time_log.pk}).",
+            summary=f"{actor_name} pausou o cronometro.",
         )
         log_audit_event(
             event_type="time.paused",
@@ -1502,7 +1577,7 @@ class TaskTimeResumeView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.resumed",
-            summary=f"{actor_name} retomou o cronometro (log={time_log.pk}).",
+            summary=f"{actor_name} retomou o cronometro.",
         )
         log_audit_event(
             event_type="time.resumed",
@@ -1560,7 +1635,7 @@ class TaskTimeManualView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.manual",
-            summary=f"{actor_name} registrou tempo manual (log={time_log.pk}).",
+            summary=f"{actor_name} registrou tempo manual.",
         )
         log_audit_event(
             event_type="time.manual",
@@ -1638,7 +1713,7 @@ class TaskCompleteView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.completed",
-            summary=f"Tarefa concluida com apontamento encerrado em log={time_log.pk}.",
+            summary="Tarefa concluida e apontamento de tempo encerrado.",
         )
         log_audit_event(
             event_type="time.completed",
@@ -1715,7 +1790,7 @@ class TimeLogDetailView(APIView):
             task=time_log.task,
             actor_id=request.user.pk,
             event_type="task.time.edited",
-            summary=f"{get_user_display_name(request.user)} atualizou o log de tempo (log={time_log.pk}).",
+            summary=f"{get_user_display_name(request.user)} atualizou o registro de tempo.",
         )
         return success_response(correlation_id=correlation_id, data={"time_log": time_log_to_representation(time_log)})
 
@@ -1739,7 +1814,7 @@ class TimeLogDetailView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.deleted",
-            summary=f"{get_user_display_name(request.user)} removeu o log de tempo (log={time_log.pk}).",
+            summary=f"{get_user_display_name(request.user)} removeu o registro de tempo.",
         )
         return success_response(correlation_id=correlation_id, data={"deleted": True})
 
@@ -1775,6 +1850,65 @@ class TaskTimeSummaryView(APIView):
                 "logs": [time_log_to_representation(log) for log in logs],
             },
             meta={"total": logs.count()},
+        )
+
+
+class TaskTimeSummariesBatchView(APIView):
+    """Resumo de tempo para varias tarefas em uma unica request (lista/tabelas)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
+        raw_ids = request.data.get("task_ids") if isinstance(request.data, dict) else None
+        if not isinstance(raw_ids, list):
+            return error_response(
+                correlation_id=correlation_id,
+                code="invalid_payload",
+                message="Informe task_ids (lista).",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        task_ids: list[UUID] = []
+        seen: set[str] = set()
+        for item in raw_ids[:80]:
+            try:
+                uid = UUID(str(item))
+            except (TypeError, ValueError):
+                continue
+            key = str(uid)
+            if key in seen:
+                continue
+            seen.add(key)
+            task_ids.append(uid)
+        if not task_ids:
+            return success_response(
+                correlation_id=correlation_id,
+                data={"summaries": {}},
+                meta={"total": 0},
+            )
+        logs_qs = (
+            TimeLog.objects.filter(task_id__in=task_ids)
+            .exclude(status=TimeLog.Status.DELETED)
+            .select_related("user")
+            .order_by("-created_at")
+        )
+        if not is_admin:
+            logs_qs = logs_qs.filter(user=request.user)
+        summaries: dict[str, dict] = {str(tid): {"task_id": str(tid), "total_seconds": 0, "logs": []} for tid in task_ids}
+        for log in logs_qs:
+            key = str(log.task_id)
+            row = summaries.get(key)
+            if row is None:
+                continue
+            payload = time_log_to_representation(log)
+            row["logs"].append(payload)
+            row["total_seconds"] += int(payload.get("total_seconds") or 0)
+        return success_response(
+            correlation_id=correlation_id,
+            data={"summaries": summaries},
+            meta={"total": len(summaries)},
         )
 
 
@@ -1944,11 +2078,12 @@ class TaskCommentsView(APIView):
             content=comment.content,
             correlation_id=correlation_id,
         )
+        snippet = _comment_activity_snippet(comment.content)
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.comment_added",
-            summary="Comentario adicionado.",
+            summary=f"Comentario adicionado: {snippet}" if snippet else "Comentario adicionado.",
         )
         return success_response(
             correlation_id=correlation_id,
@@ -1986,12 +2121,23 @@ class TaskCommentDetailView(APIView):
             )
         serializer = TaskCommentUpdateSerializer(comment, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        previous_content = comment.content or ""
         serializer.save()
+        comment.refresh_from_db()
+        if "content" in serializer.validated_data:
+            dispatch_task_mentions(
+                task=comment.task,
+                actor=request.user,
+                content=comment.content or "",
+                previous_content=previous_content,
+                correlation_id=correlation_id,
+            )
+        snippet = _comment_activity_snippet(comment.content)
         _log_task_activity(
             task=comment.task,
             actor_id=request.user.pk,
             event_type="task.comment_edited",
-            summary=f"Comentario {comment.pk} editado.",
+            summary=f"Comentario editado: {snippet}" if snippet else "Comentario editado.",
         )
         return success_response(
             correlation_id=correlation_id,

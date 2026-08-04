@@ -316,11 +316,33 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
 
                       <Card title="Contexto tecnico" size="small">
                         <Typography.Text strong>Erros JavaScript</Typography.Text>
-                        <pre style={{ fontSize: 12, marginTop: 8, marginBottom: 16 }}>
+                        <pre
+                          style={{
+                            fontSize: 12,
+                            marginTop: 8,
+                            marginBottom: 16,
+                            maxHeight: 280,
+                            overflow: "auto",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            maxWidth: "100%",
+                          }}
+                        >
                           {jsErrors.length ? JSON.stringify(jsErrors, null, 2) : "Nenhum registro"}
                         </pre>
                         <Typography.Text strong>Requisicoes com falha</Typography.Text>
-                        <pre style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+                        <pre
+                          style={{
+                            fontSize: 12,
+                            marginTop: 8,
+                            marginBottom: 0,
+                            maxHeight: 320,
+                            overflow: "auto",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            maxWidth: "100%",
+                          }}
+                        >
                           {failedRequests.length
                             ? JSON.stringify(failedRequests, null, 2)
                             : "Nenhum registro"}
@@ -344,12 +366,12 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
                         <div style={{ width: "100%" }}>
                           <Typography.Text type="secondary">Notas internas</Typography.Text>
                           <Input.TextArea
-                            rows={5}
+                            rows={8}
                             maxLength={8000}
                             value={notesDraft}
+                            style={{ marginTop: 4, resize: "vertical", minHeight: 140 }}
                             onChange={(event) => setNotesDraft(event.target.value)}
                             placeholder="Anotacoes visiveis so para administradores"
-                            style={{ marginTop: 4 }}
                           />
                         </div>
                         <Button type="primary" block loading={saving} onClick={() => void handleSave()}>

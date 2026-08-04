@@ -210,8 +210,8 @@ class MeEmailTestView(APIView):
             return error_response(
                 correlation_id=correlation_id,
                 code="email_send_failed",
-                message="Falha ao enviar e-mail de teste.",
-                details={"error": str(exc)},
+                message=f"Falha no SMTP ao enviar e-mail de teste: {exc}",
+                details={"error": str(exc), "to": recipient, "backend": backend},
                 http_status=status.HTTP_502_BAD_GATEWAY,
             )
         return success_response(

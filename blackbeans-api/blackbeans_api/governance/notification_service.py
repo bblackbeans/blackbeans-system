@@ -21,6 +21,47 @@ from blackbeans_api.governance.models import Task
 User = get_user_model()
 
 MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.@-]+)")
+# TipTap mention nodes: data-id / data-label on span[data-type=mention]
+MENTION_HTML_ATTR_PATTERN = re.compile(
+    r'data-(?:id|label)=["\']([a-zA-Z0-9_.@-]+)["\']',
+    re.IGNORECASE,
+)
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+
+
+def _mention_tokens_from_content(content: str) -> list[str]:
+    """Extrai tokens @ de texto puro, markdown ou HTML TipTap."""
+    raw = content or ""
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def add(token: str) -> None:
+        token = (token or "").strip()
+        if not token:
+            return
+        key = token.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        tokens.append(token)
+
+    for token in MENTION_HTML_ATTR_PATTERN.findall(raw):
+        add(token)
+
+    plain = HTML_TAG_PATTERN.sub(" ", raw)
+    plain = (
+        plain.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+    )
+    for token in MENTION_PATTERN.findall(plain):
+        add(token)
+    for token in MENTION_PATTERN.findall(raw):
+        add(token)
+    return tokens
+
 
 DEFAULT_EMAIL_MODES: dict[str, str] = {
     Notification.Type.ASSIGNED: NotificationPreference.EmailMode.INSTANT,
@@ -184,7 +225,7 @@ def get_task_watchers(task: Task, *, exclude_user_ids: Iterable[int] | None = No
 
 
 def parse_mentioned_users(content: str) -> list[User]:
-    tokens = MENTION_PATTERN.findall(content or "")
+    tokens = _mention_tokens_from_content(content)
     if not tokens:
         return []
     users: list[User] = []
@@ -369,15 +410,61 @@ def dispatch_task_priority_changed(
 
 def dispatch_task_updated(*, task: Task, actor: User, fields: list[str], correlation_id: str) -> None:
     recipients = get_task_watchers(task, exclude_user_ids=[actor.pk])
+    field_labels = {
+        "title": "titulo",
+        "description": "descricao",
+        "status": "status",
+        "priority": "prioridade",
+        "effort_points": "esforco",
+        "assignee_id": "responsavel",
+        "start_date": "prazo de inicio",
+        "end_date": "prazo final",
+        "is_recurring": "recorrencia",
+        "recurrence_frequency": "frequencia de recorrencia",
+    }
+    pretty_fields = [field_labels.get(field, field.replace("_", " ")) for field in fields]
     dispatch_notification(
         event_type=Notification.Type.UPDATED,
         recipients=recipients,
         actor=actor,
         title="Tarefa atualizada",
-        message=f"A tarefa '{task.title}' foi atualizada ({', '.join(fields)}).",
+        message=f"A tarefa '{task.title}' foi atualizada ({', '.join(pretty_fields)}).",
         task=task,
         metadata={"fields": fields},
         correlation_id=correlation_id,
+    )
+
+
+def dispatch_task_mentions(
+    *,
+    task: Task,
+    actor: User,
+    content: str,
+    correlation_id: str,
+    previous_content: str = "",
+) -> None:
+    """Notifica usuarios @mencionados em texto (descricao ou comentario)."""
+    mentioned = parse_mentioned_users(content)
+    previous_ids = {user.pk for user in parse_mentioned_users(previous_content)} if previous_content else set()
+    recipients = [
+        user
+        for user in mentioned
+        if user.pk not in previous_ids and user.pk != actor.pk
+    ]
+    if not recipients:
+        return
+    for user in recipients:
+        auto_subscribe_task(user, task)
+    dispatch_notification(
+        event_type=Notification.Type.MENTIONED,
+        recipients=recipients,
+        actor=actor,
+        title="Voce foi mencionado",
+        message=f"{get_user_display_name(actor)} mencionou voce em '{task.title}'.",
+        task=task,
+        metadata={"comment_excerpt": content[:280]},
+        correlation_id=correlation_id,
+        dedupe=False,
     )
 
 
