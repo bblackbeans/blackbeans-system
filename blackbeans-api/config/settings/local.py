@@ -28,10 +28,29 @@ CACHES = {
 # EMAIL
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
-EMAIL_BACKEND = env(
-    "DJANGO_EMAIL_BACKEND",
-    default="django.core.mail.backends.console.EmailBackend",
-)
+# Padrao em local: console (aparece nos logs do container).
+# Se EMAIL_HOST estiver definido, usa SMTP de verdade.
+EMAIL_HOST = env("EMAIL_HOST", default="")
+if EMAIL_HOST:
+    EMAIL_BACKEND = env(
+        "DJANGO_EMAIL_BACKEND",
+        default="django.core.mail.backends.smtp.EmailBackend",
+    )
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+    EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+    EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+    DEFAULT_FROM_EMAIL = env(
+        "DJANGO_DEFAULT_FROM_EMAIL",
+        default=EMAIL_HOST_USER or "noreply@blackbeans.local",
+    )
+    SERVER_EMAIL = env("DJANGO_SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
+else:
+    EMAIL_BACKEND = env(
+        "DJANGO_EMAIL_BACKEND",
+        default="django.core.mail.backends.console.EmailBackend",
+    )
 
 # WhiteNoise
 # ------------------------------------------------------------------------------

@@ -2,8 +2,13 @@
 @import "tailwindcss" source("..");
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4f0ed;
+  --foreground: #141312;
+}
+
+html[data-bb-theme="dark"] {
+  --background: #141414;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -14,8 +19,8 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
+  :root:not([data-bb-theme="light"]) {
+    --background: #141414;
     --foreground: #ededed;
   }
 }
@@ -25,3 +30,101 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.bb-compact-table .ant-table-tbody > tr > td {
+  padding-block: 6px;
+}
+
+.bb-mention {
+  color: #2b76e5;
+  background: rgba(43, 118, 229, 0.12);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-weight: 600;
+}
+
+.bb-monday-date-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #e2445c;
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+html[data-bb-theme="dark"] .bb-monday-date-pill {
+  background: #c7364c;
+}
+
+.bb-drop-zone {
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bb-drop-zone.bb-drop-active {
+  border-color: #da9330;
+  background: rgba(218, 147, 48, 0.08);
+}
+
+.bb-rich-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bb-rich-link {
+  color: #4c8bf5;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+html[data-bb-theme="dark"] .bb-rich-link {
+  color: #7eb6ff;
+}
+
+.bb-rich-image-wrap {
+  display: block;
+  margin: 8px 0;
+  max-width: 100%;
+}
+
+.bb-rich-image-wrap .ant-image {
+  display: block;
+  max-width: min(100%, 420px);
+}
+
+.bb-rich-image-wrap img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.bb-rich-description {
+  border: 1px solid rgba(127, 127, 127, 0.28);
+  border-radius: 10px;
+  padding: 8px 10px 10px;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.bb-rich-description__bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.bb-rich-description__body {
+  min-height: 72px;
+  cursor: text;
+}
+
+.bb-rich-description--editing {
+  border-color: #da9330;
+  background: transparent;
+  padding-bottom: 6px;
+}
+

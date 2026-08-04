@@ -4,6 +4,7 @@ from datetime import datetime
 from datetime import time
 from uuid import UUID
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
@@ -24,7 +25,18 @@ from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import ServiceCatalog
 from blackbeans_api.governance.models import Workspace
 
-DEFAULT_PORTFOLIO_NAME = "Default"
+
+def _resolve_producao_workspace() -> Workspace | None:
+    primary = (getattr(settings, "WORKSPACE_PRODUCAO_NAME", None) or "Produção").strip()
+    candidates = []
+    for name in (primary, "Produção", "Producao"):
+        if name and name not in candidates:
+            candidates.append(name)
+    for name in candidates:
+        workspace = Workspace.objects.filter(name__iexact=name).first()
+        if workspace is not None:
+            return workspace
+    return None
 
 
 def _line_to_representation(line: ContractServiceLine) -> dict:
@@ -254,14 +266,23 @@ class ContractConfirmView(APIView):
                 http_status=status.HTTP_409_CONFLICT,
             )
 
-        with transaction.atomic():
-            workspace, _ = Workspace.objects.get_or_create(
-                client=contract.client,
-                defaults={"name": contract.client.name},
+        workspace = _resolve_producao_workspace()
+        if workspace is None:
+            return error_response(
+                correlation_id=correlation_id,
+                code="workspace_producao_not_found",
+                message=(
+                    "Workspace de Producao nao encontrado. "
+                    "Crie um workspace com o nome configurado em WORKSPACE_PRODUCAO_NAME."
+                ),
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
             )
+
+        with transaction.atomic():
             portfolio, _ = Portfolio.objects.get_or_create(
                 workspace=workspace,
-                name=DEFAULT_PORTFOLIO_NAME,
+                name=contract.client.name,
                 defaults={"description": "Criado automaticamente pela confirmacao do contrato."},
             )
 

@@ -90,8 +90,32 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
 /** Resolve URL de media da API (relativa ou absoluta) para uso no browser. */
 export function resolveMediaUrl(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
-  if (/^https?:\/\//i.test(url)) return url;
-  const path = url.startsWith("/") ? url : `/${url}`;
+  let raw = String(url).trim();
+  if (!raw) return undefined;
+
+  // URLs absolutas do host interno Docker (api:8000) → path /media/...
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      const host = parsed.hostname.toLowerCase();
+      if (host === "api" || host === "blackbeans-api" || host.endsWith(".local")) {
+        raw = `${parsed.pathname}${parsed.search}`;
+      } else if (parsed.pathname.startsWith("/media/")) {
+        // Mesmo origin publico com path de media: preferir path relativo (rewrite do Next).
+        if (typeof window !== "undefined" && parsed.origin === window.location.origin) {
+          raw = `${parsed.pathname}${parsed.search}`;
+        }
+      }
+    }
+  } catch {
+    // mantem raw
+  }
+
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  const path = raw.startsWith("/") ? raw : `/${raw}`;
+  if (path.startsWith("/media/")) return path;
+
   if (API_BASE_URL.startsWith("http")) {
     try {
       return `${new URL(API_BASE_URL).origin}${path}`;

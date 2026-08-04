@@ -14,8 +14,58 @@ from blackbeans_api.governance.models import Notification
 from blackbeans_api.governance.models import Task
 from blackbeans_api.governance.models import TaskAttachment
 from blackbeans_api.governance.models import TaskComment
+from blackbeans_api.governance.models import TaskStatusDefinition
 from blackbeans_api.governance.models import TimeLog
+from blackbeans_api.governance.notification_service import get_user_display_name
 from blackbeans_api.users.models import User
+
+
+def validate_active_task_status(value: str) -> str:
+    key = (value or "").strip()
+    if not key:
+        raise serializers.ValidationError("Status invalido para tarefa.")
+    if TaskStatusDefinition.objects.filter(key=key, is_active=True).exists():
+        return key
+    # Fallback: constantes legadas enquanto catalogo nao existir
+    if key in dict(Task.Status.choices):
+        return key
+    raise serializers.ValidationError("Status invalido ou inativo no catalogo.")
+
+
+def task_status_definition_to_representation(item: TaskStatusDefinition) -> dict:
+    return {
+        "id": str(item.pk),
+        "key": item.key,
+        "label": item.label,
+        "color": item.color,
+        "is_done_like": item.is_done_like,
+        "position": item.position,
+        "is_active": item.is_active,
+        "created_at": item.created_at.isoformat().replace("+00:00", "Z"),
+        "updated_at": item.updated_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+class TaskStatusDefinitionItemSerializer(serializers.Serializer):
+    key = serializers.SlugField(max_length=64)
+    label = serializers.CharField(max_length=255)
+    color = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    is_done_like = serializers.BooleanField(required=False, default=False)
+    position = serializers.IntegerField(min_value=0, required=False, default=0)
+    is_active = serializers.BooleanField(required=False, default=True)
+
+
+class TaskStatusCatalogWriteSerializer(serializers.Serializer):
+    statuses = TaskStatusDefinitionItemSerializer(many=True)
+
+    def validate_statuses(self, value):
+        if not value:
+            raise serializers.ValidationError("Informe ao menos um status.")
+        keys = [item["key"] for item in value]
+        if len(keys) != len(set(keys)):
+            raise serializers.ValidationError("Chaves de status devem ser unicas.")
+        return value
+
 
 
 class WorkspaceWriteSerializer(serializers.ModelSerializer):
@@ -291,6 +341,8 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "assignee_id",
             "start_date",
             "end_date",
+            "is_recurring",
+            "recurrence_frequency",
         )
         extra_kwargs = {
             "description": {"required": False, "allow_blank": True, "default": ""},
@@ -299,6 +351,8 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "effort_points": {"required": False},
             "start_date": {"required": False, "allow_null": True},
             "end_date": {"required": False, "allow_null": True},
+            "is_recurring": {"required": False},
+            "recurrence_frequency": {"required": False, "allow_blank": True},
         }
 
     def validate_group_id(self, value):
@@ -322,6 +376,9 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         if not User.objects.filter(pk=value).exists():
             raise serializers.ValidationError("Usuario responsavel nao encontrado.")
         return value
+
+    def validate_status(self, value):
+        return validate_active_task_status(value)
 
     def validate(self, attrs):
         start = attrs.get("start_date")
@@ -421,6 +478,8 @@ def task_to_representation(task: Task, request=None) -> dict:
         "assignee_avatar_url": assignee_avatar_url,
         "start_date": _iso(task.start_date),
         "end_date": _iso(task.end_date),
+        "is_recurring": bool(getattr(task, "is_recurring", False)),
+        "recurrence_frequency": getattr(task, "recurrence_frequency", None) or "",
         "created_at": _iso(task.created_at),
         "updated_at": _iso(task.updated_at),
     }
@@ -473,13 +532,18 @@ class TaskCommentUpdateSerializer(serializers.ModelSerializer):
 
 
 def task_comment_to_representation(comment: TaskComment, request=None) -> dict:
-    attachments = getattr(comment, "_prefetched_objects_cache", {}).get("attachments")
-    if attachments is None:
-        attachments = comment.attachments.all()
+    cache = getattr(comment, "_prefetched_objects_cache", None) or {}
+    if "attachments" in cache:
+        attachments = list(cache["attachments"])
+    else:
+        attachments = list(comment.attachments.all())
+    author = getattr(comment, "author", None)
+    author_name = get_user_display_name(author) if author is not None else None
     payload = {
         "id": str(comment.pk),
         "task_id": str(comment.task_id),
         "author_id": comment.author_id,
+        "author_name": author_name,
         "content": comment.content,
         "created_at": comment.created_at.isoformat().replace("+00:00", "Z"),
         "attachments": [task_attachment_to_representation(item, request=request) for item in attachments],
@@ -539,6 +603,20 @@ class TimeLogUpdateSerializer(serializers.Serializer):
         return attrs
 
 
+class TimeLogManualCreateSerializer(serializers.Serializer):
+    started_at = serializers.DateTimeField()
+    ended_at = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        started_at = attrs["started_at"]
+        ended_at = attrs["ended_at"]
+        if ended_at <= started_at:
+            raise serializers.ValidationError(
+                {"ended_at": "Data final deve ser maior que a data inicial."},
+            )
+        return attrs
+
+
 def time_log_to_representation(log: TimeLog) -> dict:
     def _iso(v):
         return v.isoformat().replace("+00:00", "Z") if v else None
@@ -548,15 +626,26 @@ def time_log_to_representation(log: TimeLog) -> dict:
         elapsed = int((timezone.now() - log.current_started_at).total_seconds())
         total_seconds += max(elapsed, 0)
 
+    user = getattr(log, "user", None)
+    if user is None and log.user_id:
+        try:
+            user = User.objects.get(pk=log.user_id)
+        except User.DoesNotExist:
+            user = None
+    user_name = get_user_display_name(user) if user is not None else f"Usuario {log.user_id}"
+
     return {
         "id": str(log.pk),
         "task_id": str(log.task_id),
         "user_id": log.user_id,
+        "user_name": user_name,
         "status": log.status,
         "started_at": _iso(log.started_at),
         "current_started_at": _iso(log.current_started_at),
         "ended_at": _iso(log.ended_at),
         "total_seconds": total_seconds,
+        "is_manual": bool(getattr(log, "is_manual", False)),
+        "source": getattr(log, "source", None) or "timer",
         "created_at": _iso(log.created_at),
         "updated_at": _iso(log.updated_at),
     }

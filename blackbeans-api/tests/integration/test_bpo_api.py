@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from django.conf import settings
 from rest_framework.test import APIClient
 
 from blackbeans_api.clients.tests.factories import ClientFactory
+from blackbeans_api.governance.models import Portfolio
+from blackbeans_api.governance.models import Workspace
 from blackbeans_api.users.tests.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -17,6 +20,12 @@ def admin_client():
     client = APIClient()
     client.force_authenticate(user=admin)
     return client
+
+
+@pytest.fixture
+def producao_workspace():
+    name = getattr(settings, "WORKSPACE_PRODUCAO_NAME", "Produção")
+    return Workspace.objects.create(name=name)
 
 
 def test_service_catalog_crud(admin_client):
@@ -41,7 +50,7 @@ def test_service_catalog_crud(admin_client):
     assert delete.data["data"]["deleted"] is True
 
 
-def test_contract_confirm_creates_workspace_and_projects(admin_client):
+def test_contract_confirm_creates_portfolio_under_producao(admin_client, producao_workspace):
     client = ClientFactory.create(
         name="Cliente Contrato",
         cnpj="54321678000195",
@@ -85,8 +94,12 @@ def test_contract_confirm_creates_workspace_and_projects(admin_client):
     confirm = admin_client.post(f"/api/v1/contracts/{contract_id}/confirm", {}, format="json")
     assert confirm.status_code == 200
     assert confirm.data["data"]["contract"]["status"] == "active"
-    assert confirm.data["data"]["workspace_id"]
+    assert confirm.data["data"]["workspace_id"] == str(producao_workspace.pk)
     assert len(confirm.data["data"]["projects_created"]) == 1
+
+    portfolio = Portfolio.objects.get(pk=confirm.data["data"]["portfolio_id"])
+    assert portfolio.workspace_id == producao_workspace.pk
+    assert portfolio.name == client.name
 
     cancel = admin_client.post(f"/api/v1/contracts/{contract_id}/cancel", {}, format="json")
     assert cancel.status_code == 200
@@ -95,6 +108,41 @@ def test_contract_confirm_creates_workspace_and_projects(admin_client):
     reactivate = admin_client.post(f"/api/v1/contracts/{contract_id}/reactivate", {}, format="json")
     assert reactivate.status_code == 200
     assert reactivate.data["data"]["contract"]["status"] == "active"
+
+
+def test_contract_confirm_fails_without_producao_workspace(admin_client):
+    client = ClientFactory.create(
+        name="Cliente Sem WS",
+        cnpj="99888777000166",
+        contact_name="Contato",
+        financial_emails="fin@semws.local",
+    )
+    service_resp = admin_client.post(
+        "/api/v1/services",
+        {"name": "Servico Sem WS", "description": "Teste", "is_active": True, "display_order": 52},
+        format="json",
+    )
+    assert service_resp.status_code == 201
+    service_id = service_resp.data["data"]["service"]["id"]
+
+    contract_resp = admin_client.post(
+        "/api/v1/contracts",
+        {
+            "client": str(client.pk),
+            "payment_method": "boleto",
+            "status": "submitted",
+            "service_lines": [
+                {"service": service_id, "service_type": "one_off", "amount": "100.00"},
+            ],
+        },
+        format="json",
+    )
+    assert contract_resp.status_code == 201
+    contract_id = contract_resp.data["data"]["contract"]["id"]
+
+    confirm = admin_client.post(f"/api/v1/contracts/{contract_id}/confirm", {}, format="json")
+    assert confirm.status_code == 409
+    assert confirm.data["error"]["code"] == "workspace_producao_not_found"
 
 
 def test_contract_reactivate_submitted_after_cancel(admin_client):
@@ -133,4 +181,3 @@ def test_contract_reactivate_submitted_after_cancel(admin_client):
     reactivate = admin_client.post(f"/api/v1/contracts/{contract_id}/reactivate", {}, format="json")
     assert reactivate.status_code == 200
     assert reactivate.data["data"]["contract"]["status"] == "submitted"
-

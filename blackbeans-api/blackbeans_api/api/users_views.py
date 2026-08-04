@@ -16,6 +16,7 @@ from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.users_serializers import AdminUserCreateSerializer
 from blackbeans_api.api.users_serializers import AdminUserUpdateSerializer
 from blackbeans_api.api.users_serializers import CollaboratorLinkCreateSerializer
+from blackbeans_api.api.users_serializers import MePasswordChangeSerializer
 from blackbeans_api.api.users_serializers import UserWorkspaceAccessWriteSerializer
 from blackbeans_api.api.users_serializers import user_to_representation
 from blackbeans_api.api.utils import get_correlation_id
@@ -48,6 +49,7 @@ class AssigneeDirectoryView(APIView):
                 "users": [
                     {
                         "id": row["id"],
+                        "username": row["username"],
                         "name": row["name"],
                         "email": row["email"],
                         "avatar_url": row["avatar_url"],
@@ -99,6 +101,122 @@ class MeAvatarView(APIView):
         return success_response(
             correlation_id=correlation_id,
             data={"user": user_to_representation(user, request=request)},
+        )
+
+    def delete(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        user = request.user
+        if user.avatar:
+            user.avatar.delete(save=False)
+            user.avatar = None
+            user.save(update_fields=["avatar"])
+        return success_response(
+            correlation_id=correlation_id,
+            data={"user": user_to_representation(user, request=request)},
+        )
+
+
+class MePasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        serializer = MePasswordChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        if not user.check_password(serializer.validated_data["current_password"]):
+            return error_response(
+                correlation_id=correlation_id,
+                code="invalid_current_password",
+                message="Senha atual incorreta.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password"])
+        logger.info(
+            "iam.user.password_changed actor_id=%s correlation_id=%s",
+            _actor_id(request),
+            correlation_id,
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"changed": True},
+        )
+
+
+class MeEmailTestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request):
+        from django.conf import settings
+        from django.core.mail import send_mail
+
+        from blackbeans_api.users.models import UserCollaboratorLink
+
+        correlation_id = get_correlation_id(request)
+        # Prefere e-mail profissional do perfil (campo da UI); cai no e-mail do User.
+        recipient = ""
+        link = (
+            UserCollaboratorLink.objects.filter(user=request.user, is_active=True)
+            .select_related("collaborator")
+            .first()
+        )
+        if link is not None:
+            recipient = (getattr(link.collaborator, "professional_email", None) or "").strip()
+        if not recipient:
+            recipient = (getattr(request.user, "email", None) or "").strip()
+        if not recipient:
+            return error_response(
+                correlation_id=correlation_id,
+                code="email_missing",
+                message="Seu usuario nao tem e-mail cadastrado.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        backend = str(getattr(settings, "EMAIL_BACKEND", ""))
+        email_host = (getattr(settings, "EMAIL_HOST", None) or "").strip()
+        using_console = "console" in backend
+        if using_console and not email_host:
+            return error_response(
+                correlation_id=correlation_id,
+                code="smtp_not_configured",
+                message=(
+                    "SMTP nao configurado. Defina EMAIL_HOST (e demais EMAIL_*) "
+                    "em infra/env/api.env e reinicie a API."
+                ),
+                details={"backend": backend, "to": recipient},
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        app_name = getattr(settings, "NOTIFICATION_APP_NAME", "BlackBeans System")
+        try:
+            send_mail(
+                subject=f"[{app_name}] E-mail de teste",
+                message=(
+                    f"Este e um e-mail de teste do {app_name}. "
+                    "Se voce recebeu, o SMTP esta funcionando."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[recipient],
+                fail_silently=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "iam.email_test.failed actor_id=%s correlation_id=%s error=%s",
+                _actor_id(request),
+                correlation_id,
+                exc,
+            )
+            return error_response(
+                correlation_id=correlation_id,
+                code="email_send_failed",
+                message="Falha ao enviar e-mail de teste.",
+                details={"error": str(exc)},
+                http_status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"sent": True, "to": recipient, "backend": backend},
         )
 
 

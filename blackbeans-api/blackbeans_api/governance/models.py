@@ -231,6 +231,31 @@ class BoardGroup(models.Model):
         return self.name
 
 
+class TaskStatusDefinition(models.Model):
+    """Catalogo configuravel de status de tarefa (validacao em serializers/views)."""
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = CharField(_("Key"), max_length=64, unique=True)
+    label = CharField(_("Label"), max_length=255)
+    color = CharField(_("Color"), max_length=32, blank=True, default="")
+    is_done_like = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Task Status Definition")
+        verbose_name_plural = _("Task Status Definitions")
+        ordering = ["position", "key"]
+        indexes = [
+            models.Index(fields=["is_active", "position"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.key} ({self.label})"
+
+
 class Task(models.Model):
     class Status(models.TextChoices):
         TODO = "todo", _("Todo")
@@ -242,6 +267,7 @@ class Task(models.Model):
         LOW = "low", _("Low")
         MEDIUM = "medium", _("Medium")
         HIGH = "high", _("High")
+        CRITICAL = "critical", _("Critical")
 
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     board = ForeignKey(Board, on_delete=CASCADE, related_name="tasks")
@@ -255,7 +281,7 @@ class Task(models.Model):
     )
     title = CharField(max_length=255)
     description = TextField(blank=True, default="")
-    status = CharField(max_length=24, choices=Status.choices, default=Status.TODO)
+    status = CharField(max_length=64, default=Status.TODO)
     priority = CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
     effort_points = models.PositiveIntegerField(default=1)
     assignee = ForeignKey(
@@ -267,6 +293,20 @@ class Task(models.Model):
     )
     start_date = DateTimeField(null=True, blank=True)
     end_date = DateTimeField(null=True, blank=True)
+    is_recurring = models.BooleanField(default=False)
+    recurrence_frequency = CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        help_text="daily|weekly|biweekly|monthly",
+    )
+    recurrence_anchor_task = ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recurrence_children",
+    )
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -379,6 +419,8 @@ class TimeLog(models.Model):
     current_started_at = DateTimeField(null=True, blank=True)
     ended_at = DateTimeField(null=True, blank=True)
     accumulated_seconds = models.PositiveIntegerField(default=0)
+    is_manual = models.BooleanField(default=False)
+    source = CharField(max_length=16, default="timer")
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -696,6 +738,46 @@ class PermissionConflictResolution(models.Model):
     class Meta:
         verbose_name = _("Permission conflict resolution")
         verbose_name_plural = _("Permission conflict resolutions")
+
+
+class ClientRequest(models.Model):
+    """Pedido externo do cliente via formulario publico."""
+
+    class Status(models.TextChoices):
+        NEW = "new", _("New")
+        IN_REVIEW = "in_review", _("In Review")
+        CONVERTED = "converted", _("Converted")
+        REJECTED = "rejected", _("Rejected")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client_name = CharField(max_length=255)
+    contact_name = CharField(max_length=255, blank=True, default="")
+    contact_email = CharField(max_length=255, blank=True, default="")
+    contact_phone = CharField(max_length=64, blank=True, default="")
+    title = CharField(max_length=255)
+    description = TextField(blank=True, default="")
+    status = CharField(max_length=16, choices=Status.choices, default=Status.NEW)
+    converted_task = ForeignKey(
+        Task,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_client_requests",
+    )
+    converted_project = ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="client_requests",
+    )
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Client request")
+        verbose_name_plural = _("Client requests")
+        ordering = ["-created_at"]
 
 
 class AgentDefinition(models.Model):

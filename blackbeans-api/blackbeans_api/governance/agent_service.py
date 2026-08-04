@@ -414,12 +414,25 @@ BLOCKED_STALE_AGENT_DEFAULTS: dict[str, Any] = {
     "is_enabled": True,
 }
 
+TIME_PLAY_CUTOFF_AGENT_SLUG = "time_play_cutoff"
+TIME_PLAY_CUTOFF_AGENT_DEFAULTS: dict[str, Any] = {
+    "title": "Bloqueio de play apos horario",
+    "description": (
+        "Regra operacional: rejeita POST /tasks/{id}/time/start apos o horario "
+        "configurado (TIME_PLAY_CUTOFF_HOUR, default 18:00 America/Sao_Paulo). "
+        "Nao e um job periodico — a barreira e aplicada no endpoint de play."
+    ),
+    "schedule_hint": "Continuo (no play). Default: apos 18:00 America/Sao_Paulo",
+    "is_enabled": True,
+}
+
 
 def ensure_agent_catalog() -> list[AgentDefinition]:
     """Garante que os agentes conhecidos existam no catalogo (idempotente)."""
     overdue = _ensure_agent(OVERDUE_AGENT_SLUG, OVERDUE_AGENT_DEFAULTS)
     blocked = _ensure_agent(BLOCKED_STALE_AGENT_SLUG, BLOCKED_STALE_AGENT_DEFAULTS)
-    return [overdue, blocked]
+    cutoff = _ensure_agent(TIME_PLAY_CUTOFF_AGENT_SLUG, TIME_PLAY_CUTOFF_AGENT_DEFAULTS)
+    return [overdue, blocked, cutoff]
 
 
 def _finish_failed_run(run: AgentRun, *, summary: str, error: str) -> AgentRun:

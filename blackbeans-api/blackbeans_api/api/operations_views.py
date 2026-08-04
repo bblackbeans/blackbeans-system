@@ -5,8 +5,9 @@ from datetime import timedelta
 from uuid import UUID
 
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -28,10 +29,12 @@ from blackbeans_api.api.operations_serializers import TaskCommentUpdateSerialize
 from blackbeans_api.api.operations_serializers import TaskDependencyCreateSerializer
 from blackbeans_api.api.operations_serializers import notification_to_representation
 from blackbeans_api.api.operations_serializers import task_to_representation
+from blackbeans_api.api.operations_serializers import TimeLogManualCreateSerializer
 from blackbeans_api.api.operations_serializers import TimeLogUpdateSerializer
 from blackbeans_api.api.operations_serializers import time_log_to_representation
 from blackbeans_api.api.operations_serializers import task_comment_to_representation
 from blackbeans_api.api.operations_serializers import task_attachment_to_representation
+from blackbeans_api.api.operations_serializers import validate_active_task_status
 from blackbeans_api.api.operations_serializers import MAX_ATTACHMENT_BYTES
 from blackbeans_api.api.operations_serializers import portfolio_to_representation
 from blackbeans_api.api.operations_serializers import project_to_representation
@@ -59,6 +62,7 @@ from blackbeans_api.governance.notification_service import dispatch_task_comment
 from blackbeans_api.governance.notification_service import dispatch_task_priority_changed
 from blackbeans_api.governance.notification_service import dispatch_task_status_changed
 from blackbeans_api.governance.notification_service import dispatch_task_updated
+from blackbeans_api.governance.notification_service import get_user_display_name
 from blackbeans_api.governance.tasks import dispatch_deadline_notifications
 from blackbeans_api.governance.tasks import dispatch_task_assigned_notification
 from blackbeans_api.governance.tasks import dispatch_task_completed_notifications
@@ -130,19 +134,78 @@ def _resolve_time_log_for_user(
 
 
 def _recalculate_dependents(task: Task) -> None:
+    """Propaga ajuste de datas em cadeia (BFS) a partir do predecessor."""
     if task.end_date is None:
         return
-    deps = TaskDependency.objects.select_related("task").filter(depends_on=task)
-    for dep in deps:
-        dependent = dep.task
-        if dependent.start_date is None or dependent.start_date < task.end_date:
-            duration = None
-            if dependent.start_date and dependent.end_date and dependent.end_date >= dependent.start_date:
-                duration = dependent.end_date - dependent.start_date
-            dependent.start_date = task.end_date
-            if duration is not None:
-                dependent.end_date = dependent.start_date + duration
-            dependent.save(update_fields=["start_date", "end_date", "updated_at"])
+    queue = [task]
+    seen: set = {task.pk}
+    while queue:
+        current = queue.pop(0)
+        if current.end_date is None:
+            continue
+        deps = TaskDependency.objects.select_related("task").filter(depends_on=current)
+        for dep in deps:
+            dependent = dep.task
+            if dependent.pk in seen:
+                continue
+            if dependent.start_date is None or dependent.start_date < current.end_date:
+                duration = None
+                if dependent.start_date and dependent.end_date and dependent.end_date >= dependent.start_date:
+                    duration = dependent.end_date - dependent.start_date
+                dependent.start_date = current.end_date
+                if duration is not None:
+                    dependent.end_date = dependent.start_date + duration
+                dependent.save(update_fields=["start_date", "end_date", "updated_at"])
+            seen.add(dependent.pk)
+            queue.append(dependent)
+
+
+_RECURRENCE_DELTAS = {
+    "daily": timedelta(days=1),
+    "weekly": timedelta(days=7),
+    "biweekly": timedelta(days=14),
+    "monthly": timedelta(days=30),
+}
+
+
+def _spawn_next_recurrence(task: Task) -> Task | None:
+    """Cria a proxima ocorrencia de uma tarefa recorrente ao concluir."""
+    if not getattr(task, "is_recurring", False):
+        return None
+    freq = (getattr(task, "recurrence_frequency", None) or "").strip().lower()
+    delta = _RECURRENCE_DELTAS.get(freq)
+    if delta is None:
+        return None
+    anchor = task.recurrence_anchor_task or task
+    # Evita duplicar se ja existe filho aberto gerado a partir desta conclusao recente
+    if Task.objects.filter(
+        recurrence_anchor_task=anchor,
+        is_recurring=True,
+        status=Task.Status.TODO,
+        created_at__gte=timezone.now() - timedelta(minutes=5),
+    ).exclude(pk=task.pk).exists():
+        return None
+    base_start = task.start_date or task.end_date or timezone.now()
+    base_end = task.end_date or base_start
+    duration = base_end - base_start if base_end >= base_start else timedelta(0)
+    next_start = base_start + delta
+    next_end = next_start + duration
+    return Task.objects.create(
+        board=task.board,
+        group=task.group,
+        parent=task.parent,
+        title=task.title,
+        description=task.description,
+        status=Task.Status.TODO,
+        priority=task.priority,
+        effort_points=task.effort_points,
+        assignee=task.assignee,
+        start_date=next_start,
+        end_date=next_end,
+        is_recurring=True,
+        recurrence_frequency=freq,
+        recurrence_anchor_task=anchor,
+    )
 
 
 def _has_in_progress_tasks_workspace(*, workspace_id: UUID) -> bool:
@@ -907,7 +970,7 @@ class BoardDetailView(APIView):
 
 
 class TaskListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -946,11 +1009,12 @@ class TaskListCreateView(APIView):
         serializer = TaskWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
+        actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.created",
-            summary=f"Tarefa criada com status={task.status}.",
+            summary=f"{actor_name} criou a tarefa com status={task.status}.",
         )
         task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
         return success_response(
@@ -1107,10 +1171,16 @@ class MyTasksView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        # Minhas tarefas (raiz + subtarefas) e pais das minhas subtarefas (para aninhar na UI).
+        my_assigned = Task.objects.filter(assignee=request.user)
+        root_ids = my_assigned.filter(parent__isnull=True).values_list("pk", flat=True)
+        sub_ids = my_assigned.filter(parent__isnull=False).values_list("pk", flat=True)
+        parent_ids_from_subs = my_assigned.filter(parent__isnull=False).values_list("parent_id", flat=True)
         qs = (
-            Task.objects.filter(assignee=request.user)
+            Task.objects.filter(Q(pk__in=root_ids) | Q(pk__in=sub_ids) | Q(pk__in=parent_ids_from_subs))
             .select_related("assignee", "group", "board")
             .annotate(subtasks_count=Count("subtasks"))
+            .distinct()
             .order_by("-updated_at")
         )
         status_filter = request.query_params.get("status")
@@ -1210,12 +1280,14 @@ class TaskStatusView(APIView):
                 http_status=status.HTTP_403_FORBIDDEN,
             )
         new_status = request.data.get("status")
-        if new_status not in dict(Task.Status.choices):
+        try:
+            new_status = validate_active_task_status(new_status)
+        except serializers.ValidationError:
             return error_response(
                 correlation_id=correlation_id,
                 code="validation_error",
                 message="Status invalido para tarefa.",
-                details={"status": ["Use um status valido."]},
+                details={"status": ["Use um status ativo do catalogo."]},
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
         if TaskDependency.objects.filter(task=task, depends_on__status=Task.Status.BLOCKED).exists() and new_status == Task.Status.DONE:
@@ -1228,6 +1300,7 @@ class TaskStatusView(APIView):
             )
         before = task.status
         update_fields = ["status", "updated_at"]
+        spawned = None
         with transaction.atomic():
             if new_status == Task.Status.DONE:
                 _close_open_time_logs_for_task(task)
@@ -1236,6 +1309,8 @@ class TaskStatusView(APIView):
                     update_fields.append("end_date")
             task.status = new_status
             task.save(update_fields=update_fields)
+            if new_status == Task.Status.DONE and before != Task.Status.DONE:
+                spawned = _spawn_next_recurrence(task)
         dispatch_task_status_changed(
             task=task,
             actor=request.user,
@@ -1250,7 +1325,10 @@ class TaskStatusView(APIView):
             summary=f"Status alterado de {before} para {new_status}.",
         )
         _recalculate_dependents(task)
-        return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
+        payload = {"task": task_to_representation(task)}
+        if spawned is not None:
+            payload["next_occurrence"] = task_to_representation(spawned)
+        return success_response(correlation_id=correlation_id, data=payload)
 
 
 class TaskTimeStartView(APIView):
@@ -1278,19 +1356,37 @@ class TaskTimeStartView(APIView):
                 http_status=status.HTTP_409_CONFLICT,
             )
 
+        from django.conf import settings as django_settings
+        from zoneinfo import ZoneInfo
+
+        if bool(getattr(django_settings, "TIME_PLAY_CUTOFF_ENABLED", True)):
+            cutoff_hour = int(getattr(django_settings, "TIME_PLAY_CUTOFF_HOUR", 18) or 18)
+            local_now = timezone.now().astimezone(ZoneInfo("America/Sao_Paulo"))
+            if local_now.hour >= cutoff_hour:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="time_play_cutoff",
+                    message=f"Play bloqueado apos {cutoff_hour:02d}:00 (America/Sao_Paulo).",
+                    details={"cutoff_hour": cutoff_hour},
+                    http_status=status.HTTP_409_CONFLICT,
+                )
+
         now = timezone.now()
+        actor_name = get_user_display_name(request.user)
         time_log = TimeLog.objects.create(
             task=task,
             user=request.user,
             status=TimeLog.Status.ACTIVE,
             started_at=now,
             current_started_at=now,
+            is_manual=False,
+            source="timer",
         )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.started",
-            summary=f"Cronometro iniciado em log={time_log.pk}.",
+            summary=f"{actor_name} iniciou o cronometro (log={time_log.pk}).",
         )
         log_audit_event(
             event_type="time.started",
@@ -1344,11 +1440,12 @@ class TaskTimePauseView(APIView):
         time_log.current_started_at = None
         time_log.status = TimeLog.Status.PAUSED
         time_log.save(update_fields=["accumulated_seconds", "current_started_at", "status", "updated_at"])
+        actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.paused",
-            summary=f"Cronometro pausado no log={time_log.pk}.",
+            summary=f"{actor_name} pausou o cronometro (log={time_log.pk}).",
         )
         log_audit_event(
             event_type="time.paused",
@@ -1400,11 +1497,12 @@ class TaskTimeResumeView(APIView):
         time_log.current_started_at = now
         time_log.status = TimeLog.Status.ACTIVE
         time_log.save(update_fields=["current_started_at", "status", "updated_at"])
+        actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.resumed",
-            summary=f"Cronometro retomado no log={time_log.pk}.",
+            summary=f"{actor_name} retomou o cronometro (log={time_log.pk}).",
         )
         log_audit_event(
             event_type="time.resumed",
@@ -1419,6 +1517,71 @@ class TaskTimeResumeView(APIView):
         return success_response(
             correlation_id=correlation_id,
             data={"time_log": time_log_to_representation(time_log)},
+        )
+
+
+class TaskTimeManualView(APIView):
+    """Registra apontamento manual concluido (is_manual=True, source=manual)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            task = Task.objects.select_related("board__project__portfolio__workspace").get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = TimeLogManualCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        started_at = serializer.validated_data["started_at"]
+        ended_at = serializer.validated_data["ended_at"]
+        accumulated_seconds = max(int((ended_at - started_at).total_seconds()), 0)
+
+        time_log = TimeLog.objects.create(
+            task=task,
+            user=request.user,
+            status=TimeLog.Status.COMPLETED,
+            started_at=started_at,
+            ended_at=ended_at,
+            current_started_at=None,
+            accumulated_seconds=accumulated_seconds,
+            is_manual=True,
+            source="manual",
+        )
+        actor_name = get_user_display_name(request.user)
+        _log_task_activity(
+            task=task,
+            actor_id=request.user.pk,
+            event_type="task.time.manual",
+            summary=f"{actor_name} registrou tempo manual (log={time_log.pk}).",
+        )
+        log_audit_event(
+            event_type="time.manual",
+            action="create",
+            entity_type="time_log",
+            entity_id=str(time_log.pk),
+            actor_id=request.user.pk,
+            workspace_id=str(task.board.project.portfolio.workspace_id),
+            correlation_id=correlation_id,
+            after={
+                "task_id": str(task.pk),
+                "status": time_log.status,
+                "is_manual": True,
+                "source": "manual",
+                "accumulated_seconds": accumulated_seconds,
+            },
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"time_log": time_log_to_representation(time_log)},
+            http_status=status.HTTP_201_CREATED,
         )
 
 
@@ -1462,11 +1625,13 @@ class TaskCompleteView(APIView):
             )
 
         now = timezone.now()
+        spawned = None
         with transaction.atomic():
             _close_open_time_logs_for_task(task, now=now)
             task.status = Task.Status.DONE
             task.end_date = now
             task.save(update_fields=["status", "end_date", "updated_at"])
+            spawned = _spawn_next_recurrence(task)
         time_log.refresh_from_db()
 
         _log_task_activity(
@@ -1492,6 +1657,9 @@ class TaskCompleteView(APIView):
             correlation_id=correlation_id,
         )
         _recalculate_dependents(task)
+        if spawned is not None:
+            # keep response shape; next occurrence available via list refresh
+            pass
         return success_response(
             correlation_id=correlation_id,
             data={"task": task_to_representation(task), "time_log": time_log_to_representation(time_log)},
@@ -1547,7 +1715,7 @@ class TimeLogDetailView(APIView):
             task=time_log.task,
             actor_id=request.user.pk,
             event_type="task.time.edited",
-            summary=f"Log de tempo atualizado log={time_log.pk}.",
+            summary=f"{get_user_display_name(request.user)} atualizou o log de tempo (log={time_log.pk}).",
         )
         return success_response(correlation_id=correlation_id, data={"time_log": time_log_to_representation(time_log)})
 
@@ -1571,7 +1739,7 @@ class TimeLogDetailView(APIView):
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.deleted",
-            summary=f"Log de tempo removido log={time_log.pk}.",
+            summary=f"{get_user_display_name(request.user)} removeu o log de tempo (log={time_log.pk}).",
         )
         return success_response(correlation_id=correlation_id, data={"deleted": True})
 
@@ -1592,7 +1760,7 @@ class TaskTimeSummaryView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        logs = TimeLog.objects.filter(task=task).exclude(status=TimeLog.Status.DELETED)
+        logs = TimeLog.objects.filter(task=task).exclude(status=TimeLog.Status.DELETED).select_related("user")
         if not is_admin:
             logs = logs.filter(user=request.user)
         logs = logs.order_by("-created_at")
@@ -1745,6 +1913,7 @@ class TaskCommentsView(APIView):
             )
         comments = (
             TaskComment.objects.filter(task=task)
+            .select_related("author")
             .prefetch_related("attachments")
             .order_by("created_at")
         )
@@ -1795,7 +1964,10 @@ class TaskCommentDetailView(APIView):
         correlation_id = get_correlation_id(request)
         is_admin = bool(request.user.is_staff or request.user.is_superuser)
         try:
-            comment = TaskComment.objects.select_related("task").get(pk=comment_id, task_id=task_id)
+            comment = TaskComment.objects.select_related("task", "author").prefetch_related("attachments").get(
+                pk=comment_id,
+                task_id=task_id,
+            )
         except TaskComment.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
