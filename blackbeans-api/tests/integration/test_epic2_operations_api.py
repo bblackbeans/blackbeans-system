@@ -426,20 +426,74 @@ def test_story_3_9_task_activity_and_board_progress(admin_client):
     assert progress.data["data"]["counts"]["done"] == 1
 
 
-def test_story_4_1_start_pause_resume_time_log(admin_client):
+def test_story_4_1_start_pause_resume_time_log():
+    admin = UserFactory.create(password=STRONG_PASSWORD, is_staff=True, is_active=True, is_superuser=True)
+    client = APIClient()
+    client.force_authenticate(user=admin)
     board = Board.objects.create(project=ProjectFactory.create(), name="Board")
     group = BoardGroup.objects.create(board=board, name="Doing", position=1, wip_limit=3)
     task = Task.objects.create(board=board, group=group, title="Cronometrada", status="in_progress")
 
-    started = admin_client.post(f"/api/v1/tasks/{task.pk}/time/start", {}, format="json")
+    started = client.post(f"/api/v1/tasks/{task.pk}/time/start", {}, format="json")
     assert started.status_code == status.HTTP_200_OK
-    duplicate = admin_client.post(f"/api/v1/tasks/{task.pk}/time/start", {}, format="json")
+    assert started.data["data"]["time_log"]["is_manual"] is False
+    assert started.data["data"]["time_log"]["source"] == "timer"
+    assert started.data["data"]["time_log"]["user_name"]
+    duplicate = client.post(f"/api/v1/tasks/{task.pk}/time/start", {}, format="json")
     assert duplicate.status_code == status.HTTP_409_CONFLICT
-    paused = admin_client.post(f"/api/v1/tasks/{task.pk}/time/pause", {}, format="json")
+    paused = client.post(f"/api/v1/tasks/{task.pk}/time/pause", {}, format="json")
     assert paused.status_code == status.HTTP_200_OK
-    resumed = admin_client.post(f"/api/v1/tasks/{task.pk}/time/resume", {}, format="json")
+    resumed = client.post(f"/api/v1/tasks/{task.pk}/time/resume", {}, format="json")
     assert resumed.status_code == status.HTTP_200_OK
     assert resumed.data["data"]["time_log"]["status"] == TimeLog.Status.ACTIVE
+
+    activities = client.get(f"/api/v1/tasks/{task.pk}/activity")
+    assert activities.status_code == status.HTTP_200_OK
+    summaries = " ".join(item["summary"] for item in activities.data["data"]["activities"])
+    assert "iniciou o cronometro" in summaries
+    assert "pausou o cronometro" in summaries
+    assert "retomou o cronometro" in summaries
+
+
+def test_manual_time_log_create():
+    admin = UserFactory.create(password=STRONG_PASSWORD, is_staff=True, is_active=True, is_superuser=True)
+    client = APIClient()
+    client.force_authenticate(user=admin)
+    board = Board.objects.create(project=ProjectFactory.create(), name="Board")
+    group = BoardGroup.objects.create(board=board, name="Doing", position=1, wip_limit=3)
+    task = Task.objects.create(board=board, group=group, title="Manual", status="in_progress")
+
+    response = client.post(
+        f"/api/v1/tasks/{task.pk}/time/manual",
+        {
+            "started_at": "2026-08-01T10:00:00Z",
+            "ended_at": "2026-08-01T11:30:00Z",
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    log = response.data["data"]["time_log"]
+    assert log["status"] == TimeLog.Status.COMPLETED
+    assert log["is_manual"] is True
+    assert log["source"] == "manual"
+    assert log["total_seconds"] == 5400
+    assert log["user_name"]
+
+
+def test_authenticated_collaborator_can_create_task():
+    board = Board.objects.create(project=ProjectFactory.create(), name="Board")
+    group = BoardGroup.objects.create(board=board, name="Todo", position=1, wip_limit=3)
+    user = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    created = client.post(
+        "/api/v1/tasks",
+        {"group_id": str(group.pk), "title": "Tarefa do colaborador"},
+        format="json",
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    assert created.data["data"]["task"]["title"] == "Tarefa do colaborador"
 
 
 def test_admin_can_pause_another_users_active_time_log(admin_client):

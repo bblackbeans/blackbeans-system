@@ -7,11 +7,30 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 
 def authenticate_user(*, username: str | None, password: str | None, request):
-    user = authenticate(
-        request=request,
-        username=username,
-        password=password,
-    )
+    """Aceita username ou e-mail no campo de login."""
+    login_id = (username or "").strip()
+    password_value = password or ""
+    user = None
+
+    if login_id and password_value:
+        user = authenticate(
+            request=request,
+            username=login_id,
+            password=password_value,
+        )
+        if user is None and "@" in login_id:
+            user_model = get_user_model()
+            matched = (
+                user_model.objects.filter(email__iexact=login_id)
+                .order_by("-is_active", "-is_staff", "id")
+                .first()
+            )
+            if matched is not None:
+                user = authenticate(
+                    request=request,
+                    username=matched.get_username(),
+                    password=password_value,
+                )
 
     if not user or not user.is_active:
         raise serializers.ValidationError(
@@ -61,7 +80,11 @@ class AdminTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["user_id"] = user.id
         token["is_staff"] = bool(getattr(user, "is_staff", False))
         token["is_superuser"] = bool(getattr(user, "is_superuser", False))
-        token["role"] = "admin" if (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)) else "collaborator"
+        token["role"] = (
+            "admin"
+            if (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+            else "collaborator"
+        )
         token["username"] = getattr(user, "username", "")
         token["email"] = getattr(user, "email", "")
         return token

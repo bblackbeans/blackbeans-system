@@ -13,6 +13,7 @@ from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.governance.agent_service import BLOCKED_STALE_AGENT_SLUG
 from blackbeans_api.governance.agent_service import OVERDUE_AGENT_SLUG
+from blackbeans_api.governance.agent_service import TIME_PLAY_CUTOFF_AGENT_SLUG
 from blackbeans_api.governance.agent_service import ensure_agent_catalog
 from blackbeans_api.governance.agent_service import execute_blocked_stale_tasks_agent
 from blackbeans_api.governance.agent_service import execute_overdue_tasks_weekly_agent
@@ -20,6 +21,8 @@ from blackbeans_api.governance.models import AgentDefinition
 from blackbeans_api.governance.models import AgentRun
 from blackbeans_api.governance.tasks import run_blocked_stale_tasks_agent
 from blackbeans_api.governance.tasks import run_overdue_tasks_weekly_agent
+from django.conf import settings
+from django.utils import timezone
 
 
 def agent_definition_to_representation(agent: AgentDefinition, *, last_run: AgentRun | None = None) -> dict:
@@ -215,6 +218,32 @@ class AgentRunNowView(APIView):
             run = execute_blocked_stale_tasks_agent(
                 correlation_id=correlation_id,
                 triggered_by=request.user,
+            )
+            return success_response(
+                correlation_id=correlation_id,
+                data={"run": agent_run_to_representation(run, include_report=True)},
+                http_status=status.HTTP_201_CREATED,
+            )
+
+        if slug == TIME_PLAY_CUTOFF_AGENT_SLUG:
+            cutoff_hour = int(getattr(settings, "TIME_PLAY_CUTOFF_HOUR", 18) or 18)
+            enabled = bool(getattr(settings, "TIME_PLAY_CUTOFF_ENABLED", True))
+            run = AgentRun.objects.create(
+                agent=agent,
+                status=AgentRun.Status.SUCCESS,
+                summary_text=(
+                    f"Regra continua ativa={enabled}; cutoff={cutoff_hour:02d}:00 "
+                    "America/Sao_Paulo no endpoint de play."
+                ),
+                report_json={
+                    "mode": "continuous_rule",
+                    "enabled": enabled,
+                    "cutoff_hour": cutoff_hour,
+                    "timezone": "America/Sao_Paulo",
+                },
+                correlation_id=correlation_id,
+                triggered_by=request.user,
+                finished_at=timezone.now(),
             )
             return success_response(
                 correlation_id=correlation_id,

@@ -271,3 +271,35 @@ def run_blocked_stale_tasks_agent(*, correlation_id: str = "system", triggered_b
         "summary": run.summary_text,
         "total_flagged": int((run.report_json or {}).get("total_flagged") or 0),
     }
+
+
+@shared_task
+def spawn_due_recurring_tasks() -> dict:
+    """
+    Safety net: para tarefas recorrentes ja concluidas sem proxima ocorrencia aberta,
+    gera a proxima (idempotente via janela curta em _spawn_next_recurrence).
+    A geracao primaria ocorre no complete/status=done.
+    """
+    from blackbeans_api.api.operations_views import _spawn_next_recurrence
+
+    created = 0
+    done_recurring = Task.objects.filter(is_recurring=True, status=Task.Status.DONE).order_by("-updated_at")[:200]
+    for task in done_recurring:
+        anchor = task.recurrence_anchor_task_id or task.pk
+        has_open = (
+            Task.objects.filter(
+                Q(recurrence_anchor_task_id=anchor) | Q(pk=anchor),
+                is_recurring=True,
+            )
+            .exclude(status=Task.Status.DONE)
+            .exclude(pk=task.pk)
+            .exists()
+        )
+        if has_open:
+            continue
+        if task.updated_at < timezone.now() - timedelta(days=45):
+            continue
+        spawned = _spawn_next_recurrence(task)
+        if spawned is not None:
+            created += 1
+    return {"created": created}

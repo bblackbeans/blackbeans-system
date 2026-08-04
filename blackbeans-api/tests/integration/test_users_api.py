@@ -191,3 +191,42 @@ def test_delete_unknown_link_returns_404(admin_client):
     )
     assert response.status_code == 404
     assert response.data["error"]["code"] == "link_not_found"
+
+
+def test_me_password_change():
+    admin = UserFactory.create(password=STRONG_PASSWORD, is_staff=True, is_active=True, is_superuser=True)
+    client = APIClient()
+    client.force_authenticate(user=admin)
+    new_password = "N3w!PassWord#99"
+    bad = client.post(
+        "/api/v1/me/password",
+        {"current_password": "wrong", "new_password": new_password},
+        format="json",
+    )
+    assert bad.status_code == 400
+    assert bad.data["error"]["code"] == "invalid_current_password"
+
+    ok = client.post(
+        "/api/v1/me/password",
+        {"current_password": STRONG_PASSWORD, "new_password": new_password},
+        format="json",
+    )
+    assert ok.status_code == 200
+    assert ok.data["data"]["changed"] is True
+    admin.refresh_from_db()
+    assert admin.check_password(new_password)
+
+
+def test_me_email_test_requires_email():
+    admin = UserFactory.create(
+        password=STRONG_PASSWORD,
+        is_staff=True,
+        is_active=True,
+        is_superuser=True,
+        email="",
+    )
+    client = APIClient()
+    client.force_authenticate(user=admin)
+    response = client.post("/api/v1/me/email-test", {}, format="json")
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "email_missing"

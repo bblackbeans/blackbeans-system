@@ -128,6 +128,22 @@ class AdminUserUpdateSerializer(serializers.Serializer):
         return instance
 
 
+class MePasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=12)
+
+    def validate_new_password(self, value: str) -> str:
+        if not re.search(r"[A-Z]", value):
+            raise serializers.ValidationError("Senha deve conter letra maiuscula.")
+        if not re.search(r"[a-z]", value):
+            raise serializers.ValidationError("Senha deve conter letra minuscula.")
+        if not re.search(r"\d", value):
+            raise serializers.ValidationError("Senha deve conter digito.")
+        if not re.search(r"[^\w\s]", value):
+            raise serializers.ValidationError("Senha deve conter caractere especial.")
+        return value
+
+
 class UserWorkspaceAccessWriteSerializer(serializers.Serializer):
     workspace_ids = serializers.ListField(
         child=serializers.UUIDField(),

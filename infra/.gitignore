@@ -1,0 +1,4 @@
+# Segredos locais — use os *.env.example como template
+env/api.env
+env/worker.env
+env/web.env

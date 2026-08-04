@@ -16,6 +16,10 @@ from blackbeans_api.api.audit_views import AuditLogsView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorDepartmentLinkView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorDetailView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorListCreateView
+from blackbeans_api.api.client_requests_views import AdminHoursDashboardView
+from blackbeans_api.api.client_requests_views import ClientRequestConvertView
+from blackbeans_api.api.client_requests_views import ClientRequestListView
+from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateView
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
@@ -59,7 +63,9 @@ from blackbeans_api.api.operations_views import TaskStatusView
 from blackbeans_api.api.operations_views import TaskTimePauseView
 from blackbeans_api.api.operations_views import TaskTimeResumeView
 from blackbeans_api.api.operations_views import TaskTimeStartView
+from blackbeans_api.api.operations_views import TaskTimeManualView
 from blackbeans_api.api.operations_views import TaskTimeSummaryView
+from blackbeans_api.api.status_views import TaskStatusCatalogView
 from blackbeans_api.api.operations_views import TimeLogDetailView
 from blackbeans_api.api.operations_views import TimeLogsListView
 from blackbeans_api.api.operations_views import MyTasksView
@@ -89,6 +95,8 @@ from blackbeans_api.api.users_views import AdminUserListCreateView
 from blackbeans_api.api.users_views import AdminUserWorkspaceAccessView
 from blackbeans_api.api.users_views import AssigneeDirectoryView
 from blackbeans_api.api.users_views import MeAvatarView
+from blackbeans_api.api.users_views import MeEmailTestView
+from blackbeans_api.api.users_views import MePasswordChangeView
 from blackbeans_api.api.users_views import MeWorkspaceAccessView
 
 urlpatterns = [
@@ -102,6 +110,14 @@ urlpatterns = [
     path("clients", ClientsListCreateView.as_view(), name="clients-list-create"),
     path("clients/<uuid:client_id>/status-toggle", ClientStatusToggleView.as_view(), name="clients-status-toggle"),
     path("clients/<uuid:client_id>", ClientDetailView.as_view(), name="clients-detail"),
+    path("client-requests", ClientRequestListView.as_view(), name="client-requests-list"),
+    path("client-requests/public", ClientRequestPublicCreateView.as_view(), name="client-requests-public"),
+    path(
+        "client-requests/<uuid:request_id>/convert",
+        ClientRequestConvertView.as_view(),
+        name="client-requests-convert",
+    ),
+    path("admin/hours-dashboard", AdminHoursDashboardView.as_view(), name="admin-hours-dashboard"),
     path("workspaces", WorkspaceListCreateView.as_view(), name="workspaces-list-create"),
     path("workspaces/<uuid:workspace_id>", WorkspaceDetailView.as_view(), name="workspaces-detail"),
     path("workspaces/<uuid:workspace_id>/stats", WorkspaceStatsView.as_view(), name="workspaces-stats"),
@@ -122,8 +138,10 @@ urlpatterns = [
     path("tasks/<uuid:task_id>/time/start", TaskTimeStartView.as_view(), name="tasks-time-start"),
     path("tasks/<uuid:task_id>/time/pause", TaskTimePauseView.as_view(), name="tasks-time-pause"),
     path("tasks/<uuid:task_id>/time/resume", TaskTimeResumeView.as_view(), name="tasks-time-resume"),
+    path("tasks/<uuid:task_id>/time/manual", TaskTimeManualView.as_view(), name="tasks-time-manual"),
     path("tasks/<uuid:task_id>/complete", TaskCompleteView.as_view(), name="tasks-complete"),
     path("tasks/<uuid:task_id>/time-summary", TaskTimeSummaryView.as_view(), name="tasks-time-summary"),
+    path("task-statuses", TaskStatusCatalogView.as_view(), name="task-statuses"),
     path("tasks/<uuid:task_id>/comments", TaskCommentsView.as_view(), name="tasks-comments"),
     path("tasks/<uuid:task_id>/comments/<uuid:comment_id>", TaskCommentDetailView.as_view(), name="tasks-comments-detail"),
     path("tasks/<uuid:task_id>/attachments", TaskAttachmentsView.as_view(), name="tasks-attachments"),
@@ -169,6 +187,8 @@ urlpatterns = [
     ),
     path("me", MeView.as_view(), name="me"),
     path("me/avatar", MeAvatarView.as_view(), name="me-avatar"),
+    path("me/password", MePasswordChangeView.as_view(), name="me-password"),
+    path("me/email-test", MeEmailTestView.as_view(), name="me-email-test"),
     path("assignees", AssigneeDirectoryView.as_view(), name="assignees-directory"),
     path(
         "permissions/bulk/preview",

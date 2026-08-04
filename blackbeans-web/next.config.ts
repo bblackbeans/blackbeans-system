@@ -4,6 +4,15 @@ const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   turbopack: {},
+  async rewrites() {
+    const backend = (process.env.INTERNAL_API_URL ?? "http://api:8000").replace(/\/+$/, "");
+    return [
+      {
+        source: "/media/:path*",
+        destination: `${backend}/media/:path*`,
+      },
+    ];
+  },
   webpack: (config, { dev }) => {
     if (dev) {
       const extraIgnored = ["**/.next_backup*/**", "**/playwright-report/**", "**/test-results/**"];
