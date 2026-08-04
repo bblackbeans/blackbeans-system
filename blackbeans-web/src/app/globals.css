@@ -128,3 +128,12 @@ html[data-bb-theme="dark"] .bb-rich-link {
   padding-bottom: 6px;
 }
 
+.bb-whats-new-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(165deg, #0c1a22 0%, #10252e 45%, #0a1218 100%);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+

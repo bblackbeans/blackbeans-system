@@ -20,14 +20,8 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
       width={640}
       centered
       destroyOnHidden
+      className="bb-whats-new-modal"
       styles={{
-        content: {
-          padding: 0,
-          overflow: "hidden",
-          background: "linear-gradient(165deg, #0c1a22 0%, #10252e 45%, #0a1218 100%)",
-          border: "1px solid rgba(56, 189, 248, 0.35)",
-          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.55)",
-        },
         header: { display: "none" },
         body: { padding: 0 },
       }}
