@@ -64,6 +64,7 @@ from blackbeans_api.api.operations_views import TaskTimePauseView
 from blackbeans_api.api.operations_views import TaskTimeResumeView
 from blackbeans_api.api.operations_views import TaskTimeStartView
 from blackbeans_api.api.operations_views import TaskTimeManualView
+from blackbeans_api.api.operations_views import TaskTimeSummariesBatchView
 from blackbeans_api.api.operations_views import TaskTimeSummaryView
 from blackbeans_api.api.status_views import TaskStatusCatalogView
 from blackbeans_api.api.operations_views import TimeLogDetailView
@@ -131,6 +132,7 @@ urlpatterns = [
     path("boards/<uuid:board_id>/progress", BoardProgressView.as_view(), name="boards-progress"),
     path("groups/<uuid:group_id>", BoardGroupDetailView.as_view(), name="groups-detail"),
     path("tasks", TaskListCreateView.as_view(), name="tasks-list-create"),
+    path("tasks/time-summaries", TaskTimeSummariesBatchView.as_view(), name="tasks-time-summaries-batch"),
     path("tasks/<uuid:task_id>", TaskDetailView.as_view(), name="tasks-detail"),
     path("tasks/<uuid:task_id>/assignee", TaskAssigneeView.as_view(), name="tasks-assignee"),
     path("tasks/<uuid:task_id>/dependencies", TaskDependenciesView.as_view(), name="tasks-dependencies"),

@@ -92,19 +92,27 @@ export function resolveMediaUrl(url: string | null | undefined): string | undefi
   if (!url) return undefined;
   let raw = String(url).trim();
   if (!raw) return undefined;
+  // Preview otimista / data URI — nao normalizar como /media.
+  if (raw.startsWith("blob:") || raw.startsWith("data:")) return raw;
 
-  // URLs absolutas do host interno Docker (api:8000) → path /media/...
+  // URLs absolutas do host interno Docker / API → path /media/...
   try {
     if (/^https?:\/\//i.test(raw)) {
       const parsed = new URL(raw);
       const host = parsed.hostname.toLowerCase();
-      if (host === "api" || host === "blackbeans-api" || host.endsWith(".local")) {
-        raw = `${parsed.pathname}${parsed.search}`;
-      } else if (parsed.pathname.startsWith("/media/")) {
-        // Mesmo origin publico com path de media: preferir path relativo (rewrite do Next).
-        if (typeof window !== "undefined" && parsed.origin === window.location.origin) {
+      if (
+        host === "api" ||
+        host === "blackbeans-api" ||
+        host.endsWith(".local") ||
+        host === "localhost" ||
+        host === "127.0.0.1"
+      ) {
+        if (parsed.pathname.startsWith("/media/")) {
           raw = `${parsed.pathname}${parsed.search}`;
         }
+      } else if (parsed.pathname.startsWith("/media/")) {
+        // Preferir path relativo (rewrite do Next no mesmo origin).
+        raw = `${parsed.pathname}${parsed.search}`;
       }
     }
   } catch {
@@ -124,4 +132,21 @@ export function resolveMediaUrl(url: string | null | undefined): string | undefi
     }
   }
   return path;
+}
+
+/** Normaliza URL de anexo para markdown relativo `/media/...`. */
+export function toStoredMediaPath(url: string | null | undefined): string {
+  const resolved = resolveMediaUrl(url) || "";
+  if (!resolved) return "";
+  try {
+    if (/^https?:\/\//i.test(resolved)) {
+      const parsed = new URL(resolved);
+      if (parsed.pathname.startsWith("/media/")) {
+        return `${parsed.pathname}${parsed.search}`;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return resolved.startsWith("/media/") ? resolved : resolved;
 }

@@ -3,7 +3,7 @@
  * Ao publicar uma atualização, incremente APP_WHATS_NEW_VERSION e descreva as mudanças.
  * Usuarios que ainda nao viram essa versao veem o modal na primeira sessao logada.
  */
-export const APP_WHATS_NEW_VERSION = "2026.08.04";
+export const APP_WHATS_NEW_VERSION = "1.2.1";
 
 export type WhatsNewSection = {
   title: string;
@@ -19,29 +19,41 @@ export type WhatsNewRelease = {
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
   version: APP_WHATS_NEW_VERSION,
-  title: "Novidades desta atualizacao",
-  subtitle: "Resumo do que mudou no BlackBeans System",
+  title: "Novidades da versao 1.2",
+  subtitle: "Composer Monday, midia estavel, filtros, historico e reporte de erros",
   sections: [
     {
-      title: "Horas dos colaboradores",
+      title: "Descricao e Atualizacoes",
       items: [
-        "Detalhes por tarefa abrem em modal (esforco, horas, cliente e projeto).",
-        "Coluna de esforco total por pessoa, junto com horas e quantidade de tarefas.",
-        "Filtros de periodo: semana (seg–sex), total do mes e todo o tempo.",
-        "Filtro por tipo: todos, so colaborador ou so admin — lista inclui ambos.",
-        "Limpar filtros volta ao estado inicial e recarrega os dados (nao some a tabela).",
+        "Editor estilo Monday: formatacao, @mencao, emoji, link, checklist, anexar imagem ou arquivo.",
+        "Colar print (Ctrl+V) sobe a imagem com preview na hora e toast de envio — sem duplicar o bloco.",
+        "Rascunho local ate Atualizar (comentario) ou Salvar a tarefa (descricao).",
+        "Apos Atualizar, o compositor limpa sozinho; clique unico nao cria comentario em dobro.",
+        "Visualizacao com uma imagem so (lightbox no clique, sem thumbnail duplicado).",
       ],
     },
     {
-      title: "Pedidos de clientes",
+      title: "Filtros",
       items: [
-        "Status em portugues: Novo, Em analise, Convertido e Rejeitado.",
+        "Meu trabalho no mesmo padrao do Dashboard: Incluir ou Exceto.",
+        "Escolha varios status, prioridades, clientes e projetos de uma vez.",
+        "No Dashboard, multiplos colaboradores e grupos tambem.",
       ],
     },
     {
-      title: "Visual e status",
+      title: "Tarefas e historico",
       items: [
-        "Cores dos status de tarefas mais vivas, no mesmo estilo das prioridades.",
+        "Colaboradores editam todas as infos da tarefa; mudancas entram no historico.",
+        "Historico com cronometro, status e campos em portugues legivel.",
+        "Menção (@) gera notificacao in-app e e-mail (conforme preferencias).",
+      ],
+    },
+    {
+      title: "Relatar problema",
+      items: [
+        "Print funciona com modais abertos; botao de reporte nao some com a tarefa aberta.",
+        "Erros do sistema geram log automatico em Problemas (sem duplicar a cada poucos minutos).",
+        "JSON de contexto tecnico com scroll — nao quebra mais o layout.",
       ],
     },
   ],

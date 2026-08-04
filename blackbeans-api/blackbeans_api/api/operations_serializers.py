@@ -498,11 +498,15 @@ def task_attachment_to_representation(attachment: TaskAttachment, request=None) 
     if attachment.file:
         try:
             file_url = attachment.file.url
-            if request is not None and file_url:
+            # Preferir path /media/... (rewrite no frontend Next).
+            if isinstance(file_url, str) and "/media/" in file_url:
                 try:
-                    file_url = request.build_absolute_uri(file_url)
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(file_url if "://" in file_url else f"http://local{file_url}")
+                    if parsed.path.startswith("/media/"):
+                        file_url = f"{parsed.path}{('?' + parsed.query) if parsed.query else ''}"
                 except Exception:
-                    # Em testes / hosts nao permitidos, devolve URL relativa.
                     pass
         except ValueError:
             file_url = None

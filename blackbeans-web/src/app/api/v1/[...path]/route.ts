@@ -11,8 +11,34 @@ function normalizeBackendBaseUrl(raw: string): string {
   return s;
 }
 
+function isBinaryContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const ct = contentType.toLowerCase();
+  return (
+    ct.includes("multipart/form-data") ||
+    ct.includes("application/octet-stream") ||
+    ct.startsWith("image/") ||
+    ct.startsWith("audio/") ||
+    ct.startsWith("video/") ||
+    ct.includes("application/pdf") ||
+    ct.includes("application/zip")
+  );
+}
+
+async function readRequestBody(request: NextRequest): Promise<BodyInit | undefined> {
+  if (request.method === "GET" || request.method === "HEAD") return undefined;
+  const contentType = request.headers.get("content-type");
+  // multipart / binario: NUNCA usar .text() — corrompe bytes >= 0x80 (PNG vira ef bf bd).
+  if (isBinaryContentType(contentType)) {
+    return await request.arrayBuffer();
+  }
+  // JSON e texto
+  return await request.text();
+}
+
 async function proxy(request: NextRequest, path: string[]) {
-  const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+  const contentType = request.headers.get("content-type");
+  const body = await readRequestBody(request);
   const candidates = Array.from(
     new Set(
       [BACKEND_BASE_URL, "http://api:8000", "http://localhost:18000"].map(normalizeBackendBaseUrl).filter(Boolean),
@@ -20,18 +46,28 @@ async function proxy(request: NextRequest, path: string[]) {
   );
   let response: Response | null = null;
   let lastError: unknown;
+
+  const forwardHeaders: Record<string, string> = {
+    Authorization: request.headers.get("authorization") ?? "",
+    "X-Correlation-ID": request.headers.get("x-correlation-id") ?? "",
+  };
+  // Preservar Content-Type original (inclui boundary do multipart).
+  if (contentType) {
+    forwardHeaders["Content-Type"] = contentType;
+  } else if (body !== undefined && !isBinaryContentType(contentType)) {
+    forwardHeaders["Content-Type"] = "application/json";
+  }
+
   for (const base of candidates) {
     const targetUrl = `${base}/api/v1/${path.join("/")}${request.nextUrl.search}`;
     try {
       response = await fetch(targetUrl, {
         method: request.method,
-        headers: {
-          "Content-Type": request.headers.get("content-type") ?? "application/json",
-          Authorization: request.headers.get("authorization") ?? "",
-          "X-Correlation-ID": request.headers.get("x-correlation-id") ?? "",
-        },
+        headers: forwardHeaders,
         body,
         cache: "no-store",
+        // @ts-expect-error undici duplex tipagem incompleta em alguns targets
+        duplex: body instanceof ArrayBuffer ? "half" : undefined,
       });
       break;
     } catch (error) {
@@ -53,11 +89,12 @@ async function proxy(request: NextRequest, path: string[]) {
     );
   }
 
-  const responseText = await response.text();
-  const nextResponse = new NextResponse(responseText, {
+  const responseContentType = response.headers.get("content-type") ?? "application/json";
+  const responseBuffer = await response.arrayBuffer();
+  const nextResponse = new NextResponse(responseBuffer, {
     status: response.status,
     headers: {
-      "Content-Type": response.headers.get("content-type") ?? "application/json",
+      "Content-Type": responseContentType,
     },
   });
 

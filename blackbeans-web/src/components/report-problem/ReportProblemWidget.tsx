@@ -276,7 +276,7 @@ export function ReportProblemWidget({ token, workspaceId, hidden = false }: Repo
     <>
       {msgHolder}
       {!open && !hidden ? (
-        <div data-report-problem-ui style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100 }}>
+        <div data-report-problem-ui style={{ position: "fixed", bottom: 24, right: 24, zIndex: 5100 }}>
           {isRecording ? (
             <Button
               danger
@@ -313,11 +313,17 @@ export function ReportProblemWidget({ token, workspaceId, hidden = false }: Repo
         onClose={closeDrawer}
         destroyOnClose={false}
         forceRender
+        // Acima de Modal/Drawer do sistema (padrao Ant ~1000) para capturar com modais abertos
+        zIndex={5000}
+        getContainer={() => document.body}
         mask={{ closable: !isRecording }}
         keyboard={!isRecording}
         data-report-problem-ui
+        rootClassName="bb-report-problem-drawer"
         styles={{
           body: { paddingBottom: 24 },
+          mask: { zIndex: 4999 },
+          wrapper: { zIndex: 5000 },
         }}
       >
         <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>

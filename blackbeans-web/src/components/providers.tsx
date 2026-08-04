@@ -15,9 +15,11 @@ const THEME_STORAGE_KEY = "bb_theme";
 export const BB_THEME_EVENT = "bb:theme";
 
 function readStoredTheme(): BbTheme {
-  if (typeof window === "undefined") return "light";
+  if (typeof window === "undefined") return "dark";
   const raw = localStorage.getItem(THEME_STORAGE_KEY);
-  return raw === "dark" ? "dark" : "light";
+  // Padrao: escuro. So muda se o usuario escolheu claro explicitamente.
+  if (raw === "light") return "light";
+  return "dark";
 }
 
 export function setBbTheme(next: BbTheme) {
@@ -27,7 +29,7 @@ export function setBbTheme(next: BbTheme) {
 }
 
 export function Providers({ children }: ProvidersProps) {
-  const [mode, setMode] = useState<BbTheme>("light");
+  const [mode, setMode] = useState<BbTheme>("dark");
 
   useEffect(() => {
     setMode(readStoredTheme());

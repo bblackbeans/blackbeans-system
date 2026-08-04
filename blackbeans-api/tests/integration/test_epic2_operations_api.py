@@ -606,6 +606,14 @@ def test_story_4_4_time_summary_and_filtered_list(admin_client):
     assert summary.status_code == status.HTTP_200_OK
     assert summary.data["data"]["total_seconds"] == 7200
 
+    batch = admin_client.post(
+        "/api/v1/tasks/time-summaries",
+        {"task_ids": [str(task.pk)]},
+        format="json",
+    )
+    assert batch.status_code == status.HTTP_200_OK
+    assert batch.data["data"]["summaries"][str(task.pk)]["total_seconds"] == 7200
+
     listing = admin_client.get(
         "/api/v1/time-logs",
         {"workspace_id": str(workspace.pk), "from": now.date().isoformat(), "to": now.date().isoformat()},

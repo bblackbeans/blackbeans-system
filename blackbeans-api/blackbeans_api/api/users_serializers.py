@@ -17,9 +17,14 @@ def user_to_representation(user, request=None) -> dict:
     if avatar:
         try:
             avatar_url = avatar.url
-            if request is not None and avatar_url:
+            # Preferir path /media/... para o frontend (rewrite do Next).
+            if isinstance(avatar_url, str) and "/media/" in avatar_url:
                 try:
-                    avatar_url = request.build_absolute_uri(avatar_url)
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(avatar_url)
+                    if parsed.path.startswith("/media/"):
+                        avatar_url = f"{parsed.path}{('?' + parsed.query) if parsed.query else ''}"
                 except Exception:
                     pass
         except ValueError:

@@ -50,7 +50,6 @@ import {
   InputNumber,
   Layout,
   Menu,
-  Mentions,
   Modal,
   Radio,
   Row,
@@ -77,10 +76,17 @@ import type { ReactElement, ReactNode } from "react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiRequest, resolveMediaUrl } from "@/lib/api";
+import { apiRequest, resolveMediaUrl, toStoredMediaPath } from "@/lib/api";
+import { toBrowserMediaSrc } from "@/lib/media";
+import { isEmptyRichHtml, toEditorHtml } from "@/lib/rich-content";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
 import { BB_THEME_EVENT, setBbTheme } from "@/components/providers";
+import MondayComposer, {
+  clearComposerDraft,
+  type MondayMentionOption,
+} from "@/components/rich-editor/MondayComposer";
+import { RichHtmlView } from "@/components/rich-editor/RichHtmlView";
 import { ProblemReportsPanel } from "@/components/report-problem/ProblemReportsPanel";
 import { ReportProblemWidget } from "@/components/report-problem/ReportProblemWidget";
 import { WhatsNewModal } from "@/components/whats-new/WhatsNewModal";
@@ -637,7 +643,64 @@ function linkifyText(text: string): ReactNode {
   return nodes.length === 1 ? nodes[0] : <>{nodes}</>;
 }
 
-/** Links + @menções coloridas (estilo Monday). */
+/** Preview de imagem estilo Monday (clique para ampliar).
+ * So <img> nativo + Modal — Ant Image duplicava a thumbnail.
+ */
+function RichMediaImage({ src, alt }: { src: string; alt?: string }) {
+  const [clientSrc, setClientSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [preview, setPreview] = useState(false);
+
+  useEffect(() => {
+    const absolute = toBrowserMediaSrc(src);
+    setClientSrc(absolute || null);
+    setFailed(false);
+  }, [src]);
+
+  if (!clientSrc) {
+    return <span className="bb-rich-image-wrap bb-rich-image-wrap--loading" aria-hidden />;
+  }
+
+  if (failed) {
+    return (
+      <span className="bb-rich-image-wrap">
+        <a className="bb-rich-link" href={clientSrc} target="_blank" rel="noreferrer noopener">
+          Abrir imagem{alt ? ` (${alt})` : ""}
+        </a>
+      </span>
+    );
+  }
+
+  return (
+    <span className="bb-rich-image-wrap" style={{ display: "block" }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={clientSrc}
+        alt={alt || "imagem"}
+        className="bb-rich-image"
+        style={{ maxWidth: "100%", width: "auto", borderRadius: 8, cursor: "zoom-in", display: "block" }}
+        onError={() => setFailed(true)}
+        onClick={() => setPreview(true)}
+      />
+      <Modal
+        open={preview}
+        onCancel={() => setPreview(false)}
+        footer={null}
+        centered
+        width="min(960px, 96vw)"
+        styles={{ body: { padding: 0, textAlign: "center", background: "#000" } }}
+        destroyOnHidden
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={clientSrc}
+          alt={alt || "imagem"}
+          style={{ maxWidth: "100%", maxHeight: "85vh", objectFit: "contain" }}
+        />
+      </Modal>
+    </span>
+  );
+}
 function renderInlineRichText(text: string, keyPrefix: string): ReactNode {
   const tokenRe = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+|@[a-zA-Z0-9_.@-]+)/g;
   const parts = text.split(tokenRe);
@@ -660,11 +723,7 @@ function renderInlineRichText(text: string, keyPrefix: string): ReactNode {
       const isMediaPath = href.includes("/media/") || /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(href);
       // Links de media de imagem soltos (sem markdown) tambem viram preview
       if (isMediaPath && /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(href)) {
-        return (
-          <span key={`${keyPrefix}-imgurl-${index}`} className="bb-rich-image-wrap">
-            <AntImage src={href} alt="imagem" style={{ maxWidth: "100%", borderRadius: 8 }} />
-          </span>
-        );
+        return <RichMediaImage key={`${keyPrefix}-imgurl-${index}`} src={href} alt="imagem" />;
       }
       return (
         <a key={`${keyPrefix}-u-${index}`} href={href} target="_blank" rel="noreferrer noopener" className="bb-rich-link">
@@ -700,17 +759,9 @@ function renderRichText(text: string): ReactNode {
     <span className="bb-rich-text">
       {blocks.map((block, index) => {
         if (block.type === "img") {
-          const src = resolveMediaUrl(block.url) ?? block.url ?? "";
+          const src = block.url ?? "";
           if (!src) return null;
-          return (
-            <span key={`img-${index}`} className="bb-rich-image-wrap">
-              <AntImage
-                src={src}
-                alt={block.alt || "imagem"}
-                style={{ maxWidth: "100%", borderRadius: 8 }}
-              />
-            </span>
-          );
+          return <RichMediaImage key={`img-${index}`} src={src} alt={block.alt || "imagem"} />;
         }
         return <span key={`txt-${index}`}>{renderInlineRichText(block.text ?? "", `b${index}`)}</span>;
       })}
@@ -729,6 +780,38 @@ function formatDateOnly(value: string | null | undefined) {
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleDateString("pt-BR");
 }
+
+/** Mais atrasado primeiro; sem prazo vai pro final. */
+function compareTaskEndDateAsc(
+  a: { end_date?: string | null },
+  b: { end_date?: string | null },
+): number {
+  const aMs = a.end_date ? new Date(a.end_date).getTime() : Number.POSITIVE_INFINITY;
+  const bMs = b.end_date ? new Date(b.end_date).getTime() : Number.POSITIVE_INFINITY;
+  const aValid = Number.isFinite(aMs) ? aMs : Number.POSITIVE_INFINITY;
+  const bValid = Number.isFinite(bMs) ? bMs : Number.POSITIVE_INFINITY;
+  return aValid - bValid;
+}
+
+type TaskFilterMatchMode = "include" | "exclude";
+
+/** selected vazio = sem filtro (passa). Array ou string unica. */
+function matchTaskFilterValue(
+  selected: string | string[] | null | undefined,
+  actual: string,
+  mode: TaskFilterMatchMode,
+): boolean {
+  const values = Array.isArray(selected)
+    ? selected.filter((v) => v && v !== "all")
+    : selected && selected !== "all"
+      ? [selected]
+      : [];
+  if (values.length === 0) return true;
+  const hit = values.includes(actual);
+  return mode === "include" ? hit : !hit;
+}
+
+const TASK_TABLE_PAGE_SIZE = 8;
 
 const MONTH_SHORT_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
@@ -799,104 +882,35 @@ function fromDatetimeLocalValue(local: string | Date | null | undefined): string
 
 type MentionOption = { value: string; label: ReactNode };
 
-function extractImageFilesFromDataTransfer(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const out: File[] = [];
-  if (data.files?.length) {
-    Array.from(data.files).forEach((file) => {
-      if (file.type.startsWith("image/")) out.push(file);
-    });
-  }
-  if (!out.length && data.items?.length) {
-    Array.from(data.items).forEach((item) => {
-      if (item.kind === "file" && item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) out.push(file);
-      }
-    });
-  }
-  return out;
-}
-
-
-function MentionsWithMedia({
-  value,
-  onChange,
-  options,
-  rows = 4,
-  placeholder,
-  onImages,
-}: {
-  value?: string;
-  onChange?: (value: string) => void;
-  options: MentionOption[];
-  rows?: number;
-  placeholder?: string;
-  onImages?: (files: File[]) => void;
-}) {
-  return (
-    <div
-      className="bb-drop-zone"
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.currentTarget.classList.add("bb-drop-active");
-      }}
-      onDragLeave={(event) => event.currentTarget.classList.remove("bb-drop-active")}
-      onDrop={(event) => {
-        event.preventDefault();
-        event.currentTarget.classList.remove("bb-drop-active");
-        const files = extractImageFilesFromDataTransfer(event.dataTransfer);
-        if (files.length) onImages?.(files);
-      }}
-      onPaste={(event) => {
-        const files = extractImageFilesFromDataTransfer(event.clipboardData as unknown as DataTransfer);
-        if (files.length) {
-          event.preventDefault();
-          onImages?.(files);
-        }
-      }}
-    >
-      <Mentions
-        rows={rows}
-        value={value}
-        onChange={onChange}
-        options={options}
-        prefix="@"
-        placeholder={placeholder}
-        style={{ width: "100%" }}
-      />
-    </div>
-  );
-}
-
-/** Descricao em modo leitura (links/imagens) com lapis para editar. */
+/** Descricao: leitura HTML + composer TipTap (rascunho ate Salvar do drawer). */
 function RichDescriptionField({
   value,
   onChange,
-  options,
-  rows = 5,
-  placeholder,
-  onImages,
+  mentionOptions,
+  draftKey,
+  onUploadImage,
+  onAttachFiles,
   canEdit = true,
+  placeholder,
 }: {
   value?: string;
   onChange?: (value: string) => void;
-  options: MentionOption[];
-  rows?: number;
-  placeholder?: string;
-  onImages?: (files: File[]) => void;
+  mentionOptions: MondayMentionOption[];
+  draftKey?: string;
+  onUploadImage: (file: File) => Promise<string | null>;
+  onAttachFiles?: (files: File[]) => void | Promise<void>;
   canEdit?: boolean;
+  placeholder?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const text = value ?? "";
+  const hasContent = !isEmptyRichHtml(toEditorHtml(text)) || Boolean(String(text).trim());
 
   if (!canEdit) {
     return (
       <div className="bb-rich-description bb-rich-description--readonly">
-        {text.trim() ? (
-          <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-            {renderRichText(text)}
-          </Typography.Paragraph>
+        {hasContent ? (
+          <RichHtmlView html={text} />
         ) : (
           <Typography.Text type="secondary">Sem descricao.</Typography.Text>
         )}
@@ -923,10 +937,8 @@ function RichDescriptionField({
           onDoubleClick={() => setEditing(true)}
           title="Duplo clique para editar"
         >
-          {text.trim() ? (
-            <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-              {renderRichText(text)}
-            </Typography.Paragraph>
+          {hasContent ? (
+            <RichHtmlView html={text} />
           ) : (
             <Typography.Text type="secondary">
               Sem descricao. Clique no lapis para adicionar.
@@ -939,30 +951,139 @@ function RichDescriptionField({
 
   return (
     <div className="bb-rich-description bb-rich-description--editing">
-      <div className="bb-rich-description__bar">
-        <Button type="link" size="small" onClick={() => setEditing(false)}>
-          Concluir edicao
-        </Button>
-      </div>
-      <MentionsWithMedia
-        value={value}
+      <MondayComposer
+        mode="description"
+        value={text}
         onChange={onChange}
-        options={options}
-        rows={rows}
+        mentionOptions={mentionOptions}
+        onUploadImage={onUploadImage}
+        onAttachFiles={onAttachFiles}
+        draftKey={draftKey}
         placeholder={placeholder}
-        onImages={
-          onImages
-            ? (files) => {
-                void Promise.resolve(onImages(files)).finally(() => setEditing(false));
-              }
-            : undefined
-        }
+        submitLabel="Concluir"
+        onDone={() => setEditing(false)}
       />
       <Typography.Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 12 }}>
-        Use @ para mencionar. Arraste ou cole (Ctrl+V) imagens. Links e imagens aparecem apos concluir a edicao.
+        Alteracoes ficam no rascunho ate voce salvar a tarefa. Colar imagem (Ctrl+V) nao fecha a edicao.
       </Typography.Text>
     </div>
   );
+}
+
+const TASK_ACTIVITY_TITLE_PT: Record<string, string> = {
+  "task.created": "Tarefa criada",
+  "task.updated": "Tarefa atualizada",
+  "task.attachment_added": "Anexo adicionado",
+  "task.comment_added": "Comentario adicionado",
+  "task.comment_edited": "Comentario editado",
+  "task.comment_deleted": "Comentario excluido",
+  "task.assignee_changed": "Responsavel alterado",
+  "task.status_changed": "Status alterado",
+  "task.completed": "Tarefa concluida",
+  "task.dependency_added": "Dependencia adicionada",
+  "task.time.started": "Cronometro iniciado",
+  "task.time.paused": "Cronometro pausado",
+  "task.time.resumed": "Cronometro retomado",
+  "task.time.manual": "Tempo manual registrado",
+  "task.time.edited": "Registro de tempo atualizado",
+  "task.time.deleted": "Registro de tempo removido",
+  // Legado (underscore)
+  "task.time_started": "Cronometro iniciado",
+  "task.time_paused": "Cronometro pausado",
+  "task.time_resumed": "Cronometro retomado",
+  "task.time_manual": "Tempo manual registrado",
+};
+
+const TASK_STATUS_LABEL_PT: Record<string, string> = {
+  todo: "A fazer",
+  in_progress: "Em andamento",
+  blocked: "Bloqueada",
+  done: "Concluida",
+};
+
+const TASK_FIELD_LABEL_PT: Record<string, string> = {
+  title: "Titulo",
+  titulo: "Titulo",
+  description: "Descricao",
+  descricao: "Descricao",
+  status: "Status",
+  priority: "Prioridade",
+  prioridade: "Prioridade",
+  effort_points: "Horas previstas",
+  esforco: "Horas previstas",
+  assignee_id: "Responsavel",
+  responsavel: "Responsavel",
+  start_date: "Prazo de inicio",
+  "prazo de inicio": "Prazo de inicio",
+  end_date: "Prazo final",
+  "prazo final": "Prazo final",
+  is_recurring: "Recorrencia",
+  recorrencia: "Recorrencia",
+  recurrence_frequency: "Frequencia de recorrencia",
+  board_id: "Quadro",
+  quadro: "Quadro",
+  group_id: "Grupo",
+  grupo: "Grupo",
+  parent_id: "Tarefa pai",
+};
+
+function humanizeTaskActivitySummary(summary: string | null | undefined): string {
+  const raw = String(summary ?? "").trim();
+  if (!raw) return "";
+  let text = raw;
+
+  const camposAlteradosMatch = text.match(/Campos alterados:\s*(.+?)\.?$/i);
+  if (camposAlteradosMatch) {
+    const labels = camposAlteradosMatch[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((field) => {
+        const key = field.toLowerCase().replace(/\s+/g, " ");
+        return (
+          TASK_FIELD_LABEL_PT[field] ??
+          TASK_FIELD_LABEL_PT[key] ??
+          TASK_FIELD_LABEL_PT[field.replace(/\s+/g, "_")] ??
+          field
+        );
+      });
+    return labels.length ? `Campos alterados: ${labels.join(", ")}.` : "Tarefa atualizada.";
+  }
+
+  const camposMatch = text.match(/campos?=([a-z0-9_,\s]+)/i);
+  if (camposMatch) {
+    const labels = camposMatch[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((field) => TASK_FIELD_LABEL_PT[field] ?? field.replace(/_/g, " "));
+    text = text.replace(camposMatch[0], "");
+    text = text.replace(/\s*\.\s*$/, "").trim();
+    if (!text || /^Tarefa atualizada$/i.test(text)) {
+      return labels.length ? `Campos alterados: ${labels.join(", ")}.` : "Tarefa atualizada.";
+    }
+    return `${text.replace(/\s+$/, "")}. Campos alterados: ${labels.join(", ")}.`;
+  }
+
+  text = text.replace(/\bstatus=([a-z_]+)/gi, (_, status: string) => {
+    return `status ${TASK_STATUS_LABEL_PT[status] ?? status}`;
+  });
+  text = text.replace(
+    /\bStatus alterado de\s+([a-z_]+)\s+para\s+([a-z_]+)/gi,
+    (_, from: string, to: string) =>
+      `Status alterado de ${TASK_STATUS_LABEL_PT[from] ?? from} para ${TASK_STATUS_LABEL_PT[to] ?? to}`,
+  );
+  text = text.replace(/\buser_id=(\d+)/gi, "usuario #$1");
+  text = text.replace(/\s*\(log=[^)]+\)/gi, "");
+  text = text.replace(/\blog=[^\s.]+/gi, "");
+  text = text.replace(/\bAnexo\s+(\S+)\s+adicionado/i, 'Anexo "$1" adicionado');
+  return text.replace(/\s{2,}/g, " ").trim();
+}
+
+function formatTaskActivityTitle(eventType: string): string {
+  if (TASK_ACTIVITY_TITLE_PT[eventType]) return TASK_ACTIVITY_TITLE_PT[eventType];
+  const dotted = eventType.replace(/^task\./, "");
+  return dotted.replace(/[._]/g, " ");
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -1019,6 +1140,16 @@ function secondsToText(value: number) {
   const minutes = Math.floor((value % 3600) / 60);
   const seconds = value % 60;
   return `${hours}h ${minutes}m ${seconds}s`;
+}
+
+/** Converte horas decimais (ex.: 10.75) para texto de relogio (10h 45m). */
+function decimalHoursToHmText(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return "0h 0m";
+  const totalMinutes = Math.round(n * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
 }
 
 function formatEffortHoursDisplay(value: number | null | undefined) {
@@ -1355,7 +1486,7 @@ function renderCommentAttachments(attachments: TaskCommentAttachment[] | undefin
             return (
               <AntImage
                 key={file.id}
-                src={href}
+                src={toBrowserMediaSrc(file.url)}
                 alt={file.filename}
                 width={160}
                 style={{
@@ -1743,16 +1874,23 @@ export function AppShell() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [allTasks, setAllTasks] = useState<TaskItem[]>([]);
   const [allTasksLoading, setAllTasksLoading] = useState<boolean>(false);
-  const [taskStatusFilter, setTaskStatusFilter] = useState<string>("all");
+  const [taskStatusFilter, setTaskStatusFilter] = useState<string[]>([]);
   const [taskSearchFilter, setTaskSearchFilter] = useState<string>("");
   const [taskPeriodFilter, setTaskPeriodFilter] = useState<string>("all");
-  const [taskPriorityFilter, setTaskPriorityFilter] = useState<string>("all");
-  const [taskProjectFilter, setTaskProjectFilter] = useState<string>("all");
-  const [taskClientFilter, setTaskClientFilter] = useState<string>("all");
-  const [taskBoardFilter, setTaskBoardFilter] = useState<string>("all");
-  const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string>("all");
-  /** include = somente o valor | exclude = todos exceto o valor */
-  const [taskFilterMode, setTaskFilterMode] = useState<"include" | "exclude">("include");
+  const [taskPriorityFilter, setTaskPriorityFilter] = useState<string[]>([]);
+  const [taskProjectFilter, setTaskProjectFilter] = useState<string[]>([]);
+  const [taskClientFilter, setTaskClientFilter] = useState<string[]>([]);
+  const [taskBoardFilter, setTaskBoardFilter] = useState<string[]>([]);
+  const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string[]>([]);
+  /** Incluir/exceto independente por dimensao do filtro de tarefas (Dashboard). */
+  const [taskStatusFilterMode, setTaskStatusFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskPriorityFilterMode, setTaskPriorityFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskProjectFilterMode, setTaskProjectFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskClientFilterMode, setTaskClientFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskBoardFilterMode, setTaskBoardFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskAssigneeFilterMode, setTaskAssigneeFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [myWorkTablePage, setMyWorkTablePage] = useState(1);
+  const [adminTasksTablePage, setAdminTasksTablePage] = useState(1);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [taskDrawerTab, setTaskDrawerTab] = useState<TaskDrawerTab>("summary");
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -1763,9 +1901,11 @@ export function AppShell() {
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
   const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
   const [expandedTaskKeysByBoardId, setExpandedTaskKeysByBoardId] = useState<Record<string, string[]>>({});
+  const [boardListTablePageByBoardId, setBoardListTablePageByBoardId] = useState<Record<string, number>>({});
   const [expandedMyWorkTaskKeys, setExpandedMyWorkTaskKeys] = useState<string[]>([]);
   const [expandedAdminTasksKeys, setExpandedAdminTasksKeys] = useState<string[]>([]);
   const assigneeFilterInitializedRef = useRef(false);
+  const commentMutationInFlightRef = useRef(false);
   const [loadingSubtasksParentId, setLoadingSubtasksParentId] = useState<string | null>(null);
   const [createSubtaskOpen, setCreateSubtaskOpen] = useState(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<TaskItem | null>(null);
@@ -1900,19 +2040,23 @@ export function AppShell() {
   const [bulkMoveTargetGroupByBoardId, setBulkMoveTargetGroupByBoardId] = useState<Record<string, string>>({});
   const [bulkMoveGlobalTargetByProjectId, setBulkMoveGlobalTargetByProjectId] = useState<Record<string, string>>({});
   const [projectSidebarExpandedKeys, setProjectSidebarExpandedKeys] = useState<string[]>([]);
-  const [myWorkPriorityFilter, setMyWorkPriorityFilter] = useState<string>("all");
-  const [myWorkDeadlineFilter, setMyWorkDeadlineFilter] = useState<string>("all");
+  const [myWorkPriorityFilter, setMyWorkPriorityFilter] = useState<string[]>([]);
+  const [myWorkDeadlineFilter, setMyWorkDeadlineFilter] = useState<string[]>([]);
   const [myWorkPeriodFilter, setMyWorkPeriodFilter] = useState<string>("all");
   const [myWorkStatusFilter, setMyWorkStatusFilter] = useState<string[]>([]);
-  const [myWorkStatusExclude, setMyWorkStatusExclude] = useState(false);
-  const [myWorkClientFilter, setMyWorkClientFilter] = useState<string>("all");
-  const [myWorkProjectFilter, setMyWorkProjectFilter] = useState<string>("all");
+  const [myWorkStatusFilterMode, setMyWorkStatusFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [myWorkPriorityFilterMode, setMyWorkPriorityFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [myWorkDeadlineFilterMode, setMyWorkDeadlineFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [myWorkClientFilter, setMyWorkClientFilter] = useState<string[]>([]);
+  const [myWorkClientFilterMode, setMyWorkClientFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [myWorkProjectFilter, setMyWorkProjectFilter] = useState<string[]>([]);
+  const [myWorkProjectFilterMode, setMyWorkProjectFilterMode] = useState<TaskFilterMatchMode>("include");
   const [myWorkDateFrom, setMyWorkDateFrom] = useState<string>("");
   const [myWorkDateTo, setMyWorkDateTo] = useState<string>("");
   const [manualTimeModalOpen, setManualTimeModalOpen] = useState(false);
   const [manualTimeForm] = Form.useForm();
   const [passwordChangeForm] = Form.useForm();
-  const [bbThemeMode, setBbThemeMode] = useState<"light" | "dark">("light");
+  const [bbThemeMode, setBbThemeMode] = useState<"light" | "dark">("dark");
   const { token: antToken } = theme.useToken();
   const [clientRequests, setClientRequests] = useState<Record<string, unknown>[]>([]);
   const [clientRequestsLoading, setClientRequestsLoading] = useState(false);
@@ -2070,7 +2214,7 @@ export function AppShell() {
   useEffect(() => {
     if (currentUserId == null || assigneeFilterInitializedRef.current) return;
     // Dashboard admin comeca com todos os colaboradores.
-    setTaskAssigneeFilter("all");
+    setTaskAssigneeFilter([]);
     assigneeFilterInitializedRef.current = true;
   }, [currentUserId]);
 
@@ -2126,6 +2270,68 @@ export function AppShell() {
       return <Tag color={normalizeStatusTagColor(meta.color)}>{meta.label}</Tag>;
     },
     [resolveStatusMeta],
+  );
+  const renderEditableStatusTag = useCallback(
+    (record: TaskItem) => {
+      const meta = resolveStatusMeta(record.status);
+      return (
+        <Dropdown
+          trigger={["click"]}
+          menu={{
+            items: statusOptions.map((opt) => ({
+              key: String(opt.value),
+              label: (
+                <Tag color={normalizeStatusTagColor(resolveStatusMeta(String(opt.value)).color)} style={{ marginInlineEnd: 0 }}>
+                  {opt.label}
+                </Tag>
+              ),
+              onClick: () => {
+                void quickChangeTaskStatus(record, String(opt.value));
+              },
+            })),
+          }}
+        >
+          <span
+            onClick={(event) => event.stopPropagation()}
+            style={{ cursor: "pointer", display: "inline-flex" }}
+          >
+            <HelpTip title={HELP_TIPS.statusRapido}>
+              <Tag color={normalizeStatusTagColor(meta.color)} style={{ marginInlineEnd: 0 }}>
+                {meta.label}
+              </Tag>
+            </HelpTip>
+          </span>
+        </Dropdown>
+      );
+    },
+    // quickChangeTaskStatus e estavel o bastante no ciclo do componente
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolveStatusMeta, statusOptions],
+  );
+
+  const renderTaskTitleCell = useCallback((value: string, record: TaskItem & { children?: TaskItem[] }) => {
+    const isSub = Boolean(record.parent_id);
+    const childrenCount = Array.isArray(record.children) ? record.children.length : 0;
+    return (
+      <div className="bb-task-title-cell" style={{ paddingLeft: isSub ? 8 : 0 }}>
+        {isSub ? <Tag>sub</Tag> : null}
+        <span className="bb-task-title-text" title={value}>
+          {value}
+        </span>
+        {!isSub && (record.subtasks_count ?? 0) > 0 ? (
+          <Tag color="default">{record.subtasks_count} subtarefas</Tag>
+        ) : null}
+        {!isSub && childrenCount > 0 ? <Tag color="processing">{childrenCount} suas</Tag> : null}
+      </div>
+    );
+  }, []);
+
+  const filterModeOptions = useMemo(
+    () => [
+      { value: "include" as const, label: "Incluir" },
+      { value: "exclude" as const, label: "Exceto" },
+    ],
+    [],
   );
 
   const navigateTo = useCallback((nextKey: MenuKey) => {
@@ -2258,7 +2464,7 @@ export function AppShell() {
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
-      const matchesStatus = taskStatusFilter === "all" || task.status === taskStatusFilter;
+      const matchesStatus = matchTaskFilterValue(taskStatusFilter, String(task.status ?? ""), "include");
       const normalizedSearch = taskSearchFilter.trim().toLowerCase();
       const matchesSearch = normalizedSearch.length === 0 || task.title.toLowerCase().includes(normalizedSearch);
       return matchesStatus && matchesSearch;
@@ -2274,34 +2480,30 @@ export function AppShell() {
     const endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000 - 1;
     const sevenDaysFwdMs = nowMs + 7 * 24 * 60 * 60 * 1000;
     const normalizedSearch = taskSearchFilter.trim().toLowerCase();
-    const matchValue = (selected: string, actual: string) => {
-      if (selected === "all") return true;
-      const equals = selected === actual;
-      return taskFilterMode === "include" ? equals : !equals;
-    };
-    return tasksTabSource.filter((task) => {
+    return tasksTabSource
+      .filter((task) => {
       if (task.parent_id) return false;
-      if (!matchValue(taskStatusFilter, String(task.status ?? ""))) return false;
-      if (!matchValue(taskPriorityFilter, String(task.priority ?? ""))) return false;
+      if (!matchTaskFilterValue(taskStatusFilter, String(task.status ?? ""), taskStatusFilterMode)) return false;
+      if (!matchTaskFilterValue(taskPriorityFilter, String(task.priority ?? ""), taskPriorityFilterMode)) return false;
       if (normalizedSearch.length > 0 && !task.title.toLowerCase().includes(normalizedSearch)) return false;
-      if (!matchValue(taskBoardFilter, String(task.board_id ?? ""))) return false;
-      if (taskProjectFilter !== "all") {
+      if (!matchTaskFilterValue(taskBoardFilter, String(task.board_id ?? ""), taskBoardFilterMode)) return false;
+      {
         const board = task.board_id ? boardById[task.board_id] : null;
         const projectId = board ? String(board.project_id ?? "") : "";
-        if (!matchValue(taskProjectFilter, projectId)) return false;
+        if (!matchTaskFilterValue(taskProjectFilter, projectId, taskProjectFilterMode)) return false;
       }
-      if (taskClientFilter !== "all") {
+      {
         const board = task.board_id ? boardById[task.board_id] : null;
         const projectId = board?.project_id ? String(board.project_id) : "";
         const project = projectId ? projects.find((row) => String(row.id) === projectId) : null;
         const clientId = project?.client_id ? String(project.client_id) : "";
         const clientName = String(task.client_name ?? "").trim();
         const clientActual = clientId || clientName;
-        if (!matchValue(taskClientFilter, clientActual)) return false;
+        if (!matchTaskFilterValue(taskClientFilter, clientActual, taskClientFilterMode)) return false;
       }
-      if (taskAssigneeFilter !== "all") {
+      {
         const assigneeActual = task.assignee_id ? String(task.assignee_id) : "unassigned";
-        if (!matchValue(taskAssigneeFilter, assigneeActual)) return false;
+        if (!matchTaskFilterValue(taskAssigneeFilter, assigneeActual, taskAssigneeFilterMode)) return false;
       }
       const endMs = task.end_date ? new Date(task.end_date).getTime() : null;
       const isOpen = task.status !== "done";
@@ -2336,20 +2538,27 @@ export function AppShell() {
           break;
       }
       return true;
-    });
+    })
+      .slice()
+      .sort(compareTaskEndDateAsc);
   }, [
     boardById,
     nowMs,
     projects,
     taskAssigneeFilter,
+    taskAssigneeFilterMode,
     taskBoardFilter,
+    taskBoardFilterMode,
     taskClientFilter,
-    taskFilterMode,
+    taskClientFilterMode,
     taskPeriodFilter,
     taskPriorityFilter,
+    taskPriorityFilterMode,
     taskProjectFilter,
+    taskProjectFilterMode,
     taskSearchFilter,
     taskStatusFilter,
+    taskStatusFilterMode,
     tasksTabSource,
   ]);
   const myWorkMetrics = useMemo(() => {
@@ -2421,34 +2630,43 @@ export function AppShell() {
     (task: TaskItem) => {
       const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
       const { startOfToday, endOfToday, startOfWeekMon, endOfWeekFri } = myWorkWeekBounds;
-      const matchesPriority = myWorkPriorityFilter === "all" || task.priority === myWorkPriorityFilter;
-      if (!matchesPriority) return false;
-      if (myWorkStatusFilter.length > 0) {
-        const included = myWorkStatusFilter.includes(task.status);
-        if (myWorkStatusExclude ? included : !included) return false;
+      if (!matchTaskFilterValue(myWorkPriorityFilter, String(task.priority ?? ""), myWorkPriorityFilterMode)) {
+        return false;
       }
-      if (myWorkProjectFilter !== "all") {
+      if (!matchTaskFilterValue(myWorkStatusFilter, String(task.status ?? ""), myWorkStatusFilterMode)) {
+        return false;
+      }
+      {
         const board = task.board_id ? boardById[task.board_id] : null;
-        if (!board || String(board.project_id ?? "") !== myWorkProjectFilter) return false;
+        const projectId = board ? String(board.project_id ?? "") : "";
+        if (!matchTaskFilterValue(myWorkProjectFilter, projectId, myWorkProjectFilterMode)) return false;
       }
-      if (myWorkClientFilter !== "all") {
+      {
         const board = task.board_id ? boardById[task.board_id] : null;
         const projectId = board?.project_id ? String(board.project_id) : "";
         const project = projectId ? projects.find((row) => String(row.id) === projectId) : null;
         const clientId = project?.client_id ? String(project.client_id) : "";
         const clientName = String(task.client_name ?? "").trim();
-        if (clientId !== myWorkClientFilter && clientName !== myWorkClientFilter) return false;
+        const clientActual = clientId || clientName;
+        if (!matchTaskFilterValue(myWorkClientFilter, clientActual, myWorkClientFilterMode)) return false;
       }
       const endMs = task.end_date ? new Date(task.end_date).getTime() : null;
       const startMs = task.start_date ? new Date(task.start_date).getTime() : null;
       const refMs = endMs ?? startMs;
-      if (myWorkDeadlineFilter !== "all") {
-        if (myWorkDeadlineFilter === "no_due" && endMs !== null) return false;
-        if (myWorkDeadlineFilter !== "no_due") {
-          if (endMs === null) return false;
-          if (myWorkDeadlineFilter === "overdue" && !(endMs < nowMs && task.status !== "done")) return false;
-          if (myWorkDeadlineFilter === "due_7" && !(endMs >= nowMs && endMs <= nowMs + sevenDaysMs && task.status !== "done"))
-            return false;
+      if (myWorkDeadlineFilter.length > 0) {
+        const deadlineKey =
+          endMs === null
+            ? "no_due"
+            : endMs < nowMs && task.status !== "done"
+              ? "overdue"
+              : endMs >= nowMs && endMs <= nowMs + sevenDaysMs && task.status !== "done"
+                ? "due_7"
+                : "other";
+        // "other" so nao casa com filtros especificos — include exige hit; exclude rejeita hit
+        if (!matchTaskFilterValue(myWorkDeadlineFilter, deadlineKey, myWorkDeadlineFilterMode)) {
+          // Se filtro so tem overdue/due_7/no_due e tarefa e "other", include falha (ok).
+          // Mas due_7 e overdue sao exclusivos — ok.
+          return false;
         }
       }
       if (myWorkPeriodFilter !== "all") {
@@ -2460,7 +2678,6 @@ export function AppShell() {
         } else if (myWorkPeriodFilter === "today") {
           if (!(isOpen && endMs >= startOfToday && endMs <= endOfToday)) return false;
         } else if (myWorkPeriodFilter === "week") {
-          // Segunda a sexta da semana corrente (calendario)
           if (!(isOpen && endMs >= startOfWeekMon && endMs <= endOfWeekFri)) return false;
         } else if (myWorkPeriodFilter === "overdue") {
           if (!(isOpen && endMs < startOfToday)) return false;
@@ -2482,14 +2699,18 @@ export function AppShell() {
     [
       boardById,
       myWorkClientFilter,
+      myWorkClientFilterMode,
       myWorkDateFrom,
       myWorkDateTo,
       myWorkDeadlineFilter,
+      myWorkDeadlineFilterMode,
       myWorkPeriodFilter,
       myWorkPriorityFilter,
+      myWorkPriorityFilterMode,
       myWorkProjectFilter,
-      myWorkStatusExclude,
+      myWorkProjectFilterMode,
       myWorkStatusFilter,
+      myWorkStatusFilterMode,
       myWorkWeekBounds,
       nowMs,
       projects,
@@ -2508,6 +2729,9 @@ export function AppShell() {
       const list = childrenByParent.get(parentId) ?? [];
       list.push({ ...task });
       childrenByParent.set(parentId, list);
+    });
+    childrenByParent.forEach((kids, parentId) => {
+      childrenByParent.set(parentId, kids.slice().sort(compareTaskEndDateAsc));
     });
 
     const roots: MyWorkTaskRow[] = [];
@@ -2535,21 +2759,56 @@ export function AppShell() {
       if (parent) considerRoot(parent);
     });
 
-    return roots;
+    return roots.slice().sort(compareTaskEndDateAsc);
   }, [matchesMyWorkTaskFilters, tasks]);
   const taskTimeSummaryTargets = useMemo(() => {
     const map = new Map<string, TaskItem>();
+    const pageSlice = <T,>(rows: T[], page: number): T[] => {
+      const start = Math.max(0, (page - 1) * TASK_TABLE_PAGE_SIZE);
+      return rows.slice(start, start + TASK_TABLE_PAGE_SIZE);
+    };
     if (activeKey === "my-work") {
-      myWorkFilteredTasks.forEach((t) => {
+      pageSlice(myWorkFilteredTasks, myWorkTablePage).forEach((t) => {
         map.set(t.id, t);
         (t.children ?? []).forEach((child) => map.set(child.id, child));
       });
     }
     if ((activeKey === "dashboard" || activeKey === "tasks") && isAdmin) {
-      tasksTabFiltered.forEach((t) => map.set(t.id, t));
+      pageSlice(tasksTabFiltered, adminTasksTablePage).forEach((t) => map.set(t.id, t));
+      expandedAdminTasksKeys.forEach((parentId) => {
+        const kids = subtasksByParentId[parentId] ?? [];
+        kids.forEach((child) => map.set(child.id, child));
+      });
+    }
+    if ((activeKey === "projects" || activeKey === "workspaces") && selectedProjectId) {
+      boards
+        .filter((board) => board.project_id === selectedProjectId)
+        .forEach((board) => {
+          const rows = boardListTasksByBoardId[board.id] ?? [];
+          const page = boardListTablePageByBoardId[board.id] ?? 1;
+          pageSlice(rows, page).forEach((t) => map.set(t.id, t));
+          const expanded = expandedTaskKeysByBoardId[board.id] ?? [];
+          expanded.forEach((parentId) => {
+            (subtasksByParentId[parentId] ?? []).forEach((child) => map.set(child.id, child));
+          });
+        });
     }
     return Array.from(map.values());
-  }, [activeKey, isAdmin, myWorkFilteredTasks, tasksTabFiltered]);
+  }, [
+    activeKey,
+    adminTasksTablePage,
+    boardListTablePageByBoardId,
+    boardListTasksByBoardId,
+    boards,
+    expandedAdminTasksKeys,
+    expandedTaskKeysByBoardId,
+    isAdmin,
+    myWorkFilteredTasks,
+    myWorkTablePage,
+    selectedProjectId,
+    subtasksByParentId,
+    tasksTabFiltered,
+  ]);
   const taskTimeSummaryIdsKey = useMemo(
     () => taskTimeSummaryTargets.map((t) => t.id).sort().join(","),
     [taskTimeSummaryTargets],
@@ -3487,23 +3746,22 @@ export function AppShell() {
 
   const loadAllData = useCallback(async () => {
     if (!token) return;
-    await Promise.all([
+    const jobs: Array<Promise<unknown>> = [
       fetchHealth(),
       fetchNotifications(),
       fetchNotificationPreferences(),
       fetchNotificationSubscriptions(),
       fetchTasks(),
-      fetchAudit(),
       fetch2FASettings(),
       fetchProfile(),
       fetchMeWorkspaceAccess(),
       fetchCrudData(),
       fetchBoards(),
       fetchStatusCatalog(),
-    ]);
+    ];
+    await Promise.all(jobs);
   }, [
     fetch2FASettings,
-    fetchAudit,
     fetchBoards,
     fetchCrudData,
     fetchHealth,
@@ -3594,7 +3852,14 @@ export function AppShell() {
       setToken(validToken);
       setRefreshToken(localStorage.getItem(REFRESH_STORAGE_KEY));
       setActiveKey(initialKey);
-      setTaskStatusFilter(localStorage.getItem(TASK_STATUS_FILTER_KEY) ?? "all");
+      try {
+        const raw = localStorage.getItem(TASK_STATUS_FILTER_KEY);
+        if (!raw || raw === "all") setTaskStatusFilter([]);
+        else if (raw.startsWith("[")) setTaskStatusFilter(JSON.parse(raw) as string[]);
+        else setTaskStatusFilter(raw === "all" ? [] : [raw]);
+      } catch {
+        setTaskStatusFilter([]);
+      }
       setTaskSearchFilter(localStorage.getItem(TASK_SEARCH_FILTER_KEY) ?? "");
       // Projetos / Areas de trabalho abrem sempre a visao geral (cards + filtros).
       // Nao restaurar drill-down do localStorage nessas rotas.
@@ -3673,7 +3938,7 @@ export function AppShell() {
       }
       setNowMs(new Date().getTime());
       const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-      setBbThemeMode(storedTheme === "dark" ? "dark" : "light");
+      setBbThemeMode(storedTheme === "light" ? "light" : "dark");
       setHydratedSession(true);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -3745,7 +4010,15 @@ export function AppShell() {
   }, [apiMessage, hydratedSession, nowMs, token]);
 
   useEffect(() => {
-    if (!token || !hydratedSession || whatsNewCheckedRef.current) return;
+    if (!token || !hydratedSession) return;
+    const forceWhatsNew =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("novidades") === "1";
+    if (forceWhatsNew) {
+      setWhatsNewOpen(true);
+      return;
+    }
+    if (whatsNewCheckedRef.current) return;
     whatsNewCheckedRef.current = true;
     const userKey = String(getUserIdFromToken(token) ?? "session");
     if (!hasSeenWhatsNew(userKey, APP_WHATS_NEW_VERSION)) {
@@ -3852,7 +4125,14 @@ export function AppShell() {
             "",
         ) || "",
       phone: String(profileResult.phone ?? ""),
+      job_title: String(profileResult.job_title ?? ""),
     });
+    const avatarFromProfile = resolveMediaUrl(
+      String(profileResult.avatar_url ?? profileResult.photo_url ?? profileResult.image_url ?? "") || null,
+    );
+    if (avatarFromProfile) {
+      setProfileAvatarDataUrl(avatarFromProfile);
+    }
   }, [activeKey, profileDetailsForm, profileResult]);
   useEffect(() => {
     if (!selectedTask || !activeTimeLog) return;
@@ -3870,30 +4150,59 @@ export function AppShell() {
       return;
     }
     if (taskTimeSummaryTargets.length === 0) {
-      setTaskTimeSummaryByTaskId({});
       return;
     }
     let cancelled = false;
-    const targets = taskTimeSummaryTargets;
+    const targetIds = taskTimeSummaryTargets.map((t) => t.id);
     (async () => {
-      const entries = await Promise.all(
-        targets.map(async (t) => {
-          const resp = await apiRequest<{ total_seconds: number; logs: TimeLog[] }>(`/tasks/${t.id}/time-summary`, {
-            token,
-          });
-          if (!resp.ok) return [t.id, null] as const;
-          return [
-            t.id,
-            { total_seconds: resp.data?.total_seconds ?? 0, logs: resp.data?.logs ?? [] },
-          ] as const;
-        }),
-      );
+      const resp = await apiRequest<{
+        summaries?: Record<string, { total_seconds?: number; logs?: TimeLog[] }>;
+      }>("/tasks/time-summaries", {
+        method: "POST",
+        token,
+        body: { task_ids: targetIds },
+      });
       if (cancelled) return;
       const fetchedAtMs = Date.now();
-      setTaskTimeSummaryByTaskId(() => {
-        const next: Record<string, { total_seconds: number; logs: TimeLog[]; fetchedAtMs: number }> = {};
-        for (const [id, data] of entries) {
-          if (data) next[id] = { ...data, fetchedAtMs };
+      if (!resp.ok) {
+        const chunkSize = 6;
+        for (let i = 0; i < targetIds.length; i += chunkSize) {
+          if (cancelled) return;
+          const chunk = targetIds.slice(i, i + chunkSize);
+          const entries = await Promise.all(
+            chunk.map(async (id) => {
+              const one = await apiRequest<{ total_seconds: number; logs: TimeLog[] }>(
+                `/tasks/${id}/time-summary`,
+                { token },
+              );
+              if (!one.ok) return [id, null] as const;
+              return [
+                id,
+                { total_seconds: one.data?.total_seconds ?? 0, logs: one.data?.logs ?? [] },
+              ] as const;
+            }),
+          );
+          if (cancelled) return;
+          setTaskTimeSummaryByTaskId((prev) => {
+            const next = { ...prev };
+            for (const [id, data] of entries) {
+              if (data) next[id] = { ...data, fetchedAtMs: Date.now() };
+            }
+            return next;
+          });
+        }
+        return;
+      }
+      const summaries = resp.data?.summaries ?? {};
+      setTaskTimeSummaryByTaskId((prev) => {
+        const next = { ...prev };
+        for (const id of targetIds) {
+          const row = summaries[id];
+          next[id] = {
+            total_seconds: row?.total_seconds ?? 0,
+            logs: row?.logs ?? [],
+            fetchedAtMs,
+          };
         }
         return next;
       });
@@ -4043,7 +4352,7 @@ export function AppShell() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    localStorage.setItem(TASK_STATUS_FILTER_KEY, taskStatusFilter);
+    localStorage.setItem(TASK_STATUS_FILTER_KEY, JSON.stringify(taskStatusFilter));
   }, [taskStatusFilter]);
 
   useEffect(() => {
@@ -4234,16 +4543,25 @@ export function AppShell() {
       navigateTo("notifications");
       return;
     }
+    // Mencao / comentario: abre a tarefa na aba Atualizacoes
+    const focusTab: TaskDrawerTab =
+      item.type === "task_mentioned" ||
+      item.type === "task_commented" ||
+      String(item.type).includes("mention")
+        ? "comments"
+        : "summary";
     const cached =
       tasks.find((task) => task.id === taskId) ??
       allTasks.find((task) => task.id === taskId);
     if (cached) {
-      await openTask(cached);
+      if (activeKey === "notifications") navigateTo("my-work");
+      await openTask(cached, focusTab);
       return;
     }
     const response = await apiRequest<{ task: TaskItem }>(`/tasks/${taskId}`, { token });
     if (response.ok && response.data?.task) {
-      await openTask(response.data.task);
+      if (activeKey === "notifications") navigateTo("my-work");
+      await openTask(response.data.task, focusTab);
       return;
     }
     apiMessage.error("Nao foi possivel abrir a tarefa desta notificacao.");
@@ -4675,67 +4993,94 @@ export function AppShell() {
     await refreshTaskTimeSummary(selectedTask.id);
   }
 
-  const mentionOptions = (taskAssigneePickList.length ? taskAssigneePickList : []).map((u) => ({
-    value: u.username,
-    label: (
-      <Space size={8}>
-        <Avatar size="small">{(u.name.trim()[0] || "?").toUpperCase()}</Avatar>
-        <span>
-          {u.name} <Typography.Text type="secondary">@{u.username}</Typography.Text>
-        </span>
-      </Space>
-    ),
-  }));
+  const mentionOptions = useMemo(() => {
+    const byUsername = new Map<string, { username: string; name: string; avatar_url?: string | null }>();
+    const push = (u: { username?: string; name?: string; email?: string; avatar_url?: string | null }) => {
+      const username = String(u.username ?? "").trim();
+      if (!username) return;
+      const key = username.toLowerCase();
+      if (byUsername.has(key)) return;
+      byUsername.set(key, {
+        username,
+        name: String(u.name || u.email || username),
+        avatar_url: u.avatar_url ?? null,
+      });
+    };
+    taskAssigneePickList.forEach(push);
+    adminUsersCache.forEach((u) =>
+      push({
+        username: (u.email || "").split("@")[0] || `user${u.id}`,
+        name: u.name,
+        email: u.email,
+        avatar_url: null,
+      }),
+    );
+    return Array.from(byUsername.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((u) => ({
+        value: u.username,
+        label: (
+          <Space size={8}>
+            <Avatar size="small" src={resolveMediaUrl(u.avatar_url) || undefined}>
+              {(u.name.trim()[0] || "?").toUpperCase()}
+            </Avatar>
+            <span>
+              {u.name} <Typography.Text type="secondary">@{u.username}</Typography.Text>
+            </span>
+          </Space>
+        ),
+      }));
+  }, [adminUsersCache, taskAssigneePickList]);
 
-  function appendImageFilesToComment(files: File[]) {
-    if (!files.length) return;
-    const next = files.map((file, index) => ({
-      uid: `paste-${Date.now()}-${index}`,
-      name: file.name || `imagem-${index + 1}.png`,
-      status: "done" as const,
-      originFileObj: file as UploadFile["originFileObj"],
-    }));
-    setTaskCommentFiles((prev) => [...prev, ...next]);
-    apiMessage.success(`${files.length} imagem(ns) anexada(s).`);
-  }
+  const mondayMentionOptions: MondayMentionOption[] = useMemo(() => {
+    const byUsername = new Map<string, MondayMentionOption>();
+    const push = (u: { username?: string; name?: string; email?: string }) => {
+      const username = String(u.username ?? "").trim();
+      if (!username) return;
+      const key = username.toLowerCase();
+      if (byUsername.has(key)) return;
+      byUsername.set(key, {
+        id: username,
+        label: String(u.name || u.email || username),
+      });
+    };
+    taskAssigneePickList.forEach(push);
+    adminUsersCache.forEach((u) =>
+      push({
+        username: (u.email || "").split("@")[0] || `user${u.id}`,
+        name: u.name,
+        email: u.email,
+      }),
+    );
+    return Array.from(byUsername.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [adminUsersCache, taskAssigneePickList]);
 
-  async function uploadDescriptionImages(files: File[]) {
-    if (!selectedTask || !files.length) return;
-    for (const file of files) {
-      const formData = new FormData();
-      formData.append("file", file);
-      const uploadResp = await apiRequest<{ attachment?: { url?: string; file_url?: string; filename?: string } }>(
-        `/tasks/${selectedTask.id}/attachments`,
-        { method: "POST", token, body: formData },
-      );
-      if (!uploadResp.ok) {
-        apiMessage.error(uploadResp.error?.message ?? `Falha ao enviar ${file.name}.`);
-        continue;
-      }
-      const rawUrl =
-        uploadResp.data?.attachment?.url ||
-        uploadResp.data?.attachment?.file_url ||
-        null;
-      const resolved = resolveMediaUrl(rawUrl) || "";
-      // Guarda path relativo /media/... para o browser (rewrite do Next).
-      let stored = resolved;
-      try {
-        if (/^https?:\/\//i.test(resolved)) {
-          const parsed = new URL(resolved);
-          if (parsed.pathname.startsWith("/media/")) {
-            stored = `${parsed.pathname}${parsed.search}`;
-          }
-        }
-      } catch {
-        // mantem resolved
-      }
-      const marker = stored
-        ? `\n![${file.name}](${stored})\n`
-        : `\n[imagem anexada: ${file.name}]\n`;
-      const current = String(taskDetailsForm.getFieldValue("description") ?? "");
-      taskDetailsForm.setFieldsValue({ description: `${current}${marker}`.trimStart() });
+  const commentDraftKey =
+    selectedTask && currentUserId != null
+      ? `bb_comment_draft:${currentUserId}:${selectedTask.id}`
+      : undefined;
+  const descriptionDraftKey =
+    selectedTask && currentUserId != null
+      ? `bb_desc_draft:${currentUserId}:${selectedTask.id}`
+      : undefined;
+
+  async function uploadImageForComposer(file: File): Promise<string | null> {
+    if (!selectedTask) return null;
+    const formData = new FormData();
+    formData.append("file", file);
+    const uploadResp = await apiRequest<{ attachment?: { url?: string; file_url?: string; filename?: string } }>(
+      `/tasks/${selectedTask.id}/attachments`,
+      { method: "POST", token, body: formData },
+    );
+    if (!uploadResp.ok) {
+      apiMessage.error(uploadResp.error?.message ?? `Falha ao enviar ${file.name}.`);
+      return null;
     }
-    apiMessage.success("Imagem adicionada na descricao.");
+    const rawUrl =
+      uploadResp.data?.attachment?.url ||
+      uploadResp.data?.attachment?.file_url ||
+      null;
+    return toStoredMediaPath(rawUrl) || rawUrl;
   }
 
   async function saveTaskDrawerFields(values: Record<string, unknown>) {
@@ -4767,6 +5112,7 @@ export function AppShell() {
     if (nextStatus && nextStatus !== selectedTask.status) {
       await taskAction(`/tasks/${selectedTask.id}/status`, "PATCH", { status: nextStatus });
     }
+    clearComposerDraft(descriptionDraftKey);
   }
 
   async function refreshTaskComments(taskId: string) {
@@ -4797,55 +5143,74 @@ export function AppShell() {
     }
   }
 
-  async function createTaskComment(taskId: string, rawContent: string) {
-    const content = rawContent.trim() || (taskCommentFiles.length > 0 ? "Anexo(s)" : "");
-    if (!content) return;
-    const payload = taskCommentReplyTo
-      ? `[reply_to:${taskCommentReplyTo.id}] ${content}`
-      : content;
-    const response = await apiRequest<{ comment: TaskCommentItem }>(`/tasks/${taskId}/comments`, {
-      method: "POST",
-      token,
-      body: { content: payload },
-    });
-    if (!response.ok) {
-      apiMessage.error(response.error?.message ?? "Falha ao adicionar comentario.");
-      return;
+  async function createTaskComment(taskId: string, rawContent: string): Promise<boolean> {
+    if (commentMutationInFlightRef.current) return false;
+    const content = isEmptyRichHtml(rawContent)
+      ? taskCommentFiles.length > 0
+        ? "Anexo(s)"
+        : ""
+      : rawContent.trim();
+    if (!content) return false;
+    commentMutationInFlightRef.current = true;
+    try {
+      const payload = taskCommentReplyTo
+        ? `[reply_to:${taskCommentReplyTo.id}] ${content}`
+        : content;
+      const response = await apiRequest<{ comment: TaskCommentItem }>(`/tasks/${taskId}/comments`, {
+        method: "POST",
+        token,
+        body: { content: payload },
+      });
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao adicionar comentario.");
+        return false;
+      }
+      const commentId = response.data?.comment?.id;
+      if (commentId && taskCommentFiles.length > 0) {
+        await uploadCommentAttachments(taskId, commentId, taskCommentFiles);
+      }
+      clearComposerDraft(commentDraftKey);
+      setTaskCommentDraft("");
+      setTaskCommentFiles([]);
+      setTaskCommentReplyTo(null);
+      await refreshTaskComments(taskId);
+      apiMessage.success("Atualizacao registrada.");
+      return true;
+    } finally {
+      commentMutationInFlightRef.current = false;
     }
-    const commentId = response.data?.comment?.id;
-    if (commentId && taskCommentFiles.length > 0) {
-      await uploadCommentAttachments(taskId, commentId, taskCommentFiles);
-    }
-    setTaskCommentDraft("");
-    setTaskCommentFiles([]);
-    setTaskCommentReplyTo(null);
-    await refreshTaskComments(taskId);
-    apiMessage.success("Atualizacao registrada.");
   }
-  async function updateTaskComment(taskId: string, commentId: string, rawContent: string) {
-    const content = rawContent.trim();
-    if (!content) return;
-    const original = taskComments.find((item) => item.id === commentId);
-    const originalMeta = original ? parseCommentReplyMeta(original.content) : { replyToId: null, cleanContent: "" };
-    let normalizedReplyTo = originalMeta.replyToId;
-    if (normalizedReplyTo && normalizedReplyTo.length < 36) {
-      const full = taskComments.find((item) => item.id.startsWith(normalizedReplyTo ?? ""));
-      if (full) normalizedReplyTo = full.id;
+  async function updateTaskComment(taskId: string, commentId: string, rawContent: string): Promise<boolean> {
+    if (commentMutationInFlightRef.current) return false;
+    const content = isEmptyRichHtml(rawContent) ? "" : rawContent.trim();
+    if (!content) return false;
+    commentMutationInFlightRef.current = true;
+    try {
+      const original = taskComments.find((item) => item.id === commentId);
+      const originalMeta = original ? parseCommentReplyMeta(original.content) : { replyToId: null, cleanContent: "" };
+      let normalizedReplyTo = originalMeta.replyToId;
+      if (normalizedReplyTo && normalizedReplyTo.length < 36) {
+        const full = taskComments.find((item) => item.id.startsWith(normalizedReplyTo ?? ""));
+        if (full) normalizedReplyTo = full.id;
+      }
+      const payload = normalizedReplyTo ? `[reply_to:${normalizedReplyTo}] ${content}` : content;
+      const response = await apiRequest<{ comment: TaskCommentItem }>(`/tasks/${taskId}/comments/${commentId}`, {
+        method: "PATCH",
+        token,
+        body: { content: payload },
+      });
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao editar comentario.");
+        return false;
+      }
+      setTaskCommentEditingId(null);
+      setTaskCommentEditingContent("");
+      await refreshTaskComments(taskId);
+      apiMessage.success("Comentario atualizado.");
+      return true;
+    } finally {
+      commentMutationInFlightRef.current = false;
     }
-    const payload = normalizedReplyTo ? `[reply_to:${normalizedReplyTo}] ${content}` : content;
-    const response = await apiRequest<{ comment: TaskCommentItem }>(`/tasks/${taskId}/comments/${commentId}`, {
-      method: "PATCH",
-      token,
-      body: { content: payload },
-    });
-    if (!response.ok) {
-      apiMessage.error(response.error?.message ?? "Falha ao editar comentario.");
-      return;
-    }
-    setTaskCommentEditingId(null);
-    setTaskCommentEditingContent("");
-    await refreshTaskComments(taskId);
-    apiMessage.success("Comentario atualizado.");
   }
   async function deleteTaskComment(taskId: string, commentId: string) {
     const response = await apiRequest<{ deleted: boolean }>(`/tasks/${taskId}/comments/${commentId}`, {
@@ -5045,6 +5410,7 @@ export function AppShell() {
     apiMessage.success(successMessage);
     if (selectedBoardId) await fetchKanban(selectedBoardId);
     await fetchTasks();
+    if (isAdmin) await fetchAllTasks().catch(() => undefined);
     await refreshBoardViewsForProject(selectedProjectId);
     return true;
   }
@@ -5532,7 +5898,7 @@ export function AppShell() {
           throw new Error("conflict_resolve_failed");
         }
         apiMessage.success("Conflito resolvido.");
-        await fetchAudit();
+        if (isSuperuser) await fetchAudit();
       },
     });
   }
@@ -5767,9 +6133,9 @@ export function AppShell() {
                       <Col xs={24} md={8}>
                         <Card title="Horas trabalhadas">
                           <Space orientation="vertical" size={4}>
-                            <Typography.Text>Hoje: {collaboratorDashboardHours.today.toFixed(1)} h</Typography.Text>
-                            <Typography.Text>Semana: {collaboratorDashboardHours.week.toFixed(1)} h</Typography.Text>
-                            <Typography.Text>Mes: {collaboratorDashboardHours.month.toFixed(1)} h</Typography.Text>
+                            <Typography.Text>Hoje: {decimalHoursToHmText(collaboratorDashboardHours.today)}</Typography.Text>
+                            <Typography.Text>Semana: {decimalHoursToHmText(collaboratorDashboardHours.week)}</Typography.Text>
+                            <Typography.Text>Mes: {decimalHoursToHmText(collaboratorDashboardHours.month)}</Typography.Text>
                           </Space>
                         </Card>
                       </Col>
@@ -5845,7 +6211,32 @@ export function AppShell() {
                       </Card>
                     </Col>
                     <Col span={24}>
-                      <Card title="Minhas tarefas (acoes rapidas)">
+                      <Card
+                        title="Minhas tarefas (acoes rapidas)"
+                        extra={
+                          <TipButton
+                            tip={HELP_TIPS.limparFiltros}
+                            onClick={() => {
+                              setMyWorkPeriodFilter("all");
+                              setMyWorkDateFrom("");
+                              setMyWorkDateTo("");
+                              setMyWorkStatusFilter([]);
+                              setMyWorkStatusFilterMode("include");
+                              setMyWorkPriorityFilter([]);
+                              setMyWorkPriorityFilterMode("include");
+                              setMyWorkDeadlineFilter([]);
+                              setMyWorkDeadlineFilterMode("include");
+                              setMyWorkClientFilter([]);
+                              setMyWorkClientFilterMode("include");
+                              setMyWorkProjectFilter([]);
+                              setMyWorkProjectFilterMode("include");
+                              setMyWorkTablePage(1);
+                            }}
+                          >
+                            Limpar filtros
+                          </TipButton>
+                        }
+                      >
                         <Space wrap style={{ marginBottom: 12 }}>
                           <TipSelect
                             tip={HELP_TIPS.filterPeriodo}
@@ -5888,75 +6279,138 @@ export function AppShell() {
                               Limpar datas
                             </Button>
                           )}
-                          <Select
-                            mode="multiple"
-                            allowClear
-                            placeholder="Status"
-                            value={myWorkStatusFilter}
-                            onChange={(value) => setMyWorkStatusFilter(value)}
-                            style={{ minWidth: 200 }}
-                            options={statusOptions}
-                          />
-                          <Checkbox
-                            checked={myWorkStatusExclude}
-                            onChange={(e) => setMyWorkStatusExclude(e.target.checked)}
-                          >
-                            Excluir selecionados
-                          </Checkbox>
-                          <TipSelect
-                            tip={HELP_TIPS.filterPrioridade}
-                            value={myWorkPriorityFilter}
-                            onChange={setMyWorkPriorityFilter}
-                            style={{ minWidth: 170 }}
-                            options={[
-                              { value: "all", label: "Todas prioridades" },
-                              { value: "low", label: "Baixa" },
-                              { value: "medium", label: "Média" },
-                              { value: "high", label: "Alta" },
-                              { value: "critical", label: "Crítica" },
-                            ]}
-                          />
-                          <TipSelect
-                            tip={HELP_TIPS.filterPrazo}
-                            value={myWorkDeadlineFilter}
-                            onChange={setMyWorkDeadlineFilter}
-                            style={{ minWidth: 190 }}
-                            options={[
-                              { value: "all", label: "Todos os prazos" },
-                              { value: "due_7", label: "Vence em 7 dias" },
-                              { value: "overdue", label: "Atrasadas" },
-                              { value: "no_due", label: "Sem prazo" },
-                            ]}
-                          />
-                          <Select
-                            value={myWorkClientFilter}
-                            onChange={setMyWorkClientFilter}
-                            style={{ minWidth: 180 }}
-                            showSearch
-                            optionFilterProp="label"
-                            options={[
-                              { value: "all", label: "Todos clientes" },
-                              ...clients.map((c) => ({ value: String(c.id), label: String(c.name ?? c.id) })),
-                            ]}
-                          />
-                          <Select
-                            value={myWorkProjectFilter}
-                            onChange={setMyWorkProjectFilter}
-                            style={{ minWidth: 180 }}
-                            showSearch
-                            optionFilterProp="label"
-                            options={[
-                              { value: "all", label: "Todos projetos" },
-                              ...projects.map((p) => ({ value: String(p.id), label: String(p.name ?? p.id) })),
-                            ]}
-                          />
+                          <Space.Compact>
+                            <Select
+                              value={myWorkStatusFilterMode}
+                              onChange={setMyWorkStatusFilterMode}
+                              style={{ width: 100 }}
+                              options={filterModeOptions}
+                            />
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              maxTagCount="responsive"
+                              placeholder={
+                                myWorkStatusFilterMode === "exclude" ? "Status a excluir" : "Status"
+                              }
+                              value={myWorkStatusFilter}
+                              onChange={(value) => setMyWorkStatusFilter(value)}
+                              style={{ minWidth: 200 }}
+                              options={statusOptions}
+                            />
+                          </Space.Compact>
+                          <Space.Compact>
+                            <Select
+                              value={myWorkPriorityFilterMode}
+                              onChange={setMyWorkPriorityFilterMode}
+                              style={{ width: 100 }}
+                              options={filterModeOptions}
+                            />
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              maxTagCount="responsive"
+                              placeholder={
+                                myWorkPriorityFilterMode === "exclude"
+                                  ? "Prioridades a excluir"
+                                  : "Prioridades"
+                              }
+                              value={myWorkPriorityFilter}
+                              onChange={setMyWorkPriorityFilter}
+                              style={{ minWidth: 180 }}
+                              options={[
+                                { value: "low", label: "Baixa" },
+                                { value: "medium", label: "Média" },
+                                { value: "high", label: "Alta" },
+                                { value: "critical", label: "Crítica" },
+                              ]}
+                            />
+                          </Space.Compact>
+                          <Space.Compact>
+                            <Select
+                              value={myWorkDeadlineFilterMode}
+                              onChange={setMyWorkDeadlineFilterMode}
+                              style={{ width: 100 }}
+                              options={filterModeOptions}
+                            />
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              maxTagCount="responsive"
+                              placeholder={
+                                myWorkDeadlineFilterMode === "exclude" ? "Prazos a excluir" : "Prazos"
+                              }
+                              value={myWorkDeadlineFilter}
+                              onChange={setMyWorkDeadlineFilter}
+                              style={{ minWidth: 190 }}
+                              options={[
+                                { value: "due_7", label: "Vence em 7 dias" },
+                                { value: "overdue", label: "Atrasadas" },
+                                { value: "no_due", label: "Sem prazo" },
+                              ]}
+                            />
+                          </Space.Compact>
+                          <Space.Compact>
+                            <Select
+                              value={myWorkClientFilterMode}
+                              onChange={setMyWorkClientFilterMode}
+                              style={{ width: 100 }}
+                              options={filterModeOptions}
+                            />
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              maxTagCount="responsive"
+                              placeholder={
+                                myWorkClientFilterMode === "exclude" ? "Clientes a excluir" : "Clientes"
+                              }
+                              value={myWorkClientFilter}
+                              onChange={setMyWorkClientFilter}
+                              style={{ minWidth: 180 }}
+                              showSearch
+                              optionFilterProp="label"
+                              options={clients.map((c) => ({
+                                value: String(c.id),
+                                label: String(c.name ?? c.id),
+                              }))}
+                            />
+                          </Space.Compact>
+                          <Space.Compact>
+                            <Select
+                              value={myWorkProjectFilterMode}
+                              onChange={setMyWorkProjectFilterMode}
+                              style={{ width: 100 }}
+                              options={filterModeOptions}
+                            />
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              maxTagCount="responsive"
+                              placeholder={
+                                myWorkProjectFilterMode === "exclude" ? "Projetos a excluir" : "Projetos"
+                              }
+                              value={myWorkProjectFilter}
+                              onChange={setMyWorkProjectFilter}
+                              style={{ minWidth: 180 }}
+                              showSearch
+                              optionFilterProp="label"
+                              options={projects.map((p) => ({
+                                value: String(p.id),
+                                label: String(p.name ?? p.id),
+                              }))}
+                            />
+                          </Space.Compact>
                         </Space>
                         <Table<MyWorkTaskRow>
                           rowKey="id"
                           size="small"
                           className="bb-compact-table"
                           dataSource={myWorkFilteredTasks}
-                          pagination={{ pageSize: 8 }}
+                          pagination={{
+                            pageSize: TASK_TABLE_PAGE_SIZE,
+                            current: myWorkTablePage,
+                            onChange: (page) => setMyWorkTablePage(page),
+                          }}
                           expandable={{
                             expandedRowKeys: expandedMyWorkTaskKeys,
                             onExpand: (expanded, record) => {
@@ -5977,19 +6431,10 @@ export function AppShell() {
                             {
                               title: "Titulo",
                               dataIndex: "title",
+                              width: 320,
+                              ellipsis: true,
                               sorter: (a, b) => a.title.localeCompare(b.title),
-                              render: (value: string, record: MyWorkTaskRow) => (
-                                <Space size={6} style={{ paddingLeft: record.parent_id ? 8 : 0 }}>
-                                  {record.parent_id ? <Tag>sub</Tag> : null}
-                                  <span>{value}</span>
-                                  {!record.parent_id && (record.subtasks_count ?? 0) > 0 ? (
-                                    <Tag color="default">{record.subtasks_count} subtarefas</Tag>
-                                  ) : null}
-                                  {!record.parent_id && record.children && record.children.length > 0 ? (
-                                    <Tag color="processing">{record.children.length} suas</Tag>
-                                  ) : null}
-                                </Space>
-                              ),
+                              render: (value: string, record: MyWorkTaskRow) => renderTaskTitleCell(value, record),
                             },
                             {
                               ...assigneeColumn,
@@ -6018,20 +6463,7 @@ export function AppShell() {
                               title: "Status",
                               dataIndex: "status",
                               sorter: (a, b) => a.status.localeCompare(b.status),
-                              render: (_: string, record: TaskItem) => (
-                                <HelpTip title={HELP_TIPS.statusRapido}>
-                                  <Select
-                                    size="small"
-                                    value={record.status}
-                                    style={{ minWidth: 120 }}
-                                    options={statusOptions}
-                                    onChange={(nextStatus) => {
-                                      quickChangeTaskStatus(record, nextStatus).catch(() => undefined);
-                                    }}
-                                    onClick={(event) => event.stopPropagation()}
-                                  />
-                                </HelpTip>
-                              ),
+                              render: (_: string, record: TaskItem) => renderEditableStatusTag(record),
                             },
                             {
                               title: "Prazo inicio",
@@ -6042,14 +6474,17 @@ export function AppShell() {
                             {
                               title: "Prazo fim",
                               dataIndex: "end_date",
-                              sorter: (a, b) => new Date(a.end_date ?? 0).getTime() - new Date(b.end_date ?? 0).getTime(),
+                              defaultSortOrder: "ascend",
+                              sorter: compareTaskEndDateAsc,
                               render: (v: string | null) => formatDateOnly(v),
                             },
                             {
                               title: "Tempo",
                               render: (record: TaskItem) => {
                                 const row = taskTimeSummaryByTaskId[record.id];
-                                if (!row) return <Spin size="small" />;
+                                if (!row) {
+                                  return <Typography.Text type="secondary">—</Typography.Text>;
+                                }
                                 const now = taskTimeTickMs || Date.now();
                                 const display = liveTotalSecondsFromSummary(
                                   row.total_seconds,
@@ -6279,13 +6714,22 @@ export function AppShell() {
                       {hoursDashboard ? (
                         <Row gutter={[16, 16]}>
                           <Col xs={24} md={8}>
-                            <Statistic title="Horas consumidas" value={Number(hoursDashboard.consumed_hours ?? 0)} precision={2} suffix="h" />
+                            <Statistic
+                              title="Horas consumidas"
+                              value={decimalHoursToHmText(Number(hoursDashboard.consumed_hours ?? 0))}
+                            />
                           </Col>
                           <Col xs={24} md={8}>
-                            <Statistic title="Horas contratadas (pts)" value={Number(hoursDashboard.contracted_hours ?? 0)} precision={1} suffix="h" />
+                            <Statistic
+                              title="Horas contratadas"
+                              value={decimalHoursToHmText(Number(hoursDashboard.contracted_hours ?? 0))}
+                            />
                           </Col>
                           <Col xs={24} md={8}>
-                            <Statistic title="Esforco (pontos)" value={Number(hoursDashboard.effort_points_total ?? 0)} />
+                            <Statistic
+                              title="Horas previstas"
+                              value={formatEffortHoursDisplay(Number(hoursDashboard.effort_points_total ?? 0))}
+                            />
                           </Col>
                           <Col span={24}>
                             <Table
@@ -6327,21 +6771,21 @@ export function AppShell() {
                                     Number(row.tasks_count ?? (Array.isArray(row.tasks) ? row.tasks.length : 0)),
                                 },
                                 {
-                                  title: "Esforco total",
+                                  title: "Horas previstas",
                                   dataIndex: "effort_points_total",
-                                  width: 120,
-                                  render: (value: number) => Number(value ?? 0),
+                                  width: 130,
+                                  render: (value: number) => formatEffortHoursDisplay(Number(value ?? 0)),
                                 },
                                 {
                                   title: "Horas",
                                   dataIndex: "consumed_hours",
                                   width: 120,
-                                  render: (value: number) => `${Number(value ?? 0).toFixed(2)} h`,
+                                  render: (value: number) => decimalHoursToHmText(value),
                                 },
                               ]}
                             />
                             <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                              Clique no usuario para abrir o detalhe por tarefa (esforco, horas e cliente).
+                              Clique no usuario para abrir o detalhe por tarefa (horas previstas, horas apontadas e cliente).
                             </Typography.Paragraph>
                           </Col>
                         </Row>
@@ -6353,6 +6797,23 @@ export function AppShell() {
                     title="Dashboard · Tarefas"
                     extra={
                       <Space wrap>
+                        <TipButton
+                          tip={HELP_TIPS.novaTarefa}
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            setComposeBoardId(null);
+                            createTaskForm.resetFields();
+                            createTaskForm.setFieldsValue({
+                              priority: "medium",
+                              status: "todo",
+                              effort_points: 1,
+                            });
+                            setCreateTaskOpen(true);
+                          }}
+                        >
+                          Nova tarefa
+                        </TipButton>
                         <TipButton
                           tip={HELP_TIPS.atualizar}
                           onClick={() => {
@@ -6366,15 +6827,21 @@ export function AppShell() {
                         <TipButton
                           tip={HELP_TIPS.limparFiltros}
                           onClick={() => {
-                            setTaskStatusFilter("all");
-                            setTaskPriorityFilter("all");
-                            setTaskProjectFilter("all");
-                            setTaskClientFilter("all");
-                            setTaskBoardFilter("all");
-                            setTaskAssigneeFilter("all");
+                            setTaskStatusFilter([]);
+                            setTaskPriorityFilter([]);
+                            setTaskProjectFilter([]);
+                            setTaskClientFilter([]);
+                            setTaskBoardFilter([]);
+                            setTaskAssigneeFilter([]);
                             setTaskPeriodFilter("all");
                             setTaskSearchFilter("");
-                            setTaskFilterMode("include");
+                            setTaskStatusFilterMode("include");
+                            setTaskPriorityFilterMode("include");
+                            setTaskProjectFilterMode("include");
+                            setTaskClientFilterMode("include");
+                            setTaskBoardFilterMode("include");
+                            setTaskAssigneeFilterMode("include");
+                            setAdminTasksTablePage(1);
                           }}
                         >
                           Limpar filtros
@@ -6383,16 +6850,6 @@ export function AppShell() {
                     }
                   >
                     <Space style={{ marginBottom: 12 }} wrap>
-                      <Radio.Group
-                        value={taskFilterMode}
-                        onChange={(e) => setTaskFilterMode(e.target.value)}
-                        optionType="button"
-                        buttonStyle="solid"
-                        options={[
-                          { value: "include", label: "Incluir" },
-                          { value: "exclude", label: "Exceto" },
-                        ]}
-                      />
                       <TipSelect
                         tip={HELP_TIPS.filterPeriodo}
                         value={taskPeriodFilter}
@@ -6409,124 +6866,187 @@ export function AppShell() {
                           { value: "done", label: "Concluidas" },
                         ]}
                       />
-                      <TipSelect
-                        tip={HELP_TIPS.filterStatus}
-                        value={taskStatusFilter}
-                        onChange={(value) => setTaskStatusFilter(value)}
-                        style={{ minWidth: 180 }}
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhum status excluido" : "Todos os status" },
-                          ...statusOptions.map((opt) => ({
-                            ...opt,
-                            label:
-                              taskFilterMode === "exclude" && opt.value !== "all"
-                                ? `Exceto: ${opt.label}`
-                                : opt.label,
-                          })),
-                        ]}
-                      />
-                      <TipSelect
-                        tip={HELP_TIPS.filterPrioridade}
-                        value={taskPriorityFilter}
-                        onChange={(value) => setTaskPriorityFilter(value)}
-                        style={{ minWidth: 160 }}
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhuma prioridade excluida" : "Todas prioridades" },
-                          { value: "low", label: taskFilterMode === "exclude" ? "Exceto: Baixa" : "Baixa" },
-                          { value: "medium", label: taskFilterMode === "exclude" ? "Exceto: Média" : "Média" },
-                          { value: "high", label: taskFilterMode === "exclude" ? "Exceto: Alta" : "Alta" },
-                          { value: "critical", label: taskFilterMode === "exclude" ? "Exceto: Crítica" : "Crítica" },
-                        ]}
-                      />
-                      <TipSelect
-                        tip={HELP_TIPS.filterProjeto}
-                        value={taskProjectFilter}
-                        onChange={(value) => {
-                          setTaskProjectFilter(value);
-                          if (value !== "all") {
-                            const validBoards = boards.filter((b) => String(b.project_id) === value).map((b) => b.id);
-                            if (taskBoardFilter !== "all" && !validBoards.includes(taskBoardFilter)) {
-                              setTaskBoardFilter("all");
-                            }
+                      <Space.Compact>
+                        <Select
+                          value={taskStatusFilterMode}
+                          onChange={setTaskStatusFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskStatusFilterMode === "exclude" ? "Status a excluir" : "Status"
                           }
-                        }}
-                        style={{ minWidth: 200 }}
-                        showSearch
-                        optionFilterProp="label"
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhum projeto excluido" : "Todos os projetos" },
-                          ...projects.map((p) => ({
+                          value={taskStatusFilter}
+                          onChange={setTaskStatusFilter}
+                          style={{ minWidth: 180 }}
+                          options={statusOptions}
+                        />
+                      </Space.Compact>
+                      <Space.Compact>
+                        <Select
+                          value={taskPriorityFilterMode}
+                          onChange={setTaskPriorityFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskPriorityFilterMode === "exclude"
+                              ? "Prioridades a excluir"
+                              : "Prioridades"
+                          }
+                          value={taskPriorityFilter}
+                          onChange={setTaskPriorityFilter}
+                          style={{ minWidth: 160 }}
+                          options={[
+                            { value: "low", label: "Baixa" },
+                            { value: "medium", label: "Média" },
+                            { value: "high", label: "Alta" },
+                            { value: "critical", label: "Crítica" },
+                          ]}
+                        />
+                      </Space.Compact>
+                      <Space.Compact>
+                        <Select
+                          value={taskProjectFilterMode}
+                          onChange={setTaskProjectFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskProjectFilterMode === "exclude" ? "Projetos a excluir" : "Projetos"
+                          }
+                          value={taskProjectFilter}
+                          onChange={(value) => {
+                            setTaskProjectFilter(value);
+                            if (value.length > 0) {
+                              const validBoards = new Set(
+                                boards
+                                  .filter((b) => value.includes(String(b.project_id)))
+                                  .map((b) => b.id),
+                              );
+                              setTaskBoardFilter((prev) => prev.filter((id) => validBoards.has(id)));
+                            }
+                          }}
+                          style={{ minWidth: 200 }}
+                          showSearch
+                          optionFilterProp="label"
+                          options={projects.map((p) => ({
                             value: String(p.id),
-                            label:
-                              taskFilterMode === "exclude"
-                                ? `Exceto: ${String(p.name ?? p.id)}`
-                                : String(p.name ?? p.id),
-                          })),
-                        ]}
-                      />
-                      <Select
-                        value={taskClientFilter}
-                        onChange={setTaskClientFilter}
-                        style={{ minWidth: 200 }}
-                        showSearch
-                        optionFilterProp="label"
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhum cliente excluido" : "Todos os clientes" },
-                          ...clients.map((c) => ({
+                            label: String(p.name ?? p.id),
+                          }))}
+                        />
+                      </Space.Compact>
+                      <Space.Compact>
+                        <Select
+                          value={taskClientFilterMode}
+                          onChange={setTaskClientFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskClientFilterMode === "exclude" ? "Clientes a excluir" : "Clientes"
+                          }
+                          value={taskClientFilter}
+                          onChange={setTaskClientFilter}
+                          style={{ minWidth: 200 }}
+                          showSearch
+                          optionFilterProp="label"
+                          options={clients.map((c) => ({
                             value: String(c.id),
-                            label:
-                              taskFilterMode === "exclude"
-                                ? `Exceto: ${String(c.name ?? c.id)}`
-                                : String(c.name ?? c.id),
-                          })),
-                        ]}
-                      />
-                      <TipSelect
-                        tip={HELP_TIPS.filterQuadro}
-                        value={taskBoardFilter}
-                        onChange={(value) => setTaskBoardFilter(value)}
-                        style={{ minWidth: 200 }}
-                        showSearch
-                        optionFilterProp="label"
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhum grupo excluido" : "Todos os grupos" },
-                          ...boards
-                            .filter((b) => taskProjectFilter === "all" || String(b.project_id) === taskProjectFilter)
+                            label: String(c.name ?? c.id),
+                          }))}
+                        />
+                      </Space.Compact>
+                      <Space.Compact>
+                        <Select
+                          value={taskBoardFilterMode}
+                          onChange={setTaskBoardFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskBoardFilterMode === "exclude" ? "Grupos a excluir" : "Grupos"
+                          }
+                          value={taskBoardFilter}
+                          onChange={setTaskBoardFilter}
+                          style={{ minWidth: 200 }}
+                          showSearch
+                          optionFilterProp="label"
+                          options={boards
+                            .filter(
+                              (b) =>
+                                taskProjectFilter.length === 0 ||
+                                taskProjectFilter.includes(String(b.project_id)),
+                            )
                             .map((b) => ({
                               value: b.id,
-                              label: taskFilterMode === "exclude" ? `Exceto: ${b.name}` : b.name,
-                            })),
-                        ]}
-                      />
-                      <TipSelect
-                        tip={HELP_TIPS.filterResponsavel}
-                        value={taskAssigneeFilter}
-                        onChange={(value) => setTaskAssigneeFilter(value)}
-                        style={{ minWidth: 200 }}
-                        showSearch
-                        optionFilterProp="label"
-                        options={[
-                          { value: "all", label: taskFilterMode === "exclude" ? "Nenhum colaborador excluido" : "Todos colaboradores" },
-                          ...(currentUserId != null
-                            ? [{
-                                value: String(currentUserId),
-                                label: taskFilterMode === "exclude" ? "Exceto: Eu (meu responsavel)" : "Eu (meu responsavel)",
-                              }]
-                            : []),
-                          {
-                            value: "unassigned",
-                            label: taskFilterMode === "exclude" ? "Exceto: Sem responsavel" : "Sem responsavel",
-                          },
-                          ...adminUsersCache
-                            .filter((u) => currentUserId == null || u.id !== currentUserId)
-                            .map((u) => ({
-                              value: String(u.id),
-                              label: taskFilterMode === "exclude"
-                                ? `Exceto: ${u.name || u.email || `Usuario ${u.id}`}`
-                                : u.name || u.email || `Usuario ${u.id}`,
-                            })),
-                        ]}
-                      />
+                              label: b.name,
+                            }))}
+                        />
+                      </Space.Compact>
+                      <Space.Compact>
+                        <Select
+                          value={taskAssigneeFilterMode}
+                          onChange={setTaskAssigneeFilterMode}
+                          style={{ width: 100 }}
+                          options={filterModeOptions}
+                        />
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount="responsive"
+                          placeholder={
+                            taskAssigneeFilterMode === "exclude"
+                              ? "Colaboradores a excluir"
+                              : "Colaboradores"
+                          }
+                          value={taskAssigneeFilter}
+                          onChange={setTaskAssigneeFilter}
+                          style={{ minWidth: 200 }}
+                          showSearch
+                          optionFilterProp="label"
+                          options={[
+                            ...(currentUserId != null
+                              ? [
+                                  {
+                                    value: String(currentUserId),
+                                    label: "Eu (meu responsavel)",
+                                  },
+                                ]
+                              : []),
+                            {
+                              value: "unassigned",
+                              label: "Sem responsavel",
+                            },
+                            ...adminUsersCache
+                              .filter((u) => currentUserId == null || u.id !== currentUserId)
+                              .map((u) => ({
+                                value: String(u.id),
+                                label: u.name || u.email || `Usuario ${u.id}`,
+                              })),
+                          ]}
+                        />
+                      </Space.Compact>
                       <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
                         <Input
                           placeholder="Buscar por titulo"
@@ -6543,7 +7063,11 @@ export function AppShell() {
                       className="bb-compact-table"
                       loading={allTasksLoading}
                       dataSource={tasksTabFiltered}
-                      pagination={{ pageSize: 8 }}
+                      pagination={{
+                        pageSize: TASK_TABLE_PAGE_SIZE,
+                        current: adminTasksTablePage,
+                        onChange: (page) => setAdminTasksTablePage(page),
+                      }}
                       expandable={{
                         expandedRowKeys: expandedAdminTasksKeys,
                         onExpand: (expanded, record) => {
@@ -6558,7 +7082,8 @@ export function AppShell() {
                         expandedRowRender: (record) =>
                           renderExpandableSubtasks(
                             record,
-                            currentUserId != null && taskAssigneeFilter === String(currentUserId),
+                            currentUserId != null &&
+                              taskAssigneeFilter.includes(String(currentUserId)),
                           ),
                       }}
                       onRow={(record) => ({
@@ -6569,16 +7094,10 @@ export function AppShell() {
                         {
                           title: "Titulo",
                           dataIndex: "title",
+                          width: 320,
+                          ellipsis: true,
                           sorter: (a, b) => a.title.localeCompare(b.title),
-                          render: (value: string, record: TaskItem) => (
-                            <Space size={6} style={{ paddingLeft: record.parent_id ? 16 : 0 }}>
-                              {record.parent_id ? <Tag>sub</Tag> : null}
-                              <span>{value}</span>
-                              {(record.subtasks_count ?? 0) > 0 ? (
-                                <Tag color="default">{record.subtasks_count} subtarefas</Tag>
-                              ) : null}
-                            </Space>
-                          ),
+                          render: (value: string, record: TaskItem) => renderTaskTitleCell(value, record),
                         },
                         {
                           ...assigneeColumn,
@@ -6607,7 +7126,7 @@ export function AppShell() {
                           title: "Status",
                           dataIndex: "status",
                           sorter: (a, b) => a.status.localeCompare(b.status),
-                          render: (v: string) => renderStatusTag(v),
+                          render: (_: string, record: TaskItem) => renderEditableStatusTag(record),
                         },
                         {
                           title: "Prazo inicio",
@@ -6618,14 +7137,17 @@ export function AppShell() {
                         {
                           title: "Prazo fim",
                           dataIndex: "end_date",
-                          sorter: (a, b) => new Date(a.end_date ?? 0).getTime() - new Date(b.end_date ?? 0).getTime(),
+                          defaultSortOrder: "ascend",
+                          sorter: compareTaskEndDateAsc,
                           render: (v: string | null) => formatDateOnly(v),
                         },
                         {
                           title: "Tempo",
                           render: (record: TaskItem) => {
                             const row = taskTimeSummaryByTaskId[record.id];
-                            if (!row) return <Spin size="small" />;
+                            if (!row) {
+                              return <Typography.Text type="secondary">—</Typography.Text>;
+                            }
                             const now = taskTimeTickMs || Date.now();
                             const display = liveTotalSecondsFromSummary(
                               row.total_seconds,
@@ -8787,10 +9309,18 @@ export function AppShell() {
                               <Space align="start">
                                 <Avatar
                                   size={56}
-                                  src={profileAvatarDataUrl || undefined}
-                                  icon={!profileAvatarDataUrl ? <UserOutlined /> : undefined}
+                                  src={
+                                    resolveMediaUrl(profileAvatarDataUrl) ||
+                                    profileAvatarDataUrl ||
+                                    undefined
+                                  }
+                                  icon={
+                                    !(resolveMediaUrl(profileAvatarDataUrl) || profileAvatarDataUrl)
+                                      ? <UserOutlined />
+                                      : undefined
+                                  }
                                 >
-                                  {!profileAvatarDataUrl
+                                  {!(resolveMediaUrl(profileAvatarDataUrl) || profileAvatarDataUrl)
                                     ? String(profileResult.display_name ?? profileResult.name ?? "U")
                                         .trim()
                                         .charAt(0)
@@ -9040,7 +9570,14 @@ export function AppShell() {
                                 body: {},
                               });
                               if (!response.ok) {
-                                apiMessage.error(response.error?.message ?? "Falha ao enviar e-mail de teste.");
+                                const details = response.error?.details as { error?: string } | undefined;
+                                const detailMsg =
+                                  details && typeof details.error === "string" && details.error.trim()
+                                    ? ` (${details.error})`
+                                    : "";
+                                apiMessage.error(
+                                  `${response.error?.message ?? "Falha ao enviar e-mail de teste."}${detailMsg}`,
+                                );
                                 return;
                               }
                               const to = response.data?.to ? ` para ${response.data.to}` : "";
@@ -9064,6 +9601,7 @@ export function AppShell() {
                               phone: String(values.phone ?? ""),
                               birth_date: String(values.birth_date ?? ""),
                               hourly_cost: Number(values.hourly_cost ?? 0),
+                              job_title: String(values.job_title ?? ""),
                               avatar_data_url: profileAvatarDataUrl,
                             };
                             const updateProfileResp = await apiRequest<{ profile: Record<string, unknown> }>(
@@ -9075,6 +9613,7 @@ export function AppShell() {
                                   display_name: payload.full_name,
                                   professional_email: payload.personal_email,
                                   phone: payload.phone,
+                                  job_title: payload.job_title,
                                 },
                               },
                             );
@@ -9107,6 +9646,11 @@ export function AppShell() {
                             <Col xs={24} md={12}>
                               <Form.Item name="phone" label="Telefone">
                                 <Input placeholder="Ex.: +55 11 99999-0000" />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item name="job_title" label="Cargo">
+                                <Input placeholder="Ex.: Designer, Desenvolvedor" />
                               </Form.Item>
                             </Col>
                             <Col xs={24} md={12}>
@@ -9555,23 +10099,19 @@ export function AppShell() {
                             <Col xs={24} md={8}>
                               <Statistic
                                 title="Horas consumidas"
-                                value={Number(hoursDashboard.consumed_hours ?? 0)}
-                                precision={2}
-                                suffix="h"
+                                value={decimalHoursToHmText(Number(hoursDashboard.consumed_hours ?? 0))}
                               />
                             </Col>
                             <Col xs={24} md={8}>
                               <Statistic
-                                title="Horas contratadas (pts)"
-                                value={Number(hoursDashboard.contracted_hours ?? 0)}
-                                precision={1}
-                                suffix="h"
+                                title="Horas contratadas"
+                                value={decimalHoursToHmText(Number(hoursDashboard.contracted_hours ?? 0))}
                               />
                             </Col>
                             <Col xs={24} md={8}>
                               <Statistic
-                                title="Esforco (pontos)"
-                                value={Number(hoursDashboard.effort_points_total ?? 0)}
+                                title="Horas previstas"
+                                value={formatEffortHoursDisplay(Number(hoursDashboard.effort_points_total ?? 0))}
                               />
                             </Col>
                             <Col span={24}>
@@ -10485,21 +11025,6 @@ export function AppShell() {
                                             </Button>
                                           </HelpTip>
                                         ) : null}
-                                        <HelpTip title={HELP_TIPS.novaTarefa}>
-                                          <Button
-                                            type="primary"
-                                            size="small"
-                                            icon={<PlusOutlined />}
-                                            onClick={() => {
-                                              setSelectedBoardId(boardId);
-                                              setComposeBoardId(boardId);
-                                              setKanbanGroups(boardKanban);
-                                              setCreateTaskOpen(true);
-                                            }}
-                                          >
-                                            Nova tarefa
-                                          </Button>
-                                        </HelpTip>
                                         <HelpTip title={HELP_TIPS.excluirGrupo}>
                                           <Button
                                             danger
@@ -10531,6 +11056,21 @@ export function AppShell() {
                                         </HelpTip>
                                       </>
                                     ) : null}
+                                    <HelpTip title={HELP_TIPS.novaTarefa}>
+                                      <Button
+                                        type="primary"
+                                        size="small"
+                                        icon={<PlusOutlined />}
+                                        onClick={() => {
+                                          setSelectedBoardId(boardId);
+                                          setComposeBoardId(boardId);
+                                          setKanbanGroups(boardKanban);
+                                          setCreateTaskOpen(true);
+                                        }}
+                                      >
+                                        Nova tarefa
+                                      </Button>
+                                    </HelpTip>
                                   </Space>
                                 }
                               >
@@ -10549,62 +11089,79 @@ export function AppShell() {
                                               size="small"
                                               title={`${formatColumnLabel(column.group.name)} (${column.tasks.length})`}
                                               extra={
-                                                isAdmin ? (
-                                                  <Space size={4} wrap>
-                                                    <TipButton
-                                                      tip={HELP_TIPS.kanbanRenomearLista}
-                                                      size="small"
-                                                      type="text"
-                                                      onClick={() => {
-                                                        openTextInputModal({
-                                                          title: "Renomear lista",
-                                                          initialValue: column.group.name,
-                                                          placeholder: "Novo nome da lista",
-                                                          onSubmit: async (nextName) => {
-                                                            const ok = await patchEntity(
-                                                              `/groups/${column.group.id}`,
-                                                              { name: nextName, wip_limit: column.group.wip_limit },
-                                                              "Coluna atualizada.",
-                                                            );
-                                                            if (ok) {
+                                                <Space size={4} wrap>
+                                                  <TipButton
+                                                    tip={HELP_TIPS.novaTarefa}
+                                                    size="small"
+                                                    type="text"
+                                                    icon={<PlusOutlined />}
+                                                    onClick={() => {
+                                                      setSelectedBoardId(boardId);
+                                                      setComposeBoardId(boardId);
+                                                      setKanbanGroups(boardKanban);
+                                                      createTaskForm.setFieldsValue({ group_id: column.group.id });
+                                                      setCreateTaskOpen(true);
+                                                    }}
+                                                  >
+                                                    Tarefa
+                                                  </TipButton>
+                                                  {isAdmin ? (
+                                                    <>
+                                                      <TipButton
+                                                        tip={HELP_TIPS.kanbanRenomearLista}
+                                                        size="small"
+                                                        type="text"
+                                                        onClick={() => {
+                                                          openTextInputModal({
+                                                            title: "Renomear lista",
+                                                            initialValue: column.group.name,
+                                                            placeholder: "Novo nome da lista",
+                                                            onSubmit: async (nextName) => {
+                                                              const ok = await patchEntity(
+                                                                `/groups/${column.group.id}`,
+                                                                { name: nextName, wip_limit: column.group.wip_limit },
+                                                                "Coluna atualizada.",
+                                                              );
+                                                              if (ok) {
+                                                                await fetchKanbanForBoard(boardId, boardViewModeForBoard);
+                                                              }
+                                                            },
+                                                          });
+                                                        }}
+                                                      >
+                                                        Editar
+                                                      </TipButton>
+                                                      <TipButton
+                                                        tip={HELP_TIPS.kanbanExcluirLista}
+                                                        size="small"
+                                                        type="text"
+                                                        danger
+                                                        icon={<DeleteOutlined />}
+                                                        onClick={() =>
+                                                          openDeleteConfirmModal({
+                                                            title: "Excluir esta lista?",
+                                                            onConfirm: async () => {
+                                                              const response = await apiRequest(`/groups/${column.group.id}`, {
+                                                                method: "DELETE",
+                                                                token,
+                                                              });
+                                                              if (!response.ok) {
+                                                                apiMessage.error(response.error?.message ?? "Falha ao excluir lista.");
+                                                                throw new Error("group_delete_failed");
+                                                              }
+                                                              apiMessage.success("Coluna excluida.");
                                                               await fetchKanbanForBoard(boardId, boardViewModeForBoard);
-                                                            }
-                                                          },
-                                                        });
-                                                      }}
-                                                    >
-                                                      Editar
-                                                    </TipButton>
-                                                    <TipButton
-                                                      tip={HELP_TIPS.kanbanExcluirLista}
-                                                      size="small"
-                                                      type="text"
-                                                      danger
-                                                      icon={<DeleteOutlined />}
-                                                      onClick={() =>
-                                                        openDeleteConfirmModal({
-                                                          title: "Excluir esta lista?",
-                                                          onConfirm: async () => {
-                                                            const response = await apiRequest(`/groups/${column.group.id}`, {
-                                                              method: "DELETE",
-                                                              token,
-                                                            });
-                                                            if (!response.ok) {
-                                                              apiMessage.error(response.error?.message ?? "Falha ao excluir lista.");
-                                                              throw new Error("group_delete_failed");
-                                                            }
-                                                            apiMessage.success("Coluna excluida.");
-                                                            await fetchKanbanForBoard(boardId, boardViewModeForBoard);
-                                                            await fetchTasks();
-                                                            if (isAdmin) await fetchAllTasks().catch(() => undefined);
-                                                          },
-                                                        })
-                                                      }
-                                                    >
-                                                      Excluir
-                                                    </TipButton>
-                                                  </Space>
-                                                ) : null
+                                                              await fetchTasks();
+                                                              if (isAdmin) await fetchAllTasks().catch(() => undefined);
+                                                            },
+                                                          })
+                                                        }
+                                                      >
+                                                        Excluir
+                                                      </TipButton>
+                                                    </>
+                                                  ) : null}
+                                                </Space>
                                               }
                                               onDragOver={(event) => {
                                                 if (!draggingTaskId) return;
@@ -10745,17 +11302,31 @@ export function AppShell() {
                                   ) : (
                                     <Table<TaskItem>
                                       rowKey="id"
+                                      size="small"
+                                      className="bb-compact-table"
                                       dataSource={boardListTasks}
                                       locale={{ emptyText: "Nenhuma tarefa neste grupo." }}
-                                      pagination={{ pageSize: 8 }}
-                                      rowSelection={{
-                                        selectedRowKeys: selectedTaskIdsByBoardId[boardId] ?? [],
-                                        onChange: (selectedRowKeys) =>
-                                          setSelectedTaskIdsByBoardId((prev) => ({
+                                      pagination={{
+                                        pageSize: TASK_TABLE_PAGE_SIZE,
+                                        current: boardListTablePageByBoardId[boardId] ?? 1,
+                                        onChange: (page) =>
+                                          setBoardListTablePageByBoardId((prev) => ({
                                             ...prev,
-                                            [boardId]: selectedRowKeys.map((key) => String(key)),
+                                            [boardId]: page,
                                           })),
                                       }}
+                                      rowSelection={
+                                        isAdmin
+                                          ? {
+                                              selectedRowKeys: selectedTaskIdsByBoardId[boardId] ?? [],
+                                              onChange: (selectedRowKeys) =>
+                                                setSelectedTaskIdsByBoardId((prev) => ({
+                                                  ...prev,
+                                                  [boardId]: selectedRowKeys.map((key) => String(key)),
+                                                })),
+                                            }
+                                          : undefined
+                                      }
                                       expandable={{
                                         expandedRowKeys: expandedTaskKeysByBoardId[boardId] ?? [],
                                         onExpand: (expanded, record) => {
@@ -10770,7 +11341,8 @@ export function AppShell() {
                                             void refreshTaskSubtasks(record.id);
                                           }
                                         },
-                                        rowExpandable: (record) => !record.parent_id,
+                                        rowExpandable: (record) =>
+                                          !record.parent_id && (record.subtasks_count ?? 0) > 0,
                                         expandedRowRender: (record) => renderExpandableSubtasks(record, false),
                                       }}
                                       onRow={(record) => ({
@@ -10781,64 +11353,178 @@ export function AppShell() {
                                         {
                                           title: "Titulo",
                                           dataIndex: "title",
-                                          render: (value: string, record: TaskItem) => (
-                                            <Space size={6}>
-                                              <span>{value}</span>
-                                              {(record.subtasks_count ?? 0) > 0 ? (
-                                                <Tag color="default">{record.subtasks_count} subtarefas</Tag>
-                                              ) : null}
-                                            </Space>
-                                          ),
+                                          width: 280,
+                                          ellipsis: true,
+                                          sorter: (a, b) => a.title.localeCompare(b.title),
+                                          render: (value: string, record: TaskItem) =>
+                                            renderTaskTitleCell(value, record),
                                         },
-                                        { title: "Status", dataIndex: "status", render: (value: string) => renderStatusTag(value) },
-                                        { title: "Prioridade", dataIndex: "priority", render: (value: string) => renderPriorityTag(value) },
-                                        assigneeColumn,
-                                        { title: "Prazo", dataIndex: "end_date", render: (value: string | null) => formatDate(value) },
+                                        {
+                                          ...assigneeColumn,
+                                          sorter: (a: TaskItem, b: TaskItem) =>
+                                            String(a.assignee_name ?? a.assignee_id ?? "").localeCompare(
+                                              String(b.assignee_name ?? b.assignee_id ?? ""),
+                                            ),
+                                        },
+                                        {
+                                          title: "Cliente",
+                                          ellipsis: true,
+                                          sorter: (a: TaskItem, b: TaskItem) =>
+                                            taskContext(a).clientLabel.localeCompare(taskContext(b).clientLabel),
+                                          render: (record: TaskItem) => taskContext(record).clientLabel,
+                                        },
+                                        {
+                                          title: "Prioridade",
+                                          dataIndex: "priority",
+                                          sorter: (a, b) => a.priority.localeCompare(b.priority),
+                                          render: (v: string) => renderPriorityTag(v),
+                                        },
+                                        {
+                                          title: "Status",
+                                          dataIndex: "status",
+                                          sorter: (a, b) => a.status.localeCompare(b.status),
+                                          render: (_: string, record: TaskItem) =>
+                                            renderEditableStatusTag(record),
+                                        },
+                                        {
+                                          title: "Prazo inicio",
+                                          dataIndex: "start_date",
+                                          sorter: (a, b) =>
+                                            new Date(a.start_date ?? 0).getTime() -
+                                            new Date(b.start_date ?? 0).getTime(),
+                                          render: (v: string | null) => formatDateOnly(v),
+                                        },
+                                        {
+                                          title: "Prazo fim",
+                                          dataIndex: "end_date",
+                                          defaultSortOrder: "ascend",
+                                          sorter: compareTaskEndDateAsc,
+                                          render: (v: string | null) => formatDateOnly(v),
+                                        },
+                                        {
+                                          title: "Tempo",
+                                          render: (record: TaskItem) => {
+                                            const row = taskTimeSummaryByTaskId[record.id];
+                                            if (!row) {
+                                              return <Typography.Text type="secondary">—</Typography.Text>;
+                                            }
+                                            const now = taskTimeTickMs || Date.now();
+                                            const display = liveTotalSecondsFromSummary(
+                                              row.total_seconds,
+                                              row.logs,
+                                              row.fetchedAtMs,
+                                              now,
+                                              currentUserId,
+                                            );
+                                            const active =
+                                              resolveControllableTimeLog(
+                                                row.logs,
+                                                "active",
+                                                currentUserId,
+                                                isAdmin,
+                                              ) != null;
+                                            return (
+                                              <Space
+                                                size={4}
+                                                style={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}
+                                                onClick={(event) => event.stopPropagation()}
+                                              >
+                                                <Typography.Text style={{ whiteSpace: "nowrap" }}>
+                                                  {secondsToText(display)}
+                                                </Typography.Text>
+                                                {active ? (
+                                                  <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+                                                    Contando
+                                                  </Tag>
+                                                ) : null}
+                                              </Space>
+                                            );
+                                          },
+                                        },
                                         {
                                           title: "Acoes",
-                                          render: (record: TaskItem) => (
-                                            <Space
-                                              size="small"
-                                              onClick={(event) => event.stopPropagation()}
-                                            >
-                                              <TipButton
-                                                tip="Adicionar subtarefa nesta tarefa"
-                                                size="small"
-                                                icon={<PlusOutlined />}
-                                                onClick={() => openCreateSubtaskModal(record)}
+                                          render: (record: TaskItem) => {
+                                            const row = taskTimeSummaryByTaskId[record.id];
+                                            const active =
+                                              row != null &&
+                                              resolveControllableTimeLog(
+                                                row.logs,
+                                                "active",
+                                                currentUserId,
+                                                isAdmin,
+                                              ) != null;
+                                            const paused =
+                                              row != null &&
+                                              resolveControllableTimeLog(
+                                                row.logs,
+                                                "paused",
+                                                currentUserId,
+                                                isAdmin,
+                                              ) != null;
+                                            return (
+                                              <Space
+                                                size={4}
+                                                onClick={(event) => event.stopPropagation()}
                                               >
-                                                Subtarefa
-                                              </TipButton>
-                                              <TipButton
-                                                tip={HELP_TIPS.editar}
-                                                size="small"
-                                                icon={<EditOutlined />}
-                                                onClick={() => openTask(record).catch(() => undefined)}
-                                              >
-                                                Editar
-                                              </TipButton>
-                                              <TipButton
-                                                tip={HELP_TIPS.excluir}
-                                                size="small"
-                                                danger
-                                                icon={<DeleteOutlined />}
-                                                onClick={() =>
-                                                  openDeleteConfirmModal({
-                                                    title:
-                                                      (record.subtasks_count ?? 0) > 0
-                                                        ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
-                                                        : "Excluir esta tarefa?",
-                                                    onConfirm: async () => {
-                                                      const ok = await deleteTaskById(record.id);
-                                                      if (!ok) throw new Error("task_delete_failed");
-                                                    },
-                                                  })
-                                                }
-                                              >
-                                                Excluir
-                                              </TipButton>
-                                            </Space>
-                                          ),
+                                                {active ? (
+                                                  <TipButton
+                                                    tip={HELP_TIPS.timerPausar}
+                                                    size="small"
+                                                    icon={<PauseCircleOutlined />}
+                                                    onClick={() => void quickTaskTimeAction(record, "pause")}
+                                                  />
+                                                ) : (
+                                                  <TipButton
+                                                    tip={HELP_TIPS.timerIniciar}
+                                                    size="small"
+                                                    icon={<PlayCircleOutlined />}
+                                                    onClick={() =>
+                                                      void quickTaskTimeAction(
+                                                        record,
+                                                        paused ? "resume" : "start",
+                                                      )
+                                                    }
+                                                  />
+                                                )}
+                                                <TipButton
+                                                  tip="Adicionar subtarefa nesta tarefa"
+                                                  size="small"
+                                                  icon={<PlusOutlined />}
+                                                  onClick={() => openCreateSubtaskModal(record)}
+                                                />
+                                                <TipButton
+                                                  tip={HELP_TIPS.comentarios}
+                                                  size="small"
+                                                  icon={<CommentOutlined />}
+                                                  onClick={() =>
+                                                    openTask(record, "comments").catch(() => undefined)
+                                                  }
+                                                />
+                                                {(isAdmin ||
+                                                  (currentUserId != null &&
+                                                    Number(record.assignee_id) === Number(currentUserId))) && (
+                                                  <TipButton
+                                                    tip={HELP_TIPS.excluir}
+                                                    size="small"
+                                                    danger
+                                                    icon={<DeleteOutlined />}
+                                                    onClick={() =>
+                                                      openDeleteConfirmModal({
+                                                        title:
+                                                          (record.subtasks_count ?? 0) > 0
+                                                            ? `Excluir esta tarefa e suas ${record.subtasks_count} subtarefas?`
+                                                            : "Excluir esta tarefa?",
+                                                        onConfirm: async () => {
+                                                          const ok = await deleteTaskById(record.id);
+                                                          if (!ok) throw new Error("task_delete_failed");
+                                                        },
+                                                      })
+                                                    }
+                                                  />
+                                                )}
+                                              </Space>
+                                            );
+                                          },
                                         },
                                       ]}
                                     />
@@ -12271,10 +12957,13 @@ export function AppShell() {
           form={createTaskForm}
           initialValues={{ priority: "medium", status: "todo", effort_points: 1 }}
           onFinish={async (values) => {
-            const targetBoardId = composeBoardId ?? selectedBoardId;
+            const targetBoardId =
+              composeBoardId ??
+              (values.board_id ? String(values.board_id) : null) ??
+              selectedBoardId;
             const targetBoard = boards.find((board) => board.id === targetBoardId) ?? null;
             if (!targetBoardId || !targetBoard?.project_id) {
-              apiMessage.error("Selecione um grupo valido.");
+              apiMessage.error("Selecione um grupo (board) valido.");
               return;
             }
             let groupId = String(values.group_id ?? "");
@@ -12295,7 +12984,8 @@ export function AppShell() {
             });
             if (ok) {
               const createdView = boardViewModeByBoardId[targetBoardId] ?? "list";
-              await fetchKanbanForBoard(targetBoardId, createdView);
+              await fetchKanbanForBoard(targetBoardId, createdView).catch(() => undefined);
+              if (isAdmin) await fetchAllTasks().catch(() => undefined);
               createTaskForm.resetFields();
               setCreateTaskOpen(false);
               setComposeBoardId(null);
@@ -12303,6 +12993,36 @@ export function AppShell() {
           }}
         >
           <Row gutter={[12, 0]}>
+            {!composeBoardId ? (
+              <Col xs={24}>
+                <Form.Item
+                  name="board_id"
+                  label="Projeto / grupo (board)"
+                  rules={[{ required: true, message: "Selecione o board da tarefa." }]}
+                >
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="Escolha onde criar a tarefa"
+                    options={boards.map((board) => {
+                      const project = projects.find((p) => String(p.id) === String(board.project_id));
+                      const projectName = String(project?.name ?? board.project_id ?? "Projeto");
+                      return {
+                        value: board.id,
+                        label: `${projectName} · ${board.name}`,
+                      };
+                    })}
+                    onChange={async (boardId: string) => {
+                      createTaskForm.setFieldsValue({ board_id: boardId, group_id: undefined });
+                      const options = await ensureDefaultGroupForBoard(boardId);
+                      if (options[0]) {
+                        createTaskForm.setFieldsValue({ group_id: options[0].value });
+                      }
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+            ) : null}
             <Col xs={24}>
               <Form.Item
                 name="title"
@@ -12670,8 +13390,7 @@ export function AppShell() {
               </Typography.Paragraph>
             </Card>
 
-            {(isAdmin || selectedTask.assignee_id == null || (currentUserId !== null && selectedTask.assignee_id === currentUserId)) ? (
-              <Card size="small" title="Editar tarefa">
+            <Card size="small" title="Editar tarefa">
                 <Form
                   key={`task-edit-${selectedTask.id}-${selectedTask.updated_at ?? ""}`}
                   form={taskDetailsForm}
@@ -12696,10 +13415,10 @@ export function AppShell() {
                   <Form.Item label="Descricao" name="description">
                     <RichDescriptionField
                       key={`desc-${selectedTask.id}`}
-                      rows={5}
                       placeholder="Descreva a tarefa... Digite @ para mencionar"
-                      options={mentionOptions}
-                      onImages={(files) => void uploadDescriptionImages(files)}
+                      mentionOptions={mondayMentionOptions}
+                      draftKey={descriptionDraftKey}
+                      onUploadImage={uploadImageForComposer}
                     />
                   </Form.Item>
                   <Row gutter={12}>
@@ -12790,15 +13509,6 @@ export function AppShell() {
                   </Row>
                 </Form>
               </Card>
-            ) : selectedTask.description ? (
-              <Card size="small" title="Descricao">
-                <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                  {renderRichText(selectedTask.description)}
-                </Typography.Paragraph>
-              </Card>
-            ) : (
-              <Typography.Text type="secondary">Sem descricao cadastrada.</Typography.Text>
-            )}
 
             {selectedTask.parent_id ? (
               <Alert
@@ -12906,15 +13616,25 @@ export function AppShell() {
                   label: "Historico",
                   children: (
                     <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                      {taskActivity.map((item, index) => (
-                        <Card key={`${item.event_type}-${item.created_at}-${index}`} size="small">
-                          <Space orientation="vertical" size={0}>
-                            <Typography.Text>{item.event_type}</Typography.Text>
-                            <Typography.Text type="secondary">{item.summary}</Typography.Text>
-                            <Typography.Text type="secondary">{formatDate(item.created_at)}</Typography.Text>
-                          </Space>
-                        </Card>
-                      ))}
+                      {taskActivity.length === 0 ? (
+                        <Empty description="Nenhum evento no historico ainda." />
+                      ) : (
+                        taskActivity.map((item, index) => (
+                          <Card key={`${item.event_type}-${item.created_at}-${index}`} size="small">
+                            <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                              <Typography.Text strong>{formatTaskActivityTitle(item.event_type)}</Typography.Text>
+                              {humanizeTaskActivitySummary(item.summary) ? (
+                                <Typography.Text type="secondary">
+                                  {humanizeTaskActivitySummary(item.summary)}
+                                </Typography.Text>
+                              ) : null}
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                {formatDate(item.created_at)}
+                              </Typography.Text>
+                            </Space>
+                          </Card>
+                        ))
+                      )}
                     </Space>
                   ),
                 },
@@ -12938,41 +13658,47 @@ export function AppShell() {
                               }
                             />
                           ) : null}
-                          <MentionsWithMedia
-                            rows={4}
+                          <MondayComposer
+                            key={`comment-composer-${selectedTask.id}-${commentDraftKey ?? "x"}`}
+                            mode="comment"
                             value={taskCommentDraft}
-                            onChange={(value) => setTaskCommentDraft(value)}
-                            placeholder="Escreva uma atualizacao... Digite @ para mencionar. Cole ou arraste imagens."
-                            options={mentionOptions}
-                            onImages={(files) => appendImageFilesToComment(files)}
+                            onChange={(html) => setTaskCommentDraft(html)}
+                            mentionOptions={mondayMentionOptions}
+                            onUploadImage={uploadImageForComposer}
+                            onAttachFiles={(files) => {
+                              const next: UploadFile[] = files.map((file, index) => ({
+                                uid: `bb-doc-${Date.now()}-${index}-${file.name}`,
+                                name: file.name,
+                                status: "done",
+                                originFileObj: file as UploadFile["originFileObj"],
+                              }));
+                              setTaskCommentFiles((prev) => [...prev, ...next]);
+                            }}
+                            draftKey={commentDraftKey}
+                            placeholder="Escreva uma atualizacao... Digite @ para mencionar. Cole ou anexe imagens."
+                            submitLabel="Atualizar"
+                            onSubmit={(html) => createTaskComment(selectedTask.id, html)}
                           />
-                          <Upload
-                            multiple
-                            beforeUpload={() => false}
-                            fileList={taskCommentFiles}
-                            onChange={({ fileList }) => setTaskCommentFiles(fileList)}
-                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt"
+                          {taskCommentFiles.length > 0 ? (
+                            <Upload
+                              multiple
+                              beforeUpload={() => false}
+                              fileList={taskCommentFiles}
+                              onChange={({ fileList }) => setTaskCommentFiles(fileList)}
+                              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,image/*"
+                            />
+                          ) : null}
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              clearComposerDraft(commentDraftKey);
+                              setTaskCommentDraft("");
+                              setTaskCommentFiles([]);
+                              setTaskCommentReplyTo(null);
+                            }}
                           >
-                            <Button icon={<PaperClipOutlined />}>Anexar imagens ou arquivos</Button>
-                          </Upload>
-                          <Space>
-                            <Button
-                              type="primary"
-                              onClick={() => createTaskComment(selectedTask.id, taskCommentDraft)}
-                              disabled={!taskCommentDraft.trim() && taskCommentFiles.length === 0}
-                            >
-                              Publicar atualizacao
-                            </Button>
-                            <Button
-                              onClick={() => {
-                                setTaskCommentDraft("");
-                                setTaskCommentFiles([]);
-                                setTaskCommentReplyTo(null);
-                              }}
-                            >
-                              Limpar
-                            </Button>
-                          </Space>
+                            Limpar rascunho
+                          </Button>
                         </Space>
                       </Card>
                       {(() => {
@@ -13064,38 +13790,31 @@ export function AppShell() {
                                 </Space>
                                 {rootIsEditing ? (
                                   <Space orientation="vertical" style={{ width: "100%" }}>
-                                    <Input.TextArea
-                                      rows={3}
+                                    <MondayComposer
+                                      mode="comment"
                                       value={taskCommentEditingContent}
-                                      onChange={(event) => setTaskCommentEditingContent(event.target.value)}
+                                      onChange={(html) => setTaskCommentEditingContent(html)}
+                                      mentionOptions={mondayMentionOptions}
+                                      onUploadImage={uploadImageForComposer}
+                                      placeholder="Edite a atualizacao... Digite @ para mencionar"
+                                      submitLabel="Salvar"
+                                      onSubmit={(html) =>
+                                        updateTaskComment(selectedTask.id, rootComment.id, html)
+                                      }
                                     />
-                                    <Space>
-                                      <Button
-                                        type="primary"
-                                        size="small"
-                                        onClick={() =>
-                                          updateTaskComment(selectedTask.id, rootComment.id, taskCommentEditingContent)
-                                        }
-                                        disabled={!taskCommentEditingContent.trim()}
-                                      >
-                                        Salvar
-                                      </Button>
-                                      <Button
-                                        size="small"
-                                        onClick={() => {
-                                          setTaskCommentEditingId(null);
-                                          setTaskCommentEditingContent("");
-                                        }}
-                                      >
-                                        Cancelar
-                                      </Button>
-                                    </Space>
+                                    <Button
+                                      size="small"
+                                      onClick={() => {
+                                        setTaskCommentEditingId(null);
+                                        setTaskCommentEditingContent("");
+                                      }}
+                                    >
+                                      Cancelar
+                                    </Button>
                                   </Space>
                                 ) : (
                                   <>
-                                    <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                      {renderRichText(root.cleanContent)}
-                                    </Typography.Paragraph>
+                                    <RichHtmlView html={root.cleanContent} />
                                     {renderCommentAttachments(rootComment.attachments)}
                                   </>
                                 )}
@@ -13160,38 +13879,31 @@ export function AppShell() {
                                         </Space>
                                         {replyIsEditing ? (
                                           <Space orientation="vertical" style={{ width: "100%" }}>
-                                            <Input.TextArea
-                                              rows={3}
+                                            <MondayComposer
+                                              mode="comment"
                                               value={taskCommentEditingContent}
-                                              onChange={(event) => setTaskCommentEditingContent(event.target.value)}
+                                              onChange={(html) => setTaskCommentEditingContent(html)}
+                                              mentionOptions={mondayMentionOptions}
+                                              onUploadImage={uploadImageForComposer}
+                                              placeholder="Edite a resposta... Digite @ para mencionar"
+                                              submitLabel="Salvar"
+                                              onSubmit={(html) =>
+                                                updateTaskComment(selectedTask.id, reply.comment.id, html)
+                                              }
                                             />
-                                            <Space>
-                                              <Button
-                                                type="primary"
-                                                size="small"
-                                                onClick={() =>
-                                                  updateTaskComment(selectedTask.id, reply.comment.id, taskCommentEditingContent)
-                                                }
-                                                disabled={!taskCommentEditingContent.trim()}
-                                              >
-                                                Salvar
-                                              </Button>
-                                              <Button
-                                                size="small"
-                                                onClick={() => {
-                                                  setTaskCommentEditingId(null);
-                                                  setTaskCommentEditingContent("");
-                                                }}
-                                              >
-                                                Cancelar
-                                              </Button>
-                                            </Space>
+                                            <Button
+                                              size="small"
+                                              onClick={() => {
+                                                setTaskCommentEditingId(null);
+                                                setTaskCommentEditingContent("");
+                                              }}
+                                            >
+                                              Cancelar
+                                            </Button>
                                           </Space>
                                         ) : (
                                           <>
-                                            <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                              {renderRichText(reply.cleanContent)}
-                                            </Typography.Paragraph>
+                                            <RichHtmlView html={reply.cleanContent} />
                                             {renderCommentAttachments(reply.comment.attachments)}
                                           </>
                                         )}
@@ -13233,16 +13945,13 @@ export function AppShell() {
               <Col xs={24} sm={8}>
                 <Statistic
                   title="Horas"
-                  value={Number(hoursDetailCollaborator.consumed_hours ?? 0)}
-                  precision={2}
-                  suffix="h"
+                  value={decimalHoursToHmText(Number(hoursDetailCollaborator.consumed_hours ?? 0))}
                 />
               </Col>
               <Col xs={24} sm={8}>
                 <Statistic
-                  title="Esforco total"
-                  value={Number(hoursDetailCollaborator.effort_points_total ?? 0)}
-                  suffix="pts"
+                  title="Horas previstas"
+                  value={formatEffortHoursDisplay(Number(hoursDetailCollaborator.effort_points_total ?? 0))}
                 />
               </Col>
               <Col xs={24} sm={8}>
@@ -13290,16 +13999,16 @@ export function AppShell() {
                   render: (value: string) => value || "—",
                 },
                 {
-                  title: "Esforco (pts)",
+                  title: "Horas previstas",
                   dataIndex: "effort_points",
-                  width: 110,
-                  render: (value: number) => Number(value ?? 0),
+                  width: 130,
+                  render: (value: number) => formatEffortHoursDisplay(Number(value ?? 0)),
                 },
                 {
                   title: "Horas",
                   dataIndex: "consumed_hours",
                   width: 100,
-                  render: (value: number) => `${Number(value ?? 0).toFixed(2)} h`,
+                  render: (value: number) => decimalHoursToHmText(value),
                 },
               ]}
             />
@@ -13602,7 +14311,7 @@ export function AppShell() {
       <ReportProblemWidget
         token={token}
         workspaceId={selectedWorkspaceId}
-        hidden={Boolean(selectedTask)}
+        hidden={false}
       />
     </>
   );
