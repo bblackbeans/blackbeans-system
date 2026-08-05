@@ -4734,6 +4734,12 @@ export function AppShell() {
     end_date?: string | Date | null;
   }) {
     if (!createSubtaskParent) return;
+    const startIso = fromDateInputValue(values.start_date);
+    const endIso = fromDateInputValue(values.end_date);
+    if (startIso && endIso && new Date(startIso).getTime() > new Date(endIso).getTime()) {
+      apiMessage.error("Prazo de inicio deve ser anterior ou igual ao prazo final.");
+      return;
+    }
     setSubtaskSaving(true);
     try {
       const response = await apiRequest<{ task: TaskItem }>("/tasks", {
@@ -4747,8 +4753,8 @@ export function AppShell() {
           priority: values.priority ?? createSubtaskParent.priority,
           effort_points: values.effort_points ?? 1,
           assignee_id: values.assignee_id ?? null,
-          start_date: fromDateInputValue(values.start_date),
-          end_date: fromDateInputValue(values.end_date),
+          start_date: startIso,
+          end_date: endIso,
         },
       });
       if (!response.ok) {
@@ -12975,11 +12981,18 @@ export function AppShell() {
               apiMessage.error("Nao foi possivel preparar o grupo para criar a tarefa.");
               return;
             }
+            const startIso = fromDatetimeLocalValue(values.start_date);
+            const endIso = fromDatetimeLocalValue(values.end_date);
+            if (startIso && endIso && new Date(startIso).getTime() > new Date(endIso).getTime()) {
+              apiMessage.error("Prazo de inicio deve ser anterior ou igual ao prazo final.");
+              return;
+            }
             const ok = await createTask({
               ...values,
               group_id: groupId,
               effort_points: values.effort_points ?? 1,
-              end_date: fromDatetimeLocalValue(values.end_date),
+              start_date: startIso,
+              end_date: endIso,
               project_id: targetBoard.project_id,
             });
             if (ok) {
@@ -13093,20 +13106,15 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
+              <Form.Item name="start_date" label="Prazo inicio">
+                <Input type="datetime-local" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
               <Form.Item name="end_date" label="Prazo final">
                 <Input type="datetime-local" />
               </Form.Item>
             </Col>
-          </Row>
-        </Form>
-      </Modal>
-
-      <Modal
-        title={
-          createSubtaskParent
-            ? `Nova subtarefa em: ${createSubtaskParent.title}`
-            : "Nova subtarefa"
-        }
         open={createSubtaskOpen}
         confirmLoading={subtaskSaving}
         onCancel={() => {
