@@ -1,10 +1,11 @@
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include
 from django.urls import path
+from django.urls import re_path
 from django.views import defaults as default_views
 from django.views.generic import TemplateView
+from django.views.static import serve
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -19,10 +20,14 @@ urlpatterns = [
     path("users/", include("blackbeans_api.users.urls", namespace="users")),
     path("accounts/", include("allauth.urls")),
     path("api/v1/", include("blackbeans_api.api.urls")),
-    # Your stuff: custom urls includes go here
-    # ...
-    # Media files
-    *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
+    # Media SEMPRE servido (uploads de tarefas/anexos).
+    # django.conf.urls.static.static() so registra rotas com DEBUG=True —
+    # em producao (Easypanel) isso gerava 404 em /media/... apos o upload.
+    re_path(
+        r"^media/(?P<path>.*)$",
+        serve,
+        {"document_root": settings.MEDIA_ROOT},
+    ),
 ]
 
 
