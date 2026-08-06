@@ -98,6 +98,10 @@ def _attachment_to_representation(att: ClientRequestAttachment) -> dict:
             url = att.file.url
     except Exception:
         url = ""
+    # Reaproveita normalizacao de path absoluto → /media/...
+    from blackbeans_api.api.operations_serializers import normalize_media_file_url
+
+    url = normalize_media_file_url(url) or ""
     return {
         "id": str(att.pk),
         "kind": att.kind,
@@ -194,11 +198,25 @@ class ClientRequestPublicCreateView(APIView):
             ext = ""
             if "." in filename:
                 ext = "." + filename.rsplit(".", 1)[-1].lower()
+            # Browser/mimetypes marcam .webm/.ogg como video/* — forcar audio quando kind=audio
             kind = _guess_kind(content_type, filename)
             ct_base = content_type.split(";")[0].strip().lower()
+            if kind == ClientRequestAttachment.Kind.AUDIO:
+                if ct_base.startswith("video/") or ct_base in {"application/octet-stream", ""}:
+                    if filename.lower().endswith(".ogg"):
+                        content_type = "audio/ogg"
+                    elif filename.lower().endswith((".m4a", ".mp4")):
+                        content_type = "audio/mp4"
+                    elif filename.lower().endswith((".mp3", ".mpeg")):
+                        content_type = "audio/mpeg"
+                    else:
+                        content_type = "audio/webm"
+                    ct_base = content_type
             allowed = (
                 (kind == ClientRequestAttachment.Kind.IMAGE and ct_base in ALLOWED_IMAGE_TYPES)
-                or (kind == ClientRequestAttachment.Kind.AUDIO and ct_base in ALLOWED_AUDIO_TYPES)
+                or (kind == ClientRequestAttachment.Kind.AUDIO and (
+                    ct_base in ALLOWED_AUDIO_TYPES or ct_base.startswith("audio/")
+                ))
                 or (
                     kind == ClientRequestAttachment.Kind.FILE
                     and (ct_base in ALLOWED_FILE_TYPES or ct_base.startswith("text/"))
@@ -230,6 +248,18 @@ class ClientRequestPublicCreateView(APIView):
                     guessed, _ = mimetypes.guess_type(filename)
                     content_type = guessed or "application/octet-stream"
                 kind = _guess_kind(content_type, filename)
+                ct_base = content_type.split(";")[0].strip().lower()
+                if kind == ClientRequestAttachment.Kind.AUDIO and (
+                    ct_base.startswith("video/") or ct_base in {"application/octet-stream", ""}
+                ):
+                    if filename.lower().endswith(".ogg"):
+                        content_type = "audio/ogg"
+                    elif filename.lower().endswith((".m4a", ".mp4")):
+                        content_type = "audio/mp4"
+                    elif filename.lower().endswith((".mp3", ".mpeg")):
+                        content_type = "audio/mpeg"
+                    else:
+                        content_type = "audio/webm"
                 ClientRequestAttachment.objects.create(
                     client_request=item,
                     kind=kind,

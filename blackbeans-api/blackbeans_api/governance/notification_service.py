@@ -237,6 +237,22 @@ def parse_mentioned_users(content: str) -> list[User]:
         query = Q(username__iexact=token) | Q(email__iexact=token)
         if "@" in token:
             query = Q(email__iexact=token)
+        else:
+            # TipTap / cache as vezes usa parte local do e-mail (colaborador.demo)
+            # ou username com underscore (colaborador_demo).
+            query = (
+                query
+                | Q(email__iexact=f"{token}@blackbeans.local")
+                | Q(email__istartswith=f"{token}@")
+            )
+            alt = token.replace(".", "_")
+            if alt != token:
+                query = query | Q(username__iexact=alt)
+            alt2 = token.replace("_", ".")
+            if alt2 != token:
+                query = query | Q(username__iexact=alt2) | Q(email__istartswith=f"{alt2}@")
+        if token.isdigit():
+            query = query | Q(pk=int(token))
         for user in User.objects.filter(query, is_active=True):
             if user.pk in seen:
                 continue

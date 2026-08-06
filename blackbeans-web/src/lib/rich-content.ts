@@ -136,22 +136,34 @@ export function toEditorHtml(content: string | null | undefined): string {
   return legacyMarkdownToHtml(raw);
 }
 
-/** Reescreve src absolutos de /media para path relativo (persistencia). */
+/** Reescreve src/href absolutos de /media (e paths de disco) para path relativo. */
 export function normalizeHtmlMediaPaths(html: string): string {
-  return String(html ?? "").replace(
-    /\bsrc=(["'])(https?:\/\/[^"']+\/media\/[^"']+)\1/gi,
-    (_m, quote: string, url: string) => {
+  const rewrite = (url: string): string => {
+    const raw = String(url ?? "").trim();
+    if (!raw) return raw;
+    const idx = raw.indexOf("/media/");
+    if (idx >= 0) {
       try {
-        const parsed = new URL(url);
+        const parsed = new URL(raw.startsWith("http") ? raw : `http://local${raw.slice(idx)}`);
         if (parsed.pathname.startsWith("/media/")) {
-          return `src=${quote}${parsed.pathname}${parsed.search}${quote}`;
+          return `${parsed.pathname}${parsed.search}`;
         }
       } catch {
-        // keep
+        return raw.slice(idx);
       }
-      return _m;
-    },
-  );
+      return raw.slice(idx);
+    }
+    return raw;
+  };
+  return String(html ?? "")
+    .replace(/\bsrc=(["'])([^"']+)\1/gi, (_m, quote: string, url: string) => {
+      const next = rewrite(url);
+      return next !== url ? `src=${quote}${next}${quote}` : _m;
+    })
+    .replace(/\bhref=(["'])([^"']+)\1/gi, (_m, quote: string, url: string) => {
+      const next = rewrite(url);
+      return next !== url ? `href=${quote}${next}${quote}` : _m;
+    });
 }
 
 const ALLOWED_TAGS = new Set([

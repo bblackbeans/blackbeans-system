@@ -3,7 +3,7 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Modal } from "antd";
 import { toBrowserMediaSrc } from "@/lib/media";
-import { looksLikeHtml, sanitizeRichHtml, toEditorHtml } from "@/lib/rich-content";
+import { looksLikeHtml, normalizeHtmlMediaPaths, sanitizeRichHtml, toEditorHtml } from "@/lib/rich-content";
 
 type Props = {
   html: string;
@@ -26,7 +26,7 @@ export function RichHtmlView({ html, className }: Props) {
   const mounted = useIsClient();
 
   const safe = useMemo(() => {
-    const normalized = toEditorHtml(html);
+    const normalized = normalizeHtmlMediaPaths(toEditorHtml(html));
     return sanitizeRichHtml(normalized);
   }, [html]);
 

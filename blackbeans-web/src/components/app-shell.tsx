@@ -40,6 +40,7 @@ import {
   Card,
   Checkbox,
   Col,
+  DatePicker,
   Divider,
   Drawer,
   Dropdown,
@@ -62,6 +63,7 @@ import {
   Steps,
   Tabs,
   Tag,
+  TimePicker,
   Typography,
   Upload,
   message,
@@ -69,10 +71,12 @@ import {
   Tooltip,
   Image as AntImage,
 } from "antd";
+import type { FormInstance } from "antd/es/form";
 import type { SelectProps } from "antd/es/select";
 import type { MenuProps } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
 import type { ReactElement, ReactNode } from "react";
+import dayjs, { type Dayjs } from "dayjs";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -909,6 +913,105 @@ function fromDatetimeLocalValue(local: string | Date | null | undefined): string
   return date.toISOString();
 }
 
+/** Junta dia + horario (estilo Monday) em ISO UTC. */
+function combineSessionDateTime(date: Dayjs | null | undefined, time: Dayjs | null | undefined): string | null {
+  if (!date || !time || !date.isValid() || !time.isValid()) return null;
+  return date
+    .hour(time.hour())
+    .minute(time.minute())
+    .second(time.second())
+    .millisecond(0)
+    .toDate()
+    .toISOString();
+}
+
+function secondsToClockText(value: number) {
+  const total = Math.max(0, Math.floor(value));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(hours)}h ${pad(minutes)}m ${pad(seconds)}s`;
+}
+
+type TimeSessionFormValues = {
+  session_date?: Dayjs | null;
+  start_time?: Dayjs | null;
+  end_time?: Dayjs | null;
+};
+
+/** Campos Monday-like: calendario + inicio/fim separados + duracao ao vivo. */
+function TimeSessionFields({ form }: { form: FormInstance }) {
+  const sessionDate = Form.useWatch("session_date", form) as Dayjs | null | undefined;
+  const startTime = Form.useWatch("start_time", form) as Dayjs | null | undefined;
+  const endTime = Form.useWatch("end_time", form) as Dayjs | null | undefined;
+  const startedIso = combineSessionDateTime(sessionDate, startTime);
+  const endedIso = combineSessionDateTime(sessionDate, endTime);
+  let durationLabel = "—";
+  if (startedIso && endedIso) {
+    const secs = Math.floor((new Date(endedIso).getTime() - new Date(startedIso).getTime()) / 1000);
+    durationLabel = secs > 0 ? secondsToClockText(secs) : "Fim deve ser depois do inicio";
+  }
+  return (
+    <>
+      <Form.Item name="session_date" label="Dia" rules={[{ required: true, message: "Informe o dia." }]}>
+        <DatePicker style={{ width: "100%" }} format="DD/MM/YYYY" allowClear={false} placeholder="Selecione o dia" />
+      </Form.Item>
+      <Row gutter={12}>
+        <Col span={12}>
+          <Form.Item
+            name="start_time"
+            label="Comecar em"
+            rules={[{ required: true, message: "Informe o horario de inicio." }]}
+          >
+            <TimePicker
+              style={{ width: "100%" }}
+              format="HH:mm"
+              allowClear={false}
+              needConfirm={false}
+              placeholder="Inicio"
+              showNow={false}
+            />
+          </Form.Item>
+        </Col>
+        <Col span={12}>
+          <Form.Item
+            name="end_time"
+            label="Terminar em"
+            rules={[{ required: true, message: "Informe o horario de fim." }]}
+          >
+            <TimePicker
+              style={{ width: "100%" }}
+              format="HH:mm"
+              allowClear={false}
+              needConfirm={false}
+              placeholder="Fim"
+              showNow={false}
+            />
+          </Form.Item>
+        </Col>
+      </Row>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 8,
+          padding: "10px 12px",
+          borderRadius: 8,
+          border: "1px solid var(--ant-color-border-secondary, rgba(255,255,255,0.12))",
+          background: "var(--ant-color-fill-quaternary, rgba(255,255,255,0.04))",
+        }}
+      >
+        <Typography.Text type="secondary">Duracao nesta tarefa</Typography.Text>
+        <Typography.Text strong style={{ fontVariantNumeric: "tabular-nums" }}>
+          {durationLabel}
+        </Typography.Text>
+      </div>
+    </>
+  );
+}
+
 type MentionOption = { value: string; label: ReactNode };
 
 /** Descricao: leitura HTML + composer TipTap (rascunho ate Salvar do drawer). */
@@ -1531,9 +1634,16 @@ function renderCommentAttachments(attachments: TaskCommentAttachment[] | undefin
         </AntImage.PreviewGroup>
       ) : null}
       {otherFiles.map((file) => {
-        const href = resolveMediaUrl(file.url);
+        const href = toBrowserMediaSrc(file.url) || resolveMediaUrl(file.url);
         return (
-          <Button key={file.id} size="small" icon={<PaperClipOutlined />} href={href} target={href ? "_blank" : undefined}>
+          <Button
+            key={file.id}
+            size="small"
+            icon={<PaperClipOutlined />}
+            href={href || undefined}
+            target={href ? "_blank" : undefined}
+            rel={href ? "noreferrer noopener" : undefined}
+          >
             {file.filename}
           </Button>
         );
@@ -1947,6 +2057,7 @@ export function AppShell() {
   const [taskDetailsForm] = Form.useForm();
   const [taskCommentDraft, setTaskCommentDraft] = useState("");
   const [taskCommentFiles, setTaskCommentFiles] = useState<UploadFile[]>([]);
+  const [taskCommentEditFiles, setTaskCommentEditFiles] = useState<UploadFile[]>([]);
   const [taskCommentReplyTo, setTaskCommentReplyTo] = useState<TaskCommentItem | null>(null);
   const [taskCommentEditingId, setTaskCommentEditingId] = useState<string | null>(null);
   const [taskCommentEditingContent, setTaskCommentEditingContent] = useState("");
@@ -2088,6 +2199,9 @@ export function AppShell() {
   const [myWorkDateTo, setMyWorkDateTo] = useState<string>("");
   const [manualTimeModalOpen, setManualTimeModalOpen] = useState(false);
   const [manualTimeForm] = Form.useForm();
+  const [editTimeLogModalOpen, setEditTimeLogModalOpen] = useState(false);
+  const [editTimeLogTarget, setEditTimeLogTarget] = useState<TimeLog | null>(null);
+  const [editTimeLogForm] = Form.useForm();
   const [passwordChangeForm] = Form.useForm();
   const [bbThemeMode, setBbThemeMode] = useState<"light" | "dark">("dark");
   const { token: antToken } = theme.useToken();
@@ -2342,9 +2456,13 @@ export function AppShell() {
     [resolveStatusMeta, statusOptions],
   );
 
-  const renderTaskTitleCell = useCallback((value: string, record: TaskItem & { children?: TaskItem[] }) => {
+  const renderTaskTitleCell = useCallback((value: string, record: TaskItem & { children?: TaskItem[]; subRows?: TaskItem[] }) => {
     const isSub = Boolean(record.parent_id);
-    const childrenCount = Array.isArray(record.children) ? record.children.length : 0;
+    const childrenCount = Array.isArray(record.subRows)
+      ? record.subRows.length
+      : Array.isArray(record.children)
+        ? record.children.length
+        : 0;
     return (
       <div className="bb-task-title-cell" style={{ paddingLeft: isSub ? 8 : 0 }}>
         {isSub ? <Tag>sub</Tag> : null}
@@ -2505,7 +2623,7 @@ export function AppShell() {
     });
   }, [taskSearchFilter, taskStatusFilter, tasks]);
   const tasksTabSource = useMemo<TaskItem[]>(() => (isAdmin ? allTasks : tasks), [allTasks, isAdmin, tasks]);
-  type TasksTabRow = TaskItem & { children?: TasksTabRow[] };
+  type TasksTabRow = TaskItem & { subRows?: TasksTabRow[] };
 
   const matchesTasksTabFilters = useCallback(
     (task: TaskItem, opts?: { skipSearch?: boolean }) => {
@@ -2667,7 +2785,7 @@ export function AppShell() {
       seenRoots.add(rootId);
       roots.push({
         ...root,
-        children: kids.length > 0 ? kids : undefined,
+        subRows: kids.length > 0 ? kids : undefined,
         subtasks_count: kids.length > 0 ? kids.length : root.subtasks_count,
       });
     };
@@ -2841,7 +2959,7 @@ export function AppShell() {
     ],
   );
 
-  type MyWorkTaskRow = TaskItem & { children?: MyWorkTaskRow[] };
+  type MyWorkTaskRow = TaskItem & { subRows?: MyWorkTaskRow[]; children?: MyWorkTaskRow[] };
 
   const myWorkFilteredTasks = useMemo(() => {
     const matching = tasks.filter((task) => matchesMyWorkTaskFilters(task));
@@ -2869,7 +2987,8 @@ export function AppShell() {
       seenRoots.add(rootId);
       roots.push({
         ...root,
-        children: kids.length > 0 ? kids : undefined,
+        // subRows (nao children): evita modo arvore do Ant Table; expansao usa expandedRowRender.
+        subRows: kids.length > 0 ? kids : undefined,
       });
     };
 
@@ -2894,13 +3013,16 @@ export function AppShell() {
     if (activeKey === "my-work") {
       pageSlice(myWorkFilteredTasks, myWorkTablePage).forEach((t) => {
         map.set(t.id, t);
-        (t.children ?? []).forEach((child) => map.set(child.id, child));
+        (t.children ?? t.subRows ?? []).forEach((child) => map.set(child.id, child));
+      });
+      expandedMyWorkTaskKeys.forEach((parentId) => {
+        (subtasksByParentId[parentId] ?? []).forEach((child) => map.set(child.id, child));
       });
     }
     if ((activeKey === "dashboard" || activeKey === "tasks") && isAdmin) {
       pageSlice(tasksTabFiltered, adminTasksTablePage).forEach((t) => {
         map.set(t.id, t);
-        (t.children ?? []).forEach((child) => map.set(child.id, child));
+        (t.subRows ?? []).forEach((child) => map.set(child.id, child));
       });
       expandedAdminTasksKeys.forEach((parentId) => {
         const kids = subtasksByParentId[parentId] ?? [];
@@ -2928,6 +3050,7 @@ export function AppShell() {
     boardListTasksByBoardId,
     boards,
     expandedAdminTasksKeys,
+    expandedMyWorkTaskKeys,
     expandedTaskKeysByBoardId,
     isAdmin,
     myWorkFilteredTasks,
@@ -5018,59 +5141,116 @@ export function AppShell() {
               style: { cursor: "pointer" },
             })}
             columns={[
-              { title: "Subtarefa", dataIndex: "title", ellipsis: true },
+              {
+                title: "Subtarefa",
+                dataIndex: "title",
+                ellipsis: true,
+                render: (value: string, subtask: TaskItem) => renderTaskTitleCell(value, subtask),
+              },
               assigneeColumn,
               {
                 title: "Status",
                 dataIndex: "status",
                 width: 120,
-                render: (value: string) => renderStatusTag(value),
+                render: (_: string, subtask: TaskItem) => renderEditableStatusTag(subtask),
               },
               {
                 title: "Prioridade",
                 dataIndex: "priority",
-                width: 120,
+                width: 110,
                 render: (value: string) => renderPriorityTag(value),
               },
               {
-                title: "Prazo",
-                dataIndex: "end_date",
-                width: 140,
+                title: "Prazo inicio",
+                dataIndex: "start_date",
+                width: 120,
                 render: (value: string | null) => formatDateOnly(value),
               },
               {
+                title: "Prazo fim",
+                dataIndex: "end_date",
+                width: 120,
+                render: (value: string | null) => formatDateOnly(value),
+              },
+              {
+                title: "Tempo",
+                width: 110,
+                render: (subtask: TaskItem) => {
+                  const row = taskTimeSummaryByTaskId[subtask.id];
+                  if (!row) {
+                    return <Typography.Text type="secondary">—</Typography.Text>;
+                  }
+                  const now = taskTimeTickMs || Date.now();
+                  const display = liveTotalSecondsFromSummary(
+                    row.total_seconds,
+                    row.logs,
+                    row.fetchedAtMs,
+                    now,
+                    currentUserId,
+                  );
+                  const active =
+                    resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
+                  return (
+                    <Space size={4} style={{ whiteSpace: "nowrap" }}>
+                      <Typography.Text style={{ whiteSpace: "nowrap" }}>{secondsToText(display)}</Typography.Text>
+                      {active ? <Tag color="processing" style={{ marginInlineEnd: 0 }}>Contando</Tag> : null}
+                    </Space>
+                  );
+                },
+              },
+              {
                 title: "Acoes",
-                width: 180,
-                render: (subtask: TaskItem) => (
-                  <Space size="small" onClick={(event) => event.stopPropagation()}>
-                    <TipButton
-                      tip={HELP_TIPS.editar}
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => openTask(subtask).catch(() => undefined)}
-                    >
-                      Editar
-                    </TipButton>
-                    <TipButton
-                      tip={HELP_TIPS.excluir}
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() =>
-                        openDeleteConfirmModal({
-                          title: "Excluir esta subtarefa?",
-                          onConfirm: async () => {
-                            const ok = await deleteTaskById(subtask.id);
-                            if (!ok) throw new Error("subtask_delete_failed");
-                            await refreshTaskSubtasks(record.id);
-                          },
-                        })
-                      }
-                    >
-                      Excluir
-                    </TipButton>
-                  </Space>
-                ),
+                width: 140,
+                render: (subtask: TaskItem) => {
+                  const row = taskTimeSummaryByTaskId[subtask.id];
+                  const active =
+                    row != null &&
+                    resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
+                  const paused =
+                    row != null &&
+                    resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
+                  return (
+                    <Space size={4} onClick={(event) => event.stopPropagation()}>
+                      {active ? (
+                        <TipButton
+                          tip={HELP_TIPS.timerPausar}
+                          size="small"
+                          icon={<PauseCircleOutlined />}
+                          onClick={() => void quickTaskTimeAction(subtask, "pause")}
+                        />
+                      ) : (
+                        <TipButton
+                          tip={HELP_TIPS.timerIniciar}
+                          size="small"
+                          icon={<PlayCircleOutlined />}
+                          onClick={() => void quickTaskTimeAction(subtask, paused ? "resume" : "start")}
+                        />
+                      )}
+                      <TipButton
+                        tip={HELP_TIPS.editar}
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => openTask(subtask).catch(() => undefined)}
+                      />
+                      <TipButton
+                        tip={HELP_TIPS.excluir}
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() =>
+                          openDeleteConfirmModal({
+                            title: "Excluir esta subtarefa?",
+                            onConfirm: async () => {
+                              const ok = await deleteTaskById(subtask.id);
+                              if (!ok) throw new Error("subtask_delete_failed");
+                              await refreshTaskSubtasks(record.id);
+                            },
+                          })
+                        }
+                      />
+                    </Space>
+                  );
+                },
               },
             ]}
           />
@@ -5165,15 +5345,27 @@ export function AppShell() {
     await refreshTaskTimeSummary(task.id);
   }
 
-  async function submitManualTimeLog(values: {
-    started_at?: string;
-    ended_at?: string;
-  }) {
+  function openManualTimeModal() {
+    const end = dayjs().second(0).millisecond(0);
+    const start = end.subtract(1, "hour");
+    manualTimeForm.setFieldsValue({
+      session_date: end,
+      start_time: start,
+      end_time: end,
+    });
+    setManualTimeModalOpen(true);
+  }
+
+  async function submitManualTimeLog(values: TimeSessionFormValues) {
     if (!selectedTask) return;
-    const startedAt = fromDatetimeLocalValue(values.started_at);
-    const endedAt = fromDatetimeLocalValue(values.ended_at);
+    const startedAt = combineSessionDateTime(values.session_date, values.start_time);
+    const endedAt = combineSessionDateTime(values.session_date, values.end_time);
     if (!startedAt || !endedAt) {
-      apiMessage.error("Informe data/hora de inicio e fim.");
+      apiMessage.error("Informe dia, inicio e fim.");
+      return;
+    }
+    if (new Date(endedAt).getTime() <= new Date(startedAt).getTime()) {
+      apiMessage.error("O fim deve ser depois do inicio.");
       return;
     }
     const response = await apiRequest(`/tasks/${selectedTask.id}/time/manual`, {
@@ -5188,6 +5380,60 @@ export function AppShell() {
     apiMessage.success("Sessao manual adicionada.");
     setManualTimeModalOpen(false);
     manualTimeForm.resetFields();
+    await refreshTaskTimeSummary(selectedTask.id);
+  }
+
+  function openEditTimeLogModal(log: TimeLog) {
+    setEditTimeLogTarget(log);
+    const start = dayjs(log.started_at);
+    const end = log.ended_at ? dayjs(log.ended_at) : dayjs();
+    editTimeLogForm.setFieldsValue({
+      session_date: start.isValid() ? start : dayjs(),
+      start_time: start.isValid() ? start : dayjs(),
+      end_time: end.isValid() ? end : dayjs(),
+    });
+    setEditTimeLogModalOpen(true);
+  }
+
+  async function submitEditTimeLog(values: TimeSessionFormValues) {
+    if (!editTimeLogTarget || !selectedTask) return;
+    const startedAt = combineSessionDateTime(values.session_date, values.start_time);
+    const endedAt = combineSessionDateTime(values.session_date, values.end_time);
+    if (!startedAt || !endedAt) {
+      apiMessage.error("Informe dia, inicio e fim.");
+      return;
+    }
+    if (new Date(endedAt).getTime() <= new Date(startedAt).getTime()) {
+      apiMessage.error("O fim deve ser depois do inicio.");
+      return;
+    }
+    const response = await apiRequest(`/time-logs/${editTimeLogTarget.id}`, {
+      method: "PATCH",
+      token,
+      body: { started_at: startedAt, ended_at: endedAt },
+    });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao editar registro de tempo.");
+      return;
+    }
+    apiMessage.success("Registro de tempo atualizado.");
+    setEditTimeLogModalOpen(false);
+    setEditTimeLogTarget(null);
+    editTimeLogForm.resetFields();
+    await refreshTaskTimeSummary(selectedTask.id);
+  }
+
+  async function deleteTimeLogFromDrawer(log: TimeLog) {
+    if (!selectedTask) return;
+    const response = await apiRequest(`/time-logs/${log.id}`, {
+      method: "DELETE",
+      token,
+    });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao remover registro.");
+      return;
+    }
+    apiMessage.success("Registro removido.");
     await refreshTaskTimeSummary(selectedTask.id);
   }
 
@@ -5232,20 +5478,26 @@ export function AppShell() {
 
   const mondayMentionOptions: MondayMentionOption[] = useMemo(() => {
     const byUsername = new Map<string, MondayMentionOption>();
-    const push = (u: { username?: string; name?: string; email?: string }) => {
-      const username = String(u.username ?? "").trim();
+    const push = (u: { username?: string; name?: string; email?: string; id?: number }) => {
+      const email = String(u.email ?? "").trim();
+      const fromAssignee =
+        u.id != null ? taskAssigneePickList.find((row) => row.id === Number(u.id)) : undefined;
+      const username = String(
+        u.username || fromAssignee?.username || email.split("@")[0] || "",
+      ).trim();
       if (!username) return;
       const key = username.toLowerCase();
       if (byUsername.has(key)) return;
       byUsername.set(key, {
         id: username,
-        label: String(u.name || u.email || username),
+        label: String(u.name || fromAssignee?.name || email || username),
       });
     };
     taskAssigneePickList.forEach(push);
     adminUsersCache.forEach((u) =>
       push({
-        username: (u.email || "").split("@")[0] || `user${u.id}`,
+        id: u.id,
+        username: taskAssigneePickList.find((row) => row.id === u.id)?.username,
         name: u.name,
         email: u.email,
       }),
@@ -5381,7 +5633,7 @@ export function AppShell() {
   async function updateTaskComment(taskId: string, commentId: string, rawContent: string): Promise<boolean> {
     if (commentMutationInFlightRef.current) return false;
     const content = isEmptyRichHtml(rawContent) ? "" : rawContent.trim();
-    if (!content) return false;
+    if (!content && taskCommentEditFiles.length === 0) return false;
     commentMutationInFlightRef.current = true;
     try {
       const original = taskComments.find((item) => item.id === commentId);
@@ -5391,7 +5643,8 @@ export function AppShell() {
         const full = taskComments.find((item) => item.id.startsWith(normalizedReplyTo ?? ""));
         if (full) normalizedReplyTo = full.id;
       }
-      const payload = normalizedReplyTo ? `[reply_to:${normalizedReplyTo}] ${content}` : content;
+      const bodyContent = content || originalMeta.cleanContent || "Anexo(s)";
+      const payload = normalizedReplyTo ? `[reply_to:${normalizedReplyTo}] ${bodyContent}` : bodyContent;
       const response = await apiRequest<{ comment: TaskCommentItem }>(`/tasks/${taskId}/comments/${commentId}`, {
         method: "PATCH",
         token,
@@ -5401,8 +5654,12 @@ export function AppShell() {
         apiMessage.error(response.error?.message ?? "Falha ao editar comentario.");
         return false;
       }
+      if (taskCommentEditFiles.length > 0) {
+        await uploadCommentAttachments(taskId, commentId, taskCommentEditFiles);
+      }
       setTaskCommentEditingId(null);
       setTaskCommentEditingContent("");
+      setTaskCommentEditFiles([]);
       await refreshTaskComments(taskId);
       apiMessage.success("Comentario atualizado.");
       return true;
@@ -5423,7 +5680,7 @@ export function AppShell() {
     apiMessage.success("Comentario excluido.");
   }
   async function quickChangeTaskStatus(task: TaskItem, nextStatus: string) {
-    const response = await apiRequest(`/tasks/${task.id}/status`, {
+    const response = await apiRequest<{ task?: TaskItem }>(`/tasks/${task.id}/status`, {
       method: "PATCH",
       token,
       body: { status: nextStatus },
@@ -5433,9 +5690,13 @@ export function AppShell() {
       return;
     }
     apiMessage.success("Status atualizado.");
+    const updated = response.data?.task;
+    if (updated) applyUpdatedTaskLocally(updated);
     await fetchTasks();
+    if (isAdmin) await fetchAllTasks();
+    await refreshBoardViewsForProject(selectedProjectId);
     if (selectedTask?.id === task.id) {
-      await openTask({ ...task, status: nextStatus });
+      await openTask(updated ?? { ...task, status: nextStatus });
     }
   }
 
@@ -6629,14 +6890,22 @@ export function AppShell() {
                                   : prev.filter((key) => key !== record.id),
                               );
                             },
-                            // Subtarefas atribuidas a voce vem em `children` (arvore da tabela).
-                            rowExpandable: (record) => Boolean(record.children && record.children.length > 0),
+                            rowExpandable: (record) =>
+                              Boolean(record.subRows && record.subRows.length > 0) ||
+                              (!record.parent_id && (record.subtasks_count ?? 0) > 0),
+                            expandedRowRender: (record) => {
+                              if (record.subRows && record.subRows.length > 0) {
+                                return renderExpandableSubtasks(record, true, record.subRows);
+                              }
+                              return renderExpandableSubtasks(record, true);
+                            },
                           }}
                           onRow={(record) => ({
                             onClick: () => openTask(record),
                             style: { cursor: "pointer" },
                           })}
                           columns={[
+                            Table.EXPAND_COLUMN,
                             {
                               title: "Titulo",
                               dataIndex: "title",
@@ -7288,17 +7557,17 @@ export function AppShell() {
                               ? Array.from(new Set([...prev, record.id]))
                               : prev.filter((key) => key !== record.id),
                           );
-                          // Se a arvore do filtro ja trouxe children, nao precisa refetch.
-                          if (expanded && !(record.children && record.children.length > 0)) {
+                          // Se a arvore do filtro ja trouxe subRows, nao precisa refetch.
+                          if (expanded && !(record.subRows && record.subRows.length > 0)) {
                             void refreshTaskSubtasks(record.id);
                           }
                         },
                         rowExpandable: (record) =>
-                          Boolean(record.children && record.children.length > 0) ||
+                          Boolean(record.subRows && record.subRows.length > 0) ||
                           (!record.parent_id && (record.subtasks_count ?? 0) > 0),
                         expandedRowRender: (record) => {
-                          if (record.children && record.children.length > 0) {
-                            return renderExpandableSubtasks(record, false, record.children);
+                          if (record.subRows && record.subRows.length > 0) {
+                            return renderExpandableSubtasks(record, false, record.subRows);
                           }
                           const filterAssignees =
                             taskAssigneeFilterMode === "include" && taskAssigneeFilter.length > 0
@@ -7312,6 +7581,7 @@ export function AppShell() {
                         style: { cursor: "pointer" },
                       })}
                       columns={[
+                        Table.EXPAND_COLUMN,
                         {
                           title: "Titulo",
                           dataIndex: "title",
@@ -11583,6 +11853,7 @@ export function AppShell() {
                                         style: { cursor: "pointer" },
                                       })}
                                       columns={[
+                                        Table.EXPAND_COLUMN,
                                         {
                                           title: "Titulo",
                                           dataIndex: "title",
@@ -13616,8 +13887,7 @@ export function AppShell() {
                 <Button
                   icon={<PlusOutlined />}
                   onClick={() => {
-                    manualTimeForm.resetFields();
-                    setManualTimeModalOpen(true);
+                    openManualTimeModal();
                   }}
                 >
                   Tempo manual
@@ -13805,13 +14075,80 @@ export function AppShell() {
                         title: "Status",
                         dataIndex: "status",
                         width: 110,
-                        render: (value: string) => renderStatusTag(value),
+                        render: (_: string, subtask: TaskItem) => renderEditableStatusTag(subtask),
                       },
                       {
                         title: "Prioridade",
                         dataIndex: "priority",
                         width: 110,
                         render: (value: string) => renderPriorityTag(value),
+                      },
+                      {
+                        title: "Prazo inicio",
+                        dataIndex: "start_date",
+                        width: 120,
+                        render: (value: string | null) => formatDateOnly(value),
+                      },
+                      {
+                        title: "Prazo fim",
+                        dataIndex: "end_date",
+                        width: 120,
+                        render: (value: string | null) => formatDateOnly(value),
+                      },
+                      {
+                        title: "Tempo",
+                        width: 100,
+                        render: (subtask: TaskItem) => {
+                          const row = taskTimeSummaryByTaskId[subtask.id];
+                          if (!row) return <Typography.Text type="secondary">—</Typography.Text>;
+                          const now = taskTimeTickMs || Date.now();
+                          const display = liveTotalSecondsFromSummary(
+                            row.total_seconds,
+                            row.logs,
+                            row.fetchedAtMs,
+                            now,
+                            currentUserId,
+                          );
+                          return <Typography.Text>{secondsToText(display)}</Typography.Text>;
+                        },
+                      },
+                      {
+                        title: "Acoes",
+                        width: 120,
+                        render: (subtask: TaskItem) => {
+                          const row = taskTimeSummaryByTaskId[subtask.id];
+                          const active =
+                            row != null &&
+                            resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
+                          const paused =
+                            row != null &&
+                            resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
+                          return (
+                            <Space size={4} onClick={(event) => event.stopPropagation()}>
+                              {active ? (
+                                <TipButton
+                                  tip={HELP_TIPS.timerPausar}
+                                  size="small"
+                                  icon={<PauseCircleOutlined />}
+                                  onClick={() => void quickTaskTimeAction(subtask, "pause")}
+                                />
+                              ) : (
+                                <TipButton
+                                  tip={HELP_TIPS.timerIniciar}
+                                  size="small"
+                                  icon={<PlayCircleOutlined />}
+                                  onClick={() => void quickTaskTimeAction(subtask, paused ? "resume" : "start")}
+                                />
+                              )}
+                              <TipButton
+                                tip={HELP_TIPS.editar}
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => openTask(subtask).catch(() => undefined)}
+                              />
+                            </Space>
+                          );
+                        },
                       },
                     ]}
                   />
@@ -13837,28 +14174,69 @@ export function AppShell() {
                           size="small"
                           icon={<PlusOutlined />}
                           onClick={() => {
-                            manualTimeForm.resetFields();
-                            setManualTimeModalOpen(true);
+                            openManualTimeModal();
                           }}
                         >
                           Adicionar sessao
                         </Button>
                       </Space>
                       <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                        {taskSummary.logs.map((log) => (
-                          <Card key={log.id} size="small">
-                            <Space orientation="vertical" size={0}>
-                              <Typography.Text style={log.is_manual ? { color: "#cf1322" } : undefined}>
-                                {log.user_name ? `${log.user_name} · ` : ""}
-                                {formatTimeLogStatus(log.status)} - {secondsToText(log.total_seconds)}
-                                {log.is_manual ? " (manual)" : ""}
-                              </Typography.Text>
-                              <Typography.Text type="secondary">
-                                {formatDate(log.started_at)} ate {formatDate(log.ended_at)}
-                              </Typography.Text>
-                            </Space>
-                          </Card>
-                        ))}
+                        {taskSummary.logs.length === 0 ? (
+                          <Typography.Text type="secondary">Nenhum registro ainda.</Typography.Text>
+                        ) : null}
+                        {taskSummary.logs.map((log) => {
+                          const canEdit =
+                            isAdmin || (currentUserId != null && Number(log.user_id) === Number(currentUserId));
+                          if (log.status === "deleted") return null;
+                          return (
+                            <Card key={log.id} size="small">
+                              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+                                <Space orientation="vertical" size={0} style={{ flex: 1, minWidth: 0 }}>
+                                  <Typography.Text style={log.is_manual ? { color: "#cf1322" } : undefined}>
+                                    {log.user_name ? `${log.user_name} · ` : ""}
+                                    {formatTimeLogStatus(log.status)} - {secondsToText(log.total_seconds)}
+                                    {log.is_manual
+                                      ? log.source === "edited"
+                                        ? " (editado)"
+                                        : " (manual)"
+                                      : ""}
+                                  </Typography.Text>
+                                  <Typography.Text type="secondary">
+                                    {formatDate(log.started_at)} ate {formatDate(log.ended_at)}
+                                  </Typography.Text>
+                                </Space>
+                                {canEdit ? (
+                                  <Space size={4} wrap>
+                                    <TipButton
+                                      tip="Ajustar inicio/fim deste registro (ex.: play esquecido ligado)"
+                                      size="small"
+                                      icon={<EditOutlined />}
+                                      onClick={() => openEditTimeLogModal(log)}
+                                    >
+                                      Editar
+                                    </TipButton>
+                                    <TipButton
+                                      tip="Remover este registro"
+                                      size="small"
+                                      danger
+                                      icon={<DeleteOutlined />}
+                                      onClick={() =>
+                                        openDeleteConfirmModal({
+                                          title: "Remover este registro de tempo?",
+                                          onConfirm: async () => {
+                                            await deleteTimeLogFromDrawer(log);
+                                          },
+                                        })
+                                      }
+                                    >
+                                      Excluir
+                                    </TipButton>
+                                  </Space>
+                                ) : null}
+                              </Space>
+                            </Card>
+                          );
+                        })}
                       </Space>
                     </div>
                   ),
@@ -13937,7 +14315,7 @@ export function AppShell() {
                               beforeUpload={() => false}
                               fileList={taskCommentFiles}
                               onChange={({ fileList }) => setTaskCommentFiles(fileList)}
-                              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,image/*"
+                              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,.html,.htm,image/*"
                             />
                           ) : null}
                           <Button
@@ -14018,6 +14396,7 @@ export function AppShell() {
                                           onClick={() => {
                                             setTaskCommentEditingId(rootComment.id);
                                             setTaskCommentEditingContent(root.cleanContent);
+                                            setTaskCommentEditFiles([]);
                                           }}
                                         >
                                           Editar
@@ -14042,23 +14421,43 @@ export function AppShell() {
                                 </Space>
                                 {rootIsEditing ? (
                                   <Space orientation="vertical" style={{ width: "100%" }}>
+                                    {renderCommentAttachments(rootComment.attachments)}
                                     <MondayComposer
                                       mode="comment"
                                       value={taskCommentEditingContent}
                                       onChange={(html) => setTaskCommentEditingContent(html)}
                                       mentionOptions={mondayMentionOptions}
                                       onUploadImage={uploadImageForComposer}
+                                      onAttachFiles={(files) => {
+                                        const next: UploadFile[] = files.map((file, index) => ({
+                                          uid: `bb-edit-doc-${Date.now()}-${index}-${file.name}`,
+                                          name: file.name,
+                                          status: "done",
+                                          originFileObj: file as UploadFile["originFileObj"],
+                                        }));
+                                        setTaskCommentEditFiles((prev) => [...prev, ...next]);
+                                      }}
                                       placeholder="Edite a atualizacao... Digite @ para mencionar"
                                       submitLabel="Salvar"
                                       onSubmit={(html) =>
                                         updateTaskComment(selectedTask.id, rootComment.id, html)
                                       }
                                     />
+                                    {taskCommentEditFiles.length > 0 ? (
+                                      <Upload
+                                        multiple
+                                        beforeUpload={() => false}
+                                        fileList={taskCommentEditFiles}
+                                        onChange={({ fileList }) => setTaskCommentEditFiles(fileList)}
+                                        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,.html,.htm,image/*"
+                                      />
+                                    ) : null}
                                     <Button
                                       size="small"
                                       onClick={() => {
                                         setTaskCommentEditingId(null);
                                         setTaskCommentEditingContent("");
+                                        setTaskCommentEditFiles([]);
                                       }}
                                     >
                                       Cancelar
@@ -14107,6 +14506,7 @@ export function AppShell() {
                                                   onClick={() => {
                                                     setTaskCommentEditingId(reply.comment.id);
                                                     setTaskCommentEditingContent(reply.cleanContent);
+                                                    setTaskCommentEditFiles([]);
                                                   }}
                                                 >
                                                   Editar
@@ -14131,23 +14531,43 @@ export function AppShell() {
                                         </Space>
                                         {replyIsEditing ? (
                                           <Space orientation="vertical" style={{ width: "100%" }}>
+                                            {renderCommentAttachments(reply.comment.attachments)}
                                             <MondayComposer
                                               mode="comment"
                                               value={taskCommentEditingContent}
                                               onChange={(html) => setTaskCommentEditingContent(html)}
                                               mentionOptions={mondayMentionOptions}
                                               onUploadImage={uploadImageForComposer}
+                                              onAttachFiles={(files) => {
+                                                const next: UploadFile[] = files.map((file, index) => ({
+                                                  uid: `bb-edit-doc-${Date.now()}-${index}-${file.name}`,
+                                                  name: file.name,
+                                                  status: "done",
+                                                  originFileObj: file as UploadFile["originFileObj"],
+                                                }));
+                                                setTaskCommentEditFiles((prev) => [...prev, ...next]);
+                                              }}
                                               placeholder="Edite a resposta... Digite @ para mencionar"
                                               submitLabel="Salvar"
                                               onSubmit={(html) =>
                                                 updateTaskComment(selectedTask.id, reply.comment.id, html)
                                               }
                                             />
+                                            {taskCommentEditFiles.length > 0 ? (
+                                              <Upload
+                                                multiple
+                                                beforeUpload={() => false}
+                                                fileList={taskCommentEditFiles}
+                                                onChange={({ fileList }) => setTaskCommentEditFiles(fileList)}
+                                                accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,.html,.htm,image/*"
+                                              />
+                                            ) : null}
                                             <Button
                                               size="small"
                                               onClick={() => {
                                                 setTaskCommentEditingId(null);
                                                 setTaskCommentEditingContent("");
+                                                setTaskCommentEditFiles([]);
                                               }}
                                             >
                                               Cancelar
@@ -14276,25 +14696,44 @@ export function AppShell() {
           manualTimeForm.resetFields();
         }}
         onOk={() => manualTimeForm.submit()}
-        okText="Salvar sessao"
+        okText="Adicionar sessao"
         cancelText="Cancelar"
         destroyOnHidden={false}
       >
-        <Form layout="vertical" form={manualTimeForm} onFinish={(values) => void submitManualTimeLog(values)}>
-          <Form.Item
-            name="started_at"
-            label="Inicio"
-            rules={[{ required: true, message: "Informe o inicio." }]}
-          >
-            <Input type="datetime-local" />
-          </Form.Item>
-          <Form.Item
-            name="ended_at"
-            label="Fim"
-            rules={[{ required: true, message: "Informe o fim." }]}
-          >
-            <Input type="datetime-local" />
-          </Form.Item>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          Escolha o dia e os horarios de inicio e fim. A duracao e calculada automaticamente.
+        </Typography.Paragraph>
+        <Form
+          layout="vertical"
+          form={manualTimeForm}
+          onFinish={(values) => void submitManualTimeLog(values as TimeSessionFormValues)}
+        >
+          <TimeSessionFields form={manualTimeForm} />
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Atualizar sessao"
+        open={editTimeLogModalOpen}
+        onCancel={() => {
+          setEditTimeLogModalOpen(false);
+          setEditTimeLogTarget(null);
+          editTimeLogForm.resetFields();
+        }}
+        onOk={() => editTimeLogForm.submit()}
+        okText="Atualizar sessao"
+        cancelText="Cancelar"
+        destroyOnHidden={false}
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          Ajuste o dia e os horarios separadamente (ex.: play esquecido ligado). A duracao atualiza ao vivo.
+        </Typography.Paragraph>
+        <Form
+          layout="vertical"
+          form={editTimeLogForm}
+          onFinish={(values) => void submitEditTimeLog(values as TimeSessionFormValues)}
+        >
+          <TimeSessionFields form={editTimeLogForm} />
         </Form>
       </Modal>
 
@@ -14395,10 +14834,36 @@ export function AppShell() {
                       );
                     }
                     if (kind === "audio") {
+                      const audioSrc = toBrowserMediaSrc(String(att.url ?? "")) || url;
+                      const mime = String(att.content_type ?? "").toLowerCase();
+                      const audioType =
+                        mime.startsWith("audio/")
+                          ? mime.split(";")[0]
+                          : mime === "video/webm" || audioSrc.toLowerCase().endsWith(".webm")
+                            ? "audio/webm"
+                            : mime === "video/ogg" || audioSrc.toLowerCase().endsWith(".ogg")
+                              ? "audio/ogg"
+                              : audioSrc.toLowerCase().endsWith(".m4a") || audioSrc.toLowerCase().endsWith(".mp4")
+                                ? "audio/mp4"
+                                : "audio/webm";
                       return (
                         <div key={String(att.id ?? name)}>
-                          <Typography.Text>{name}</Typography.Text>
-                          <audio controls src={url} style={{ display: "block", width: "100%", marginTop: 4 }} />
+                          <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+                            <Typography.Text>{name}</Typography.Text>
+                            <Typography.Link href={audioSrc} target="_blank" rel="noreferrer" download={name}>
+                              Baixar
+                            </Typography.Link>
+                          </Space>
+                          {/* src no elemento + source: melhor compatibilidade de codec no Chrome */}
+                          <audio
+                            key={audioSrc}
+                            controls
+                            preload="auto"
+                            src={audioSrc}
+                            style={{ display: "block", width: "100%", marginTop: 4 }}
+                          >
+                            <source src={audioSrc} type={audioType} />
+                          </audio>
                         </div>
                       );
                     }

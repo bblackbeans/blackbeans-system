@@ -76,7 +76,18 @@ async function proxyMedia(request: NextRequest, path: string[]) {
 
   const headers = new Headers();
   const contentType = response.headers.get("content-type");
-  if (contentType) headers.set("Content-Type", contentType);
+  if (contentType) {
+    // Gravacoes do pedido publico sao audio/webm, mas mimetypes pode marcar video/webm.
+    const pathJoined = path.join("/").toLowerCase();
+    if (
+      (contentType === "video/webm" || contentType === "application/octet-stream") &&
+      (pathJoined.endsWith(".webm") || pathJoined.endsWith(".ogg") || pathJoined.includes("gravacao"))
+    ) {
+      headers.set("Content-Type", pathJoined.endsWith(".ogg") ? "audio/ogg" : "audio/webm");
+    } else {
+      headers.set("Content-Type", contentType);
+    }
+  }
   const contentLength = response.headers.get("content-length");
   if (contentLength) headers.set("Content-Length", contentLength);
   headers.set("Cache-Control", "public, max-age=3600, immutable");

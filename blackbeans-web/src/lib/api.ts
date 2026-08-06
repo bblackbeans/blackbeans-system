@@ -95,6 +95,12 @@ export function resolveMediaUrl(url: string | null | undefined): string | undefi
   // Preview otimista / data URI — nao normalizar como /media.
   if (raw.startsWith("blob:") || raw.startsWith("data:")) return raw;
 
+  // Path absoluto de disco (ex. /app/blackbeans_api/media/...) → /media/...
+  const mediaIdx = raw.indexOf("/media/");
+  if (mediaIdx >= 0) {
+    raw = raw.slice(mediaIdx);
+  }
+
   // URLs absolutas do host interno Docker / API → path /media/...
   try {
     if (/^https?:\/\//i.test(raw)) {
@@ -124,6 +130,16 @@ export function resolveMediaUrl(url: string | null | undefined): string | undefi
   const path = raw.startsWith("/") ? raw : `/${raw}`;
   if (path.startsWith("/media/")) return path;
 
+  // Storage relativo sem /media/
+  if (
+    path.includes("task_attachments/") ||
+    path.includes("client_request_attachments/") ||
+    path.includes("avatars/")
+  ) {
+    const cleaned = path.replace(/^\/+/, "");
+    return `/media/${cleaned}`;
+  }
+
   if (API_BASE_URL.startsWith("http")) {
     try {
       return `${new URL(API_BASE_URL).origin}${path}`;
@@ -148,5 +164,8 @@ export function toStoredMediaPath(url: string | null | undefined): string {
   } catch {
     // ignore
   }
-  return resolved.startsWith("/media/") ? resolved : resolved;
+  if (resolved.startsWith("/media/")) return resolved;
+  const mediaIdx = resolved.indexOf("/media/");
+  if (mediaIdx >= 0) return resolved.slice(mediaIdx);
+  return resolved;
 }
