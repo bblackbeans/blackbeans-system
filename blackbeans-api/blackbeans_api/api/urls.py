@@ -26,6 +26,7 @@ from blackbeans_api.api.clients_views import ClientStatusToggleView
 from blackbeans_api.api.feedback_views import ProblemReportDetailView
 from blackbeans_api.api.feedback_views import ProblemReportFeedbackCreateView
 from blackbeans_api.api.feedback_views import ProblemReportsListView
+from blackbeans_api.api.feedback_views import ProblemReportsSummaryView
 from blackbeans_api.api.bpo_views import ContractCancelView
 from blackbeans_api.api.bpo_views import ContractConfirmView
 from blackbeans_api.api.bpo_views import ContractReactivateView
@@ -89,6 +90,7 @@ from blackbeans_api.api.permissions_views import PermissionConflictResolvePrevie
 from blackbeans_api.api.permissions_views import PermissionConflictResolveView
 from blackbeans_api.api.permissions_views import PermissionsMatrixView
 from blackbeans_api.api.system_views import HealthCheckView
+from blackbeans_api.api.system_views import InfrastructureHealthView
 from blackbeans_api.api.users_views import AdminUserCollaboratorLinkDetailView
 from blackbeans_api.api.users_views import AdminUserCollaboratorLinkView
 from blackbeans_api.api.users_views import AdminUserDetailView
@@ -177,6 +179,7 @@ urlpatterns = [
     path("audit/dashboard", AuditDashboardView.as_view(), name="audit-dashboard"),
     path("audit/logs", AuditLogsView.as_view(), name="audit-logs"),
     path("health", HealthCheckView.as_view(), name="health"),
+    path("health/infrastructure", InfrastructureHealthView.as_view(), name="health-infrastructure"),
     path(
         "me/collaborator-profile",
         MeCollaboratorProfileView.as_view(),
@@ -274,6 +277,7 @@ urlpatterns = [
     ),
     path("users", AdminUserListCreateView.as_view(), name="users-list-create"),
     path("problem-reports/feedback", ProblemReportFeedbackCreateView.as_view(), name="problem-reports-feedback"),
+    path("problem-reports/summary", ProblemReportsSummaryView.as_view(), name="problem-reports-summary"),
     path("problem-reports/<uuid:report_id>", ProblemReportDetailView.as_view(), name="problem-reports-detail"),
     path("problem-reports", ProblemReportsListView.as_view(), name="problem-reports-list"),
 ]
