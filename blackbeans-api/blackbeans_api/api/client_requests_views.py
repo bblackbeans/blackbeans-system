@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from uuid import UUID
 
 from django.db import transaction
@@ -7,6 +8,9 @@ from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
+from rest_framework.parsers import FormParser
+from rest_framework.parsers import JSONParser
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -20,13 +24,96 @@ from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.governance.models import Board
 from blackbeans_api.governance.models import BoardGroup
 from blackbeans_api.governance.models import ClientRequest
+from blackbeans_api.governance.models import ClientRequestAttachment
 from blackbeans_api.governance.models import ContractServiceLine
 from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import Task
 from blackbeans_api.governance.models import TimeLog
 
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENTS = 10
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+}
+ALLOWED_AUDIO_TYPES = {
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/m4a",
+    "audio/webm",
+    "audio/ogg",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/x-m4a",
+}
+ALLOWED_FILE_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/plain",
+    "text/csv",
+    "application/zip",
+    "application/x-zip-compressed",
+}
+ALLOWED_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".txt",
+    ".csv",
+    ".zip",
+    ".mp3",
+    ".m4a",
+    ".webm",
+    ".ogg",
+    ".wav",
+}
+
+
+def _guess_kind(content_type: str, filename: str) -> str:
+    ct = (content_type or "").split(";")[0].strip().lower()
+    name = (filename or "").lower()
+    if ct in ALLOWED_IMAGE_TYPES or name.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        return ClientRequestAttachment.Kind.IMAGE
+    if ct in ALLOWED_AUDIO_TYPES or name.endswith((".mp3", ".m4a", ".webm", ".ogg", ".wav")):
+        return ClientRequestAttachment.Kind.AUDIO
+    return ClientRequestAttachment.Kind.FILE
+
+
+def _attachment_to_representation(att: ClientRequestAttachment) -> dict:
+    url = ""
+    try:
+        if att.file:
+            url = att.file.url
+    except Exception:
+        url = ""
+    return {
+        "id": str(att.pk),
+        "kind": att.kind,
+        "filename": att.filename,
+        "content_type": att.content_type,
+        "size_bytes": att.size_bytes,
+        "url": url,
+        "created_at": att.created_at.isoformat().replace("+00:00", "Z"),
+    }
+
 
 def client_request_to_representation(item: ClientRequest) -> dict:
+    attachments = [
+        _attachment_to_representation(att)
+        for att in item.attachments.all()
+    ] if hasattr(item, "attachments") else []
     return {
         "id": str(item.pk),
         "client_name": item.client_name,
@@ -38,14 +125,33 @@ def client_request_to_representation(item: ClientRequest) -> dict:
         "status": item.status,
         "converted_task_id": str(item.converted_task_id) if item.converted_task_id else None,
         "converted_project_id": str(item.converted_project_id) if item.converted_project_id else None,
+        "attachments": attachments,
         "created_at": item.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": item.updated_at.isoformat().replace("+00:00", "Z"),
     }
 
 
+def _collect_upload_files(request: Request) -> list:
+    files: list = []
+    for key in ("files", "files[]", "file"):
+        for f in request.FILES.getlist(key):
+            files.append(f)
+    # Evitar duplicatas se o mesmo file aparece em mais de uma chave
+    seen = set()
+    unique = []
+    for f in files:
+        marker = (getattr(f, "name", ""), getattr(f, "size", 0), id(f))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(f)
+    return unique
+
+
 class ClientRequestPublicCreateView(APIView):
     permission_classes = [AllowAny]
     authentication_classes: list = []
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -59,14 +165,81 @@ class ClientRequestPublicCreateView(APIView):
                 details={},
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
-        item = ClientRequest.objects.create(
-            client_name=client_name,
-            contact_name=str(request.data.get("contact_name") or "").strip(),
-            contact_email=str(request.data.get("contact_email") or "").strip(),
-            contact_phone=str(request.data.get("contact_phone") or "").strip(),
-            title=title,
-            description=str(request.data.get("description") or "").strip(),
-        )
+
+        uploads = _collect_upload_files(request)
+        if len(uploads) > MAX_ATTACHMENTS:
+            return error_response(
+                correlation_id=correlation_id,
+                code="validation_error",
+                message=f"No maximo {MAX_ATTACHMENTS} anexos por pedido.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for upload in uploads:
+            size = int(getattr(upload, "size", 0) or 0)
+            if size > MAX_ATTACHMENT_BYTES:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message=f"Arquivo excede 10 MB: {getattr(upload, 'name', 'arquivo')}",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            filename = str(getattr(upload, "name", "") or "arquivo")
+            content_type = str(getattr(upload, "content_type", "") or "")
+            if not content_type:
+                guessed, _ = mimetypes.guess_type(filename)
+                content_type = guessed or "application/octet-stream"
+            ext = ""
+            if "." in filename:
+                ext = "." + filename.rsplit(".", 1)[-1].lower()
+            kind = _guess_kind(content_type, filename)
+            ct_base = content_type.split(";")[0].strip().lower()
+            allowed = (
+                (kind == ClientRequestAttachment.Kind.IMAGE and ct_base in ALLOWED_IMAGE_TYPES)
+                or (kind == ClientRequestAttachment.Kind.AUDIO and ct_base in ALLOWED_AUDIO_TYPES)
+                or (
+                    kind == ClientRequestAttachment.Kind.FILE
+                    and (ct_base in ALLOWED_FILE_TYPES or ct_base.startswith("text/"))
+                )
+                or (ext in ALLOWED_EXTENSIONS)
+            )
+            if not allowed:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message=f"Tipo de arquivo nao permitido: {filename}",
+                    details={"content_type": content_type},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        with transaction.atomic():
+            item = ClientRequest.objects.create(
+                client_name=client_name,
+                contact_name=str(request.data.get("contact_name") or "").strip(),
+                contact_email=str(request.data.get("contact_email") or "").strip(),
+                contact_phone=str(request.data.get("contact_phone") or "").strip(),
+                title=title,
+                description=str(request.data.get("description") or "").strip(),
+            )
+            for upload in uploads:
+                filename = str(getattr(upload, "name", "") or "arquivo")[:255]
+                content_type = str(getattr(upload, "content_type", "") or "")
+                if not content_type:
+                    guessed, _ = mimetypes.guess_type(filename)
+                    content_type = guessed or "application/octet-stream"
+                kind = _guess_kind(content_type, filename)
+                ClientRequestAttachment.objects.create(
+                    client_request=item,
+                    kind=kind,
+                    filename=filename,
+                    content_type=content_type[:100],
+                    size_bytes=int(getattr(upload, "size", 0) or 0),
+                    file=upload,
+                )
+
+        item = ClientRequest.objects.prefetch_related("attachments").get(pk=item.pk)
         return success_response(
             correlation_id=correlation_id,
             data={"request": client_request_to_representation(item)},
@@ -79,7 +252,7 @@ class ClientRequestListView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        qs = ClientRequest.objects.all().order_by("-created_at")
+        qs = ClientRequest.objects.prefetch_related("attachments").all().order_by("-created_at")
         status_filter = (request.query_params.get("status") or "").strip()
         if status_filter:
             qs = qs.filter(status=status_filter)

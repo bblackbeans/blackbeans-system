@@ -555,4 +555,50 @@ html[data-bb-theme="light"] .bb-rich-html .bb-mention {
   margin-bottom: 0;
 }
 
+/* Subtarefas expandidas + barra de selecao em lote — claros no light, escuros no dark */
+.bb-subtasks-expand {
+  margin: 4px 0 8px 12px;
+  padding: 10px 12px;
+  border-left: 3px solid #d9d9d9;
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+.bb-bulk-select-bar.ant-card {
+  background: #f0f7ff;
+  border-color: #1677ff;
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.12);
+}
+
+html[data-bb-theme="dark"] .bb-subtasks-expand {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: rgba(255, 255, 255, 0.18);
+}
+
+html[data-bb-theme="dark"] .ant-table-expanded-row > .ant-table-cell {
+  background: #1a1a1a !important;
+}
+
+html[data-bb-theme="dark"] .ant-table-expanded-row:hover > .ant-table-cell {
+  background: #1a1a1a !important;
+}
+
+html[data-bb-theme="dark"] .bb-subtasks-expand-table .ant-table,
+html[data-bb-theme="dark"] .bb-subtasks-expand-table .ant-table-container,
+html[data-bb-theme="dark"] .bb-subtasks-expand-table .ant-table-content,
+html[data-bb-theme="dark"] .bb-subtasks-expand-table .ant-table-tbody > tr > td,
+html[data-bb-theme="dark"] .bb-subtasks-expand-table .ant-table-thead > tr > th {
+  background: transparent !important;
+}
+
+html[data-bb-theme="dark"] .bb-bulk-select-bar.ant-card {
+  background: #161b22 !important;
+  border-color: rgba(64, 150, 255, 0.45) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+html[data-bb-theme="dark"] .bb-bulk-select-bar .ant-card-body {
+  background: transparent !important;
+}
+
 

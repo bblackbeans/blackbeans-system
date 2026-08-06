@@ -13,8 +13,10 @@ export const RECORDING_MAX_MS = 60_000;
 
 const MAX_JS_ERRORS = 20;
 const MAX_FAILED_REQUESTS = 30;
-const AUTO_ERROR_DEDUPE_MS = 15 * 60 * 1000;
+const AUTO_ERROR_DEDUPE_MS = 6 * 60 * 60 * 1000; // 6h
+const AUTO_ERROR_DEDUPE_STORAGE_KEY = "bb_auto_error_fingerprints_v1";
 const AUTH_TOKEN_STORAGE_KEY = "bb_access_token";
+const AUTH_REFRESH_IN_FLIGHT_HINT = /\/auth\/(refresh|token|login)/i;
 
 export type MediaPayload = {
   mime: string;
@@ -92,7 +94,35 @@ let failedRequests: FailedRequestEntry[] = [];
 let originalFetch: typeof fetch | null = null;
 let activeRecordingSession: PageRecordingSession | null = null;
 let recordingEndedHandler: ((result: MediaPayload | null) => void) | null = null;
-const autoErrorFingerprints = new Map<string, number>();
+let autoErrorFingerprints = new Map<string, number>();
+
+function loadAutoErrorFingerprints(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem(AUTO_ERROR_DEDUPE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    const now = Date.now();
+    autoErrorFingerprints = new Map(
+      Object.entries(parsed).filter(([, ts]) => typeof ts === "number" && now - ts < AUTO_ERROR_DEDUPE_MS),
+    );
+  } catch {
+    autoErrorFingerprints = new Map();
+  }
+}
+
+function persistAutoErrorFingerprints(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const obj: Record<string, number> = {};
+    autoErrorFingerprints.forEach((ts, key) => {
+      obj[key] = ts;
+    });
+    localStorage.setItem(AUTO_ERROR_DEDUPE_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // ignore quota
+  }
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -106,6 +136,43 @@ function pushFifo<T>(list: T[], item: T, max: number): T[] {
   return next;
 }
 
+function normalizeUrlFamily(url: string): string {
+  try {
+    const u = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://local");
+    // path sem query/hash/ids longos
+    const path = u.pathname
+      .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "/:id")
+      .replace(/\/\d{2,}/g, "/:id");
+    return `${u.origin}${path}`;
+  } catch {
+    return url.split("?")[0]?.split("#")[0] ?? url;
+  }
+}
+
+function stableHttpFingerprint(method: string, url: string, status: number): string {
+  return `http|${status}|${method}|${normalizeUrlFamily(url)}`;
+}
+
+function stableNetFingerprint(method: string, url: string): string {
+  return `net|${method}|${normalizeUrlFamily(url)}`;
+}
+
+function isNoiseJsMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("resizeobserver loop") ||
+    m.includes("resizeobserver loop limit exceeded") ||
+    m.includes("script error.") ||
+    m.includes("script error")
+  );
+}
+
+function isAuthRefreshNoise(url: string, status: number): boolean {
+  if (status !== 401) return false;
+  // 401 em qualquer chamada autenticada durante refresh de sessao e ruido comum
+  return true;
+}
+
 function shouldSkipAutoError(fingerprint: string): boolean {
   const now = Date.now();
   for (const [key, ts] of autoErrorFingerprints) {
@@ -114,6 +181,7 @@ function shouldSkipAutoError(fingerprint: string): boolean {
   const prev = autoErrorFingerprints.get(fingerprint);
   if (prev != null && now - prev < AUTO_ERROR_DEDUPE_MS) return true;
   autoErrorFingerprints.set(fingerprint, now);
+  persistAutoErrorFingerprints();
   return false;
 }
 
@@ -173,6 +241,7 @@ function onWindowError(event: ErrorEvent) {
     ts: nowIso(),
   };
   jsErrors = pushFifo(jsErrors, entry, MAX_JS_ERRORS);
+  if (isNoiseJsMessage(entry.message)) return;
   void autoCreateProblemReport({
     title: `Erro JS: ${(entry.message || "desconhecido").slice(0, 120)}`,
     description: [
@@ -183,7 +252,7 @@ function onWindowError(event: ErrorEvent) {
     ]
       .filter(Boolean)
       .join("\n"),
-    fingerprint: `js|${entry.message}|${entry.source ?? ""}|${entry.line ?? ""}`,
+    fingerprint: `js|${(entry.message || "").slice(0, 160)}`,
     jsError: entry,
   });
 }
@@ -201,10 +270,11 @@ function onUnhandledRejection(event: PromiseRejectionEvent) {
     ts: nowIso(),
   };
   jsErrors = pushFifo(jsErrors, entry, MAX_JS_ERRORS);
+  if (isNoiseJsMessage(message)) return;
   void autoCreateProblemReport({
     title: `Promise rejeitada: ${message.slice(0, 100)}`,
     description: entry.message,
-    fingerprint: `rejection|${message}`,
+    fingerprint: `rejection|${message.slice(0, 160)}`,
     jsError: entry,
   });
 }
@@ -233,10 +303,14 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
         body_preview: bodyPreview,
       };
       failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
+      // Ignorar 401 (sessao/refresh) e endpoints de auth.
+      if (isAuthRefreshNoise(url, response.status) || AUTH_REFRESH_IN_FLIGHT_HINT.test(url)) {
+        return response;
+      }
       void autoCreateProblemReport({
         title: `Falha ${response.status} ${method}`,
         description: `${method} ${url}\nStatus: ${response.status}\n${bodyPreview}`.slice(0, 8000),
-        fingerprint: `http|${method}|${url}|${response.status}|${bodyPreview.slice(0, 120)}`,
+        fingerprint: stableHttpFingerprint(method, url, response.status),
         failedRequest: entry,
       });
     }
@@ -247,14 +321,14 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
         url,
         method,
         status: 0,
-        ts: nowIso(),
         body_preview: error instanceof Error ? error.message : String(error),
+        ts: nowIso(),
       };
       failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
       void autoCreateProblemReport({
         title: `Rede: ${method} falhou`,
         description: `${method} ${url}\n${entry.body_preview ?? ""}`.slice(0, 8000),
-        fingerprint: `net|${method}|${url}|${entry.body_preview ?? ""}`,
+        fingerprint: stableNetFingerprint(method, url),
         failedRequest: entry,
       });
     }
@@ -265,6 +339,7 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
 export function installReportProblemCollectors(): void {
   if (collectorsInstalled || typeof window === "undefined") return;
   collectorsInstalled = true;
+  loadAutoErrorFingerprints();
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
   if (!originalFetch) {

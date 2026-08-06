@@ -102,6 +102,8 @@ const REFRESH_STORAGE_KEY = "bb_refresh_token";
 const BOARD_STORAGE_KEY = "bb_selected_board_id";
 const TASK_STATUS_FILTER_KEY = "bb_task_status_filter";
 const TASK_SEARCH_FILTER_KEY = "bb_task_search_filter";
+const MY_WORK_SEARCH_FILTER_KEY = "bb_my_work_search_filter";
+const MENTION_SOUND_PREF_KEY = "bb_mention_sound_enabled";
 const STATUS_PALETTE_STORAGE_KEY = "bb_status_palette";
 const BRANDING_STORAGE_KEY = "bb_branding_config";
 const THEME_STORAGE_KEY = "bb_theme";
@@ -809,6 +811,33 @@ function matchTaskFilterValue(
   if (values.length === 0) return true;
   const hit = values.includes(actual);
   return mode === "include" ? hit : !hit;
+}
+
+function stripRichTextForSearch(raw: string | null | undefined): string {
+  return String(raw ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** Busca em titulo, descricao e (opcionalmente) subtarefas do mesmo source. */
+function matchesTaskTextSearch(
+  task: { id: string; title?: string; description?: string | null; parent_id?: string | null },
+  query: string,
+  allTasks?: Array<{ id: string; title?: string; description?: string | null; parent_id?: string | null }>,
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (task.title?.toLowerCase().includes(q)) return true;
+  if (stripRichTextForSearch(task.description).includes(q)) return true;
+  if (!allTasks || task.parent_id) return false;
+  return allTasks.some(
+    (child) =>
+      String(child.parent_id ?? "") === String(task.id) &&
+      (child.title?.toLowerCase().includes(q) || stripRichTextForSearch(child.description).includes(q)),
+  );
 }
 
 const TASK_TABLE_PAGE_SIZE = 8;
@@ -1876,6 +1905,10 @@ export function AppShell() {
   const [allTasksLoading, setAllTasksLoading] = useState<boolean>(false);
   const [taskStatusFilter, setTaskStatusFilter] = useState<string[]>([]);
   const [taskSearchFilter, setTaskSearchFilter] = useState<string>("");
+  const [myWorkSearchFilter, setMyWorkSearchFilter] = useState<string>("");
+  const [mentionSoundEnabled, setMentionSoundEnabled] = useState(true);
+  const knownNotificationIdsRef = useRef<Set<string> | null>(null);
+  const skipProjectSelectionResetRef = useRef(false);
   const [taskPeriodFilter, setTaskPeriodFilter] = useState<string>("all");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string[]>([]);
   const [taskProjectFilter, setTaskProjectFilter] = useState<string[]>([]);
@@ -2334,8 +2367,9 @@ export function AppShell() {
     [],
   );
 
-  const navigateTo = useCallback((nextKey: MenuKey) => {
+  const navigateTo = useCallback((nextKey: MenuKey, options?: { resetSelection?: boolean }) => {
     const defaultKey: MenuKey = "dashboard";
+    const resetSelection = options?.resetSelection !== false;
     if (!isAdmin && RESTRICTED_ADMIN_KEYS.includes(nextKey)) {
       setActiveKey(defaultKey);
       if (typeof window !== "undefined") {
@@ -2343,7 +2377,7 @@ export function AppShell() {
       }
       return;
     }
-    if (nextKey === "projects" || nextKey === "workspaces") {
+    if (resetSelection && (nextKey === "projects" || nextKey === "workspaces")) {
       setSelectedWorkspaceId(null);
       setSelectedPortfolioId(null);
       setSelectedClientId(null);
@@ -2471,21 +2505,30 @@ export function AppShell() {
     });
   }, [taskSearchFilter, taskStatusFilter, tasks]);
   const tasksTabSource = useMemo<TaskItem[]>(() => (isAdmin ? allTasks : tasks), [allTasks, isAdmin, tasks]);
-  const tasksTabFiltered = useMemo(() => {
-    const now = new Date(nowMs);
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const endOfToday = startOfToday + 24 * 60 * 60 * 1000 - 1;
-    const dayOfWeek = now.getDay();
-    const startOfWeek = startOfToday - dayOfWeek * 24 * 60 * 60 * 1000;
-    const endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000 - 1;
-    const sevenDaysFwdMs = nowMs + 7 * 24 * 60 * 60 * 1000;
-    const normalizedSearch = taskSearchFilter.trim().toLowerCase();
-    return tasksTabSource
-      .filter((task) => {
-      if (task.parent_id) return false;
+  type TasksTabRow = TaskItem & { children?: TasksTabRow[] };
+
+  const matchesTasksTabFilters = useCallback(
+    (task: TaskItem, opts?: { skipSearch?: boolean }) => {
+      const now = new Date(nowMs);
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const endOfToday = startOfToday + 24 * 60 * 60 * 1000 - 1;
+      const dayOfWeek = now.getDay();
+      const startOfWeek = startOfToday - dayOfWeek * 24 * 60 * 60 * 1000;
+      const endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000 - 1;
+      const sevenDaysFwdMs = nowMs + 7 * 24 * 60 * 60 * 1000;
+      const normalizedSearch = taskSearchFilter.trim().toLowerCase();
+
       if (!matchTaskFilterValue(taskStatusFilter, String(task.status ?? ""), taskStatusFilterMode)) return false;
       if (!matchTaskFilterValue(taskPriorityFilter, String(task.priority ?? ""), taskPriorityFilterMode)) return false;
-      if (normalizedSearch.length > 0 && !task.title.toLowerCase().includes(normalizedSearch)) return false;
+      if (!opts?.skipSearch && normalizedSearch.length > 0) {
+        // Texto da propria tarefa; pai+subs e resolvido na arvore.
+        if (
+          !task.title.toLowerCase().includes(normalizedSearch) &&
+          !stripRichTextForSearch(task.description).includes(normalizedSearch)
+        ) {
+          return false;
+        }
+      }
       if (!matchTaskFilterValue(taskBoardFilter, String(task.board_id ?? ""), taskBoardFilterMode)) return false;
       {
         const board = task.board_id ? boardById[task.board_id] : null;
@@ -2538,29 +2581,107 @@ export function AppShell() {
           break;
       }
       return true;
-    })
-      .slice()
-      .sort(compareTaskEndDateAsc);
-  }, [
-    boardById,
-    nowMs,
-    projects,
-    taskAssigneeFilter,
-    taskAssigneeFilterMode,
-    taskBoardFilter,
-    taskBoardFilterMode,
-    taskClientFilter,
-    taskClientFilterMode,
-    taskPeriodFilter,
-    taskPriorityFilter,
-    taskPriorityFilterMode,
-    taskProjectFilter,
-    taskProjectFilterMode,
-    taskSearchFilter,
-    taskStatusFilter,
-    taskStatusFilterMode,
-    tasksTabSource,
-  ]);
+    },
+    [
+      boardById,
+      nowMs,
+      projects,
+      taskAssigneeFilter,
+      taskAssigneeFilterMode,
+      taskBoardFilter,
+      taskBoardFilterMode,
+      taskClientFilter,
+      taskClientFilterMode,
+      taskPeriodFilter,
+      taskPriorityFilter,
+      taskPriorityFilterMode,
+      taskProjectFilter,
+      taskProjectFilterMode,
+      taskSearchFilter,
+      taskStatusFilter,
+      taskStatusFilterMode,
+    ],
+  );
+
+  const tasksTabFiltered = useMemo(() => {
+    const normalizedSearch = taskSearchFilter.trim().toLowerCase();
+    // Match: filtros (assignee etc.) na propria tarefa; busca pode casar via subtarefa.
+    const matching = tasksTabSource.filter((task) => {
+      if (!matchesTasksTabFilters(task, { skipSearch: true })) return false;
+      if (!normalizedSearch) return true;
+      const selfText =
+        task.title.toLowerCase().includes(normalizedSearch) ||
+        stripRichTextForSearch(task.description).includes(normalizedSearch);
+      if (selfText) return true;
+      // Subtarefa: so o proprio texto (pai promovido depois)
+      if (task.parent_id) return false;
+      // Raiz: sobe se alguma subtarefa (que tambem passa filtros nao-busca) casa o texto
+      return tasksTabSource.some((child) => {
+        if (String(child.parent_id ?? "") !== String(task.id)) return false;
+        if (!matchesTasksTabFilters(child, { skipSearch: true })) return false;
+        return (
+          child.title.toLowerCase().includes(normalizedSearch) ||
+          stripRichTextForSearch(child.description).includes(normalizedSearch)
+        );
+      });
+    });
+
+    // Para busca: incluir tambem subtarefas cujo texto casa (e passam filtros), mesmo se ja incluidas.
+    const matchingWithSearchKids =
+      normalizedSearch.length === 0
+        ? matching
+        : (() => {
+            const byId = new Map(matching.map((t) => [t.id, t]));
+            tasksTabSource.forEach((task) => {
+              if (!task.parent_id) return;
+              if (!matchesTasksTabFilters(task, { skipSearch: true })) return;
+              const textOk =
+                task.title.toLowerCase().includes(normalizedSearch) ||
+                stripRichTextForSearch(task.description).includes(normalizedSearch);
+              if (textOk) byId.set(task.id, task);
+            });
+            return Array.from(byId.values());
+          })();
+
+    const matchingIds = new Set(matchingWithSearchKids.map((t) => t.id));
+    const childrenByParent = new Map<string, TasksTabRow[]>();
+    matchingWithSearchKids.forEach((task) => {
+      if (!task.parent_id) return;
+      const parentId = String(task.parent_id);
+      const list = childrenByParent.get(parentId) ?? [];
+      list.push({ ...task });
+      childrenByParent.set(parentId, list);
+    });
+    childrenByParent.forEach((kids, parentId) => {
+      childrenByParent.set(parentId, kids.slice().sort(compareTaskEndDateAsc));
+    });
+
+    const roots: TasksTabRow[] = [];
+    const seenRoots = new Set<string>();
+    const considerRoot = (root: TaskItem) => {
+      const rootId = root.id;
+      if (seenRoots.has(rootId)) return;
+      const kids = childrenByParent.get(rootId) ?? [];
+      const rootMatches = matchingIds.has(rootId);
+      if (!rootMatches && kids.length === 0) return;
+      seenRoots.add(rootId);
+      roots.push({
+        ...root,
+        children: kids.length > 0 ? kids : undefined,
+        subtasks_count: kids.length > 0 ? kids.length : root.subtasks_count,
+      });
+    };
+
+    matchingWithSearchKids.forEach((task) => {
+      if (!task.parent_id) considerRoot(task);
+    });
+    childrenByParent.forEach((_kids, parentId) => {
+      const parent = tasksTabSource.find((row) => row.id === parentId);
+      if (parent) considerRoot(parent);
+    });
+
+    return roots.slice().sort(compareTaskEndDateAsc);
+  }, [matchesTasksTabFilters, taskSearchFilter, tasksTabSource]);
   const myWorkMetrics = useMemo(() => {
     const rootTasks = tasks.filter((task) => !task.parent_id);
     const total = rootTasks.length;
@@ -2694,6 +2815,7 @@ export function AppShell() {
           if (Number.isFinite(toMs) && refMs > toMs) return false;
         }
       }
+      if (!matchesTaskTextSearch(task, myWorkSearchFilter, tasks)) return false;
       return true;
     },
     [
@@ -2709,11 +2831,13 @@ export function AppShell() {
       myWorkPriorityFilterMode,
       myWorkProjectFilter,
       myWorkProjectFilterMode,
+      myWorkSearchFilter,
       myWorkStatusFilter,
       myWorkStatusFilterMode,
       myWorkWeekBounds,
       nowMs,
       projects,
+      tasks,
     ],
   );
 
@@ -2774,7 +2898,10 @@ export function AppShell() {
       });
     }
     if ((activeKey === "dashboard" || activeKey === "tasks") && isAdmin) {
-      pageSlice(tasksTabFiltered, adminTasksTablePage).forEach((t) => map.set(t.id, t));
+      pageSlice(tasksTabFiltered, adminTasksTablePage).forEach((t) => {
+        map.set(t.id, t);
+        (t.children ?? []).forEach((child) => map.set(child.id, child));
+      });
       expandedAdminTasksKeys.forEach((parentId) => {
         const kids = subtasksByParentId[parentId] ?? [];
         kids.forEach((child) => map.set(child.id, child));
@@ -3047,7 +3174,9 @@ export function AppShell() {
       const raw = String(selectedKeys[0] ?? "");
       if (!raw) return;
       if (activeKey !== "projects" && activeKey !== "workspaces") {
-        navigateTo(isAdmin ? "workspaces" : "projects");
+        // Nao limpar selecao — estamos entrando via arvore num projeto/ws concreto.
+        navigateTo(isAdmin ? "workspaces" : "projects", { resetSelection: false });
+        skipProjectSelectionResetRef.current = true;
       }
       if (raw.startsWith("ws:")) {
         const workspaceId = raw.replace("ws:", "");
@@ -3156,19 +3285,47 @@ export function AppShell() {
     });
   }, [token]);
 
+  const playMentionSound = useCallback(() => {
+    if (typeof window === "undefined" || !mentionSoundEnabled) return;
+    try {
+      const audio = new Audio("/sounds/mention.wav");
+      audio.volume = 0.45;
+      void audio.play().catch(() => undefined);
+    } catch {
+      // best-effort
+    }
+  }, [mentionSoundEnabled]);
+
   const fetchNotifications = useCallback(async () => {
     const [listResp, unreadResp] = await Promise.all([
       apiRequest<{ notifications: NotificationItem[] }>("/notifications?page=1&page_size=20", { token }),
       apiRequest<{ unread_count: number }>("/notifications/unread-count", { token }),
     ]);
-    if (listResp.ok) setNotifications(listResp.data?.notifications ?? []);
+    if (listResp.ok) {
+      const nextList = listResp.data?.notifications ?? [];
+      const known = knownNotificationIdsRef.current;
+      if (known === null) {
+        // Baseline da sessao: nao tocar som no primeiro load.
+        knownNotificationIdsRef.current = new Set(nextList.map((n) => String(n.id)));
+      } else {
+        const freshMentions = nextList.filter(
+          (n) =>
+            n.type === "task_mentioned" &&
+            !known.has(String(n.id)) &&
+            !n.is_read,
+        );
+        nextList.forEach((n) => known.add(String(n.id)));
+        if (freshMentions.length > 0) playMentionSound();
+      }
+      setNotifications(nextList);
+    }
     if (unreadResp.ok) setUnreadCount(unreadResp.data?.unread_count ?? 0);
     if (!listResp.ok || !unreadResp.ok) {
       setGlobalError(listResp.error?.message ?? unreadResp.error?.message ?? "Falha ao carregar notificacoes.");
     } else {
       setGlobalError(null);
     }
-  }, [token]);
+  }, [playMentionSound, token]);
 
   const fetchNotificationPreferences = useCallback(async () => {
     const response = await apiRequest<{ preferences: NotificationPreferenceItem[] }>(
@@ -3861,6 +4018,9 @@ export function AppShell() {
         setTaskStatusFilter([]);
       }
       setTaskSearchFilter(localStorage.getItem(TASK_SEARCH_FILTER_KEY) ?? "");
+      setMyWorkSearchFilter(localStorage.getItem(MY_WORK_SEARCH_FILTER_KEY) ?? "");
+      const soundPref = localStorage.getItem(MENTION_SOUND_PREF_KEY);
+      setMentionSoundEnabled(soundPref !== "0");
       // Projetos / Areas de trabalho abrem sempre a visao geral (cards + filtros).
       // Nao restaurar drill-down do localStorage nessas rotas.
       if (initialKey === "projects" || initialKey === "workspaces") {
@@ -3973,16 +4133,21 @@ export function AppShell() {
         previousHash = `#${defaultKey}`;
         return;
       }
-      // Ao entrar em Projetos / Areas (mudanca de rota), abrir a visao geral.
+      // Ao entrar em Projetos / Areas pelo menu/hash (mudanca de rota), abrir a visao geral.
+      // Skip se a navegacao veio da arvore de projetos (selecao concreta).
       if (
         (nextKey === "projects" || nextKey === "workspaces") &&
         previousKey !== nextKey
       ) {
-        setSelectedWorkspaceId(null);
-        setSelectedPortfolioId(null);
-        setSelectedClientId(null);
-        setSelectedProjectId(null);
-        setSelectedBoardId(null);
+        if (skipProjectSelectionResetRef.current) {
+          skipProjectSelectionResetRef.current = false;
+        } else {
+          setSelectedWorkspaceId(null);
+          setSelectedPortfolioId(null);
+          setSelectedClientId(null);
+          setSelectedProjectId(null);
+          setSelectedBoardId(null);
+        }
       }
       setActiveKey(nextKey);
     };
@@ -4359,6 +4524,14 @@ export function AppShell() {
     if (typeof window === "undefined") return;
     localStorage.setItem(TASK_SEARCH_FILTER_KEY, taskSearchFilter);
   }, [taskSearchFilter]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(MY_WORK_SEARCH_FILTER_KEY, myWorkSearchFilter);
+  }, [myWorkSearchFilter]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(MENTION_SOUND_PREF_KEY, mentionSoundEnabled ? "1" : "0");
+  }, [mentionSoundEnabled]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const cachePayload = adminUsersCache.map((row) => ({
@@ -4792,36 +4965,53 @@ export function AppShell() {
     }
   }
 
-  function nestedSubtasksForParent(parentId: string, onlyMine: boolean) {
-    const rows = subtasksByParentId[parentId] ?? [];
+  function nestedSubtasksForParent(
+    parentId: string,
+    onlyMine: boolean,
+    presetChildren?: TaskItem[],
+    assigneeFilterIds?: string[] | null,
+  ) {
+    const rows = presetChildren ?? subtasksByParentId[parentId] ?? [];
+    if (assigneeFilterIds && assigneeFilterIds.length > 0) {
+      return rows.filter((task) =>
+        matchTaskFilterValue(assigneeFilterIds, task.assignee_id ? String(task.assignee_id) : "unassigned", "include"),
+      );
+    }
     if (!onlyMine || currentUserId == null) return rows;
     return rows.filter((task) => Number(task.assignee_id) === Number(currentUserId));
   }
 
-  function renderExpandableSubtasks(record: TaskItem, onlyMine: boolean) {
-    const nested = nestedSubtasksForParent(record.id, onlyMine);
-    const nestedLoading = loadingSubtasksParentId === record.id;
+  function renderExpandableSubtasks(
+    record: TaskItem,
+    onlyMine: boolean,
+    presetChildren?: TaskItem[],
+    assigneeFilterIds?: string[] | null,
+  ) {
+    const nested = nestedSubtasksForParent(record.id, onlyMine, presetChildren, assigneeFilterIds);
+    const nestedLoading = !presetChildren && loadingSubtasksParentId === record.id;
     return (
       <div
-        style={{
-          margin: "4px 0 8px 12px",
-          padding: "10px 12px",
-          borderLeft: "3px solid #d9d9d9",
-          background: "#fafafa",
-          borderRadius: 8,
-        }}
+        className="bb-subtasks-expand"
         onClick={(event) => event.stopPropagation()}
       >
         <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
           Subtarefas de {record.title}
           {onlyMine ? " (somente as suas)" : ""}
+          {assigneeFilterIds && assigneeFilterIds.length > 0 ? " (filtradas pelo colaborador)" : ""}
         </Typography.Text>
         <Spin spinning={nestedLoading}>
           <Table<TaskItem>
+            className="bb-subtasks-expand-table"
             rowKey="id"
             size="small"
             pagination={false}
-            locale={{ emptyText: onlyMine ? "Nenhuma subtarefa atribuida a voce." : "Nenhuma subtarefa ainda." }}
+            locale={{
+              emptyText: onlyMine
+                ? "Nenhuma subtarefa atribuida a voce."
+                : assigneeFilterIds && assigneeFilterIds.length > 0
+                  ? "Nenhuma subtarefa do colaborador filtrado."
+                  : "Nenhuma subtarefa ainda.",
+            }}
             dataSource={nested}
             onRow={(subtask) => ({
               onClick: () => void openTask(subtask),
@@ -4885,14 +5075,16 @@ export function AppShell() {
             ]}
           />
         </Spin>
-        <Button
-          type="dashed"
-          icon={<PlusOutlined />}
-          style={{ marginTop: 10 }}
-          onClick={() => openCreateSubtaskModal(record)}
-        >
-          Adicionar subtarefa
-        </Button>
+        {!record.parent_id ? (
+          <Button
+            type="dashed"
+            icon={<PlusOutlined />}
+            style={{ marginTop: 10 }}
+            onClick={() => openCreateSubtaskModal(record)}
+          >
+            Adicionar subtarefa
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -6236,6 +6428,7 @@ export function AppShell() {
                               setMyWorkClientFilterMode("include");
                               setMyWorkProjectFilter([]);
                               setMyWorkProjectFilterMode("include");
+                              setMyWorkSearchFilter("");
                               setMyWorkTablePage(1);
                             }}
                           >
@@ -6244,6 +6437,16 @@ export function AppShell() {
                         }
                       >
                         <Space wrap style={{ marginBottom: 12 }}>
+                          <Input
+                            allowClear
+                            placeholder="Buscar titulo, texto ou subtarefa"
+                            value={myWorkSearchFilter}
+                            onChange={(event) => {
+                              setMyWorkSearchFilter(event.target.value);
+                              setMyWorkTablePage(1);
+                            }}
+                            style={{ width: 280 }}
+                          />
                           <TipSelect
                             tip={HELP_TIPS.filterPeriodo}
                             value={myWorkPeriodFilter}
@@ -6544,12 +6747,14 @@ export function AppShell() {
                                         }
                                       />
                                     )}
-                                    <TipButton
-                                      tip="Adicionar subtarefa nesta tarefa"
-                                      size="small"
-                                      icon={<PlusOutlined />}
-                                      onClick={() => openCreateSubtaskModal(record)}
-                                    />
+                                    {!record.parent_id ? (
+                                      <TipButton
+                                        tip="Adicionar subtarefa nesta tarefa"
+                                        size="small"
+                                        icon={<PlusOutlined />}
+                                        onClick={() => openCreateSubtaskModal(record)}
+                                      />
+                                    ) : null}
                                     <TipButton
                                       tip={HELP_TIPS.comentarios}
                                       size="small"
@@ -7055,15 +7260,16 @@ export function AppShell() {
                       </Space.Compact>
                       <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
                         <Input
-                          placeholder="Buscar por titulo"
+                          allowClear
+                          placeholder="Buscar titulo, texto ou subtarefa"
                           value={taskSearchFilter}
                           onChange={(event) => setTaskSearchFilter(event.target.value)}
-                          style={{ width: 260 }}
+                          style={{ width: 300 }}
                         />
                       </Tooltip>
                       <Tag color="processing">{tasksTabFiltered.length} tarefas visiveis</Tag>
                     </Space>
-                    <Table<TaskItem>
+                    <Table<TasksTabRow>
                       rowKey="id"
                       size="small"
                       className="bb-compact-table"
@@ -7082,15 +7288,24 @@ export function AppShell() {
                               ? Array.from(new Set([...prev, record.id]))
                               : prev.filter((key) => key !== record.id),
                           );
-                          if (expanded) void refreshTaskSubtasks(record.id);
+                          // Se a arvore do filtro ja trouxe children, nao precisa refetch.
+                          if (expanded && !(record.children && record.children.length > 0)) {
+                            void refreshTaskSubtasks(record.id);
+                          }
                         },
-                        rowExpandable: (record) => !record.parent_id && (record.subtasks_count ?? 0) > 0,
-                        expandedRowRender: (record) =>
-                          renderExpandableSubtasks(
-                            record,
-                            currentUserId != null &&
-                              taskAssigneeFilter.includes(String(currentUserId)),
-                          ),
+                        rowExpandable: (record) =>
+                          Boolean(record.children && record.children.length > 0) ||
+                          (!record.parent_id && (record.subtasks_count ?? 0) > 0),
+                        expandedRowRender: (record) => {
+                          if (record.children && record.children.length > 0) {
+                            return renderExpandableSubtasks(record, false, record.children);
+                          }
+                          const filterAssignees =
+                            taskAssigneeFilterMode === "include" && taskAssigneeFilter.length > 0
+                              ? taskAssigneeFilter
+                              : null;
+                          return renderExpandableSubtasks(record, false, undefined, filterAssignees);
+                        },
                       }}
                       onRow={(record) => ({
                         onClick: () => openTask(record),
@@ -7103,7 +7318,7 @@ export function AppShell() {
                           width: 320,
                           ellipsis: true,
                           sorter: (a, b) => a.title.localeCompare(b.title),
-                          render: (value: string, record: TaskItem) => renderTaskTitleCell(value, record),
+                          render: (value: string, record: TasksTabRow) => renderTaskTitleCell(value, record),
                         },
                         {
                           ...assigneeColumn,
@@ -7207,12 +7422,14 @@ export function AppShell() {
                                     }
                                   />
                                 )}
-                                <TipButton
-                                  tip="Adicionar subtarefa nesta tarefa"
-                                  size="small"
-                                  icon={<PlusOutlined />}
-                                  onClick={() => openCreateSubtaskModal(record)}
-                                />
+                                {!record.parent_id ? (
+                                  <TipButton
+                                    tip="Adicionar subtarefa nesta tarefa"
+                                    size="small"
+                                    icon={<PlusOutlined />}
+                                    onClick={() => openCreateSubtaskModal(record)}
+                                  />
+                                ) : null}
                                 <TipButton
                                   tip={HELP_TIPS.comentarios}
                                   size="small"
@@ -9737,6 +9954,20 @@ export function AppShell() {
                             },
                           ]}
                         />
+                        <div style={{ marginTop: 12 }}>
+                          <Space>
+                            <Typography.Text>Som de mencao</Typography.Text>
+                            <Switch
+                              checked={mentionSoundEnabled}
+                              onChange={setMentionSoundEnabled}
+                              checkedChildren="On"
+                              unCheckedChildren="Off"
+                            />
+                          </Space>
+                          <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0 }}>
+                            Toca um som curto quando chega uma nova mencao @ nas notificacoes.
+                          </Typography.Paragraph>
+                        </div>
                         <TipButton
                           tip={HELP_TIPS.salvarPreferenciasEmail}
                           type="primary"
@@ -10355,11 +10586,7 @@ export function AppShell() {
                         <Affix offsetTop={64}>
                           <Card
                             size="small"
-                            style={{
-                              background: "#F0F7FF",
-                              borderColor: "#1677ff",
-                              boxShadow: "0 4px 12px rgba(22,119,255,0.12)",
-                            }}
+                            className="bb-bulk-select-bar"
                             styles={{ body: { padding: "8px 12px" } }}
                           >
                             <Space wrap align="center" style={{ width: "100%", justifyContent: "space-between" }}>
@@ -11492,12 +11719,14 @@ export function AppShell() {
                                                     }
                                                   />
                                                 )}
-                                                <TipButton
-                                                  tip="Adicionar subtarefa nesta tarefa"
-                                                  size="small"
-                                                  icon={<PlusOutlined />}
-                                                  onClick={() => openCreateSubtaskModal(record)}
-                                                />
+                                                {!record.parent_id ? (
+                                                  <TipButton
+                                                    tip="Adicionar subtarefa nesta tarefa"
+                                                    size="small"
+                                                    icon={<PlusOutlined />}
+                                                    onClick={() => openCreateSubtaskModal(record)}
+                                                  />
+                                                ) : null}
                                                 <TipButton
                                                   tip={HELP_TIPS.comentarios}
                                                   size="small"
@@ -12957,6 +13186,7 @@ export function AppShell() {
         okText="Criar"
         cancelText="Cancelar"
         width={640}
+        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
       >
         <Form
           layout="vertical"
@@ -13106,15 +13336,29 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="start_date" label="Prazo inicio">
+              <Form.Item
+                name="start_date"
+                label="Prazo inicio"
+                extra="Opcional"
+              >
                 <Input type="datetime-local" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="end_date" label="Prazo final">
+              <Form.Item name="end_date" label="Prazo final" extra="Opcional">
                 <Input type="datetime-local" />
               </Form.Item>
             </Col>
+          </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          createSubtaskParent
+            ? `Nova subtarefa em: ${createSubtaskParent.title}`
+            : "Nova subtarefa"
+        }
         open={createSubtaskOpen}
         confirmLoading={subtaskSaving}
         onCancel={() => {
@@ -14119,6 +14363,54 @@ export function AppShell() {
                 {String(viewRequestModal.description ?? "").trim() || "Sem descricao."}
               </Typography.Paragraph>
             </div>
+            {Array.isArray(viewRequestModal.attachments) &&
+            (viewRequestModal.attachments as unknown[]).length > 0 ? (
+              <div>
+                <Typography.Text type="secondary">Anexos</Typography.Text>
+                <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 6 }}>
+                  {(viewRequestModal.attachments as Array<Record<string, unknown>>).map((att) => {
+                    const url = resolveMediaUrl(String(att.url ?? ""));
+                    const kind = String(att.kind ?? "file");
+                    const name = String(att.filename ?? "arquivo");
+                    if (!url) {
+                      return (
+                        <Typography.Text key={String(att.id ?? name)} type="secondary">
+                          {name}
+                        </Typography.Text>
+                      );
+                    }
+                    if (kind === "image") {
+                      return (
+                        <div key={String(att.id ?? name)}>
+                          <Typography.Link href={url} target="_blank" rel="noreferrer">
+                            {name}
+                          </Typography.Link>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={name}
+                            style={{ display: "block", maxWidth: "100%", maxHeight: 220, marginTop: 6, borderRadius: 6 }}
+                          />
+                        </div>
+                      );
+                    }
+                    if (kind === "audio") {
+                      return (
+                        <div key={String(att.id ?? name)}>
+                          <Typography.Text>{name}</Typography.Text>
+                          <audio controls src={url} style={{ display: "block", width: "100%", marginTop: 4 }} />
+                        </div>
+                      );
+                    }
+                    return (
+                      <Typography.Link key={String(att.id ?? name)} href={url} target="_blank" rel="noreferrer">
+                        {name}
+                      </Typography.Link>
+                    );
+                  })}
+                </Space>
+              </div>
+            ) : null}
           </Space>
         ) : null}
       </Modal>
