@@ -493,23 +493,45 @@ class TaskDependencyCreateSerializer(serializers.Serializer):
     depends_on_task_id = serializers.UUIDField()
 
 
+def normalize_media_file_url(file_url: str | None) -> str | None:
+    """Garante URL publica `/media/...` (nunca path absoluto de disco)."""
+    if not file_url:
+        return None
+    raw = str(file_url).strip()
+    if not raw:
+        return None
+    # Ex.: /app/blackbeans_api/media/task_attachments/... ou https://host/media/...
+    marker = "/media/"
+    idx = raw.find(marker)
+    if idx >= 0:
+        return raw[idx:]
+    # Storage relativo sem prefixo
+    if "://" not in raw and not raw.startswith("/"):
+        return f"/media/{raw.lstrip('/')}"
+    return raw
+
+
 def task_attachment_to_representation(attachment: TaskAttachment, request=None) -> dict:
     file_url = None
     if attachment.file:
         try:
             file_url = attachment.file.url
-            # Preferir path /media/... (rewrite no frontend Next).
-            if isinstance(file_url, str) and "/media/" in file_url:
-                try:
-                    from urllib.parse import urlparse
-
-                    parsed = urlparse(file_url if "://" in file_url else f"http://local{file_url}")
-                    if parsed.path.startswith("/media/"):
-                        file_url = f"{parsed.path}{('?' + parsed.query) if parsed.query else ''}"
-                except Exception:
-                    pass
         except ValueError:
             file_url = None
+        # Se o FileField guardou path absoluto, .url pode virar /app/.../media/...
+        if not file_url and getattr(attachment.file, "name", None):
+            file_url = str(attachment.file.name)
+        file_url = normalize_media_file_url(file_url)
+        # Preferir path /media/... (rewrite no frontend Next).
+        if isinstance(file_url, str) and "/media/" in file_url:
+            try:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(file_url if "://" in file_url else f"http://local{file_url}")
+                if parsed.path.startswith("/media/"):
+                    file_url = f"{parsed.path}{('?' + parsed.query) if parsed.query else ''}"
+            except Exception:
+                pass
     return {
         "id": str(attachment.pk),
         "task_id": str(attachment.task_id),

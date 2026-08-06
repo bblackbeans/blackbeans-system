@@ -292,6 +292,79 @@ def _has_in_progress_tasks_group(*, group_id: UUID) -> bool:
     return Task.objects.filter(group_id=group_id, status=Task.Status.IN_PROGRESS).exists()
 
 
+# Regra interna: status → grupo do board (Backlog / Em andamento / Concluído).
+_STATUS_GROUP_BACKLOG = "Backlog"
+_STATUS_GROUP_PROGRESS = "Em andamento"
+_STATUS_GROUP_DONE = "Concluído"
+
+
+def _status_bucket_for_group(status_key: str) -> str:
+    key = (status_key or "").strip().lower()
+    if key in {"todo", "backlog", "a_fazer", "a-fazer"}:
+        return "backlog"
+    if key in {"done", "concluido", "concluída", "concluida"}:
+        return "done"
+    # Catalogo: is_done_like
+    try:
+        from blackbeans_api.governance.models import TaskStatusDefinition
+
+        row = TaskStatusDefinition.objects.filter(key=status_key, is_active=True).first()
+        if row and row.is_done_like:
+            return "done"
+    except Exception:
+        pass
+    return "progress"
+
+
+def _group_name_aliases(bucket: str) -> set[str]:
+    if bucket == "backlog":
+        return {"backlog", "a fazer", "todo", "to do", "a-fazer"}
+    if bucket == "done":
+        return {"concluído", "concluido", "done", "concluída", "concluida"}
+    return {"em andamento", "in progress", "doing", "andamento"}
+
+
+def _canonical_group_name(bucket: str) -> str:
+    if bucket == "backlog":
+        return _STATUS_GROUP_BACKLOG
+    if bucket == "done":
+        return _STATUS_GROUP_DONE
+    return _STATUS_GROUP_PROGRESS
+
+
+def _find_or_create_status_group(board: Board, bucket: str) -> BoardGroup:
+    aliases = _group_name_aliases(bucket)
+    for group in BoardGroup.objects.filter(board=board).order_by("position"):
+        if group.name.strip().lower() in aliases:
+            return group
+    # Criar com posicao livre
+    used = set(BoardGroup.objects.filter(board=board).values_list("position", flat=True))
+    position = 1
+    while position in used:
+        position += 1
+    # Preferencias de ordem: Backlog=1, Em andamento=2, Concluído=3 quando livres
+    preferred = {"backlog": 1, "progress": 2, "done": 3}.get(bucket, position)
+    if preferred not in used:
+        position = preferred
+    return BoardGroup.objects.create(
+        board=board,
+        name=_canonical_group_name(bucket),
+        position=position,
+        wip_limit=999,
+    )
+
+
+def _sync_task_group_by_status(task: Task) -> bool:
+    """Move a tarefa para o grupo do board conforme o status. Retorna True se mudou."""
+    bucket = _status_bucket_for_group(task.status)
+    target = _find_or_create_status_group(task.board, bucket)
+    if task.group_id == target.pk:
+        return False
+    task.group = target
+    task.save(update_fields=["group", "updated_at"])
+    return True
+
+
 class WorkspaceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
@@ -1067,6 +1140,7 @@ class TaskListCreateView(APIView):
         serializer = TaskWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
+        _sync_task_group_by_status(task)
         actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
@@ -1127,6 +1201,8 @@ class TaskDetailView(APIView):
                     if task.end_date is None:
                         task.end_date = timezone.now()
                         task.save(update_fields=["end_date", "updated_at"])
+                _sync_task_group_by_status(task)
+                task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
         if "priority" in serializer.validated_data and task.priority != before_priority:
             dispatch_task_priority_changed(
                 task=task,
@@ -1382,6 +1458,8 @@ class TaskStatusView(APIView):
                     update_fields.append("end_date")
             task.status = new_status
             task.save(update_fields=update_fields)
+            _sync_task_group_by_status(task)
+            task.refresh_from_db()
             if new_status == Task.Status.DONE and before != Task.Status.DONE:
                 spawned = _spawn_next_recurrence(task)
         dispatch_task_status_changed(
@@ -1742,7 +1820,7 @@ class TaskCompleteView(APIView):
 
 
 class TimeLogDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request: Request, time_log_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1755,6 +1833,24 @@ class TimeLogDetailView(APIView):
                 message="Log de tempo nao encontrado.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
+        if not is_admin and int(time_log.user_id) != int(request.user.pk):
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Voce so pode editar seus proprios registros de tempo.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        if time_log.status == TimeLog.Status.DELETED:
+            return error_response(
+                correlation_id=correlation_id,
+                code="validation_error",
+                message="Registro ja removido.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
 
         serializer = TimeLogUpdateSerializer(data=request.data, partial=True)
@@ -1772,10 +1868,14 @@ class TimeLogDetailView(APIView):
 
         time_log.started_at = started_at
         time_log.ended_at = ended_at
+        # Edicao manual marca como is_manual (aparece em vermelho na UI, igual sessao manual).
+        time_log.is_manual = True
+        if getattr(time_log, "source", None) != "manual":
+            time_log.source = "edited"
         if ended_at:
             time_log.status = TimeLog.Status.COMPLETED
             time_log.current_started_at = None
-            time_log.accumulated_seconds = int((ended_at - started_at).total_seconds())
+            time_log.accumulated_seconds = max(int((ended_at - started_at).total_seconds()), 0)
         time_log.save(
             update_fields=[
                 "started_at",
@@ -1783,6 +1883,8 @@ class TimeLogDetailView(APIView):
                 "status",
                 "current_started_at",
                 "accumulated_seconds",
+                "is_manual",
+                "source",
                 "updated_at",
             ],
         )
@@ -1805,6 +1907,15 @@ class TimeLogDetailView(APIView):
                 message="Log de tempo nao encontrado.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        is_admin = bool(request.user.is_staff or request.user.is_superuser)
+        if not is_admin and int(time_log.user_id) != int(request.user.pk):
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Voce so pode remover seus proprios registros de tempo.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         task = time_log.task
         time_log.status = TimeLog.Status.DELETED

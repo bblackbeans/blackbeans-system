@@ -42,6 +42,7 @@ class ProblemReport(models.Model):
     )
     url = models.CharField(max_length=2048, blank=True, default="")
     correlation_id = models.CharField(max_length=36, db_index=True)
+    fingerprint = models.CharField(max_length=255, blank=True, default="", db_index=True)
     context_json = models.JSONField(default=dict, blank=True)
     internal_notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -55,6 +56,7 @@ class ProblemReport(models.Model):
             models.Index(fields=["created_at"]),
             models.Index(fields=["user"]),
             models.Index(fields=["workspace"]),
+            models.Index(fields=["fingerprint", "user", "created_at"]),
         ]
         ordering = ["-created_at"]
 

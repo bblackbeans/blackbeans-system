@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import timedelta
 from uuid import UUID
 
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -30,6 +32,12 @@ from blackbeans_api.feedback.services import validate_context_payload
 from blackbeans_api.governance.models import Workspace
 
 logger = logging.getLogger(__name__)
+
+AUTO_ERROR_DEDUPE_HOURS = 6
+OPEN_STATUSES = {
+    ProblemReport.Status.NOVO,
+    ProblemReport.Status.EM_ANALISE,
+}
 
 
 def _parse_positive_int(raw_value: str | None, default: int) -> int:
@@ -102,6 +110,37 @@ class ProblemReportFeedbackCreateView(APIView):
         report_correlation_id = (data.get("correlation_id") or "").strip() or new_correlation_id()
         url = str(contexto.get("url") or "")[:2048]
         source = "auto_error" if contexto.get("auto_error") else "feedback"
+        fingerprint = str(contexto.get("fingerprint") or "").strip()[:255]
+
+        if source == "auto_error" and fingerprint:
+            since = timezone.now() - timedelta(hours=AUTO_ERROR_DEDUPE_HOURS)
+            existing = (
+                ProblemReport.objects.filter(
+                    user=user,
+                    source="auto_error",
+                    fingerprint=fingerprint,
+                    status__in=OPEN_STATUSES,
+                    created_at__gte=since,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if existing is not None:
+                logger.info(
+                    "feedback.deduped report_id=%s user_id=%s fingerprint=%s",
+                    existing.id,
+                    user.pk,
+                    fingerprint,
+                )
+                return success_response(
+                    correlation_id=correlation_id,
+                    data={
+                        "id": str(existing.id),
+                        "correlation_id": existing.correlation_id,
+                        "deduped": True,
+                    },
+                    http_status=status.HTTP_200_OK,
+                )
 
         report = ProblemReport.objects.create(
             user=user,
@@ -112,6 +151,7 @@ class ProblemReportFeedbackCreateView(APIView):
             source=source,
             url=url,
             correlation_id=report_correlation_id,
+            fingerprint=fingerprint,
             context_json=contexto,
         )
 

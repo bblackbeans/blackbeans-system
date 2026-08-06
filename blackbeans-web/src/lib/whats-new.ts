@@ -3,7 +3,7 @@
  * Ao publicar uma atualização, incremente APP_WHATS_NEW_VERSION e descreva as mudanças.
  * Usuarios que ainda nao viram essa versao veem o modal na primeira sessao logada.
  */
-export const APP_WHATS_NEW_VERSION = "1.2.1";
+export const APP_WHATS_NEW_VERSION = "1.3";
 
 export type WhatsNewSection = {
   title: string;
@@ -19,41 +19,45 @@ export type WhatsNewRelease = {
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
   version: APP_WHATS_NEW_VERSION,
-  title: "Novidades da versao 1.2",
-  subtitle: "Composer Monday, midia estavel, filtros, historico e reporte de erros",
+  title: "Novidades da versao 1.3",
+  subtitle: "Subtarefas completas, tempo estilo Monday, grupos por status e pedido com audio",
   sections: [
     {
-      title: "Descricao e Atualizacoes",
+      title: "Subtarefas",
       items: [
-        "Editor estilo Monday: formatacao, @mencao, emoji, link, checklist, anexar imagem ou arquivo.",
-        "Colar print (Ctrl+V) sobe a imagem com preview na hora e toast de envio — sem duplicar o bloco.",
-        "Rascunho local ate Atualizar (comentario) ou Salvar a tarefa (descricao).",
-        "Apos Atualizar, o compositor limpa sozinho; clique unico nao cria comentario em dobro.",
-        "Visualizacao com uma imagem so (lightbox no clique, sem thumbnail duplicado).",
+        "Mesmas colunas das tarefas mae: prazo inicio, prazo fim, tempo e acoes (play, editar, excluir).",
+        "Expansao igual no Dashboard, Meu trabalho e boards de projeto.",
       ],
     },
     {
-      title: "Filtros",
+      title: "Controle de tempo",
       items: [
-        "Meu trabalho no mesmo padrao do Dashboard: Incluir ou Exceto.",
-        "Escolha varios status, prioridades, clientes e projetos de uma vez.",
-        "No Dashboard, multiplos colaboradores e grupos tambem.",
+        "Editar ou adicionar sessao com dia no calendario e horarios de inicio/fim separados (estilo Monday).",
+        "Duracao aparece na hora (horas, minutos e segundos) enquanto voce ajusta.",
+        "Sessoes manuais e editadas ficam em vermelho — util quando o play ficou ligado demais.",
       ],
     },
     {
-      title: "Tarefas e historico",
+      title: "Grupos automaticos",
       items: [
-        "Colaboradores editam todas as infos da tarefa; mudancas entram no historico.",
-        "Historico com cronometro, status e campos em portugues legivel.",
-        "Menção (@) gera notificacao in-app e e-mail (conforme preferencias).",
+        "Status backlog / a fazer → grupo Backlog.",
+        "Status concluido → grupo Concluido.",
+        "Qualquer outro status → grupo Em andamento.",
       ],
     },
     {
-      title: "Relatar problema",
+      title: "Pedido publico e midia",
       items: [
-        "Print funciona com modais abertos; botao de reporte nao some com a tarefa aberta.",
-        "Erros do sistema geram log automatico em Problemas (sem duplicar a cada poucos minutos).",
-        "JSON de contexto tecnico com scroll — nao quebra mais o layout.",
+        "Cliente anexa imagem, arquivo ou grava audio no pedido publico.",
+        "Preview da gravacao com barra de progresso correta; audio chega no admin.",
+        "Anexos e midia mais estaveis (URLs /media) e mencoes com som de alerta.",
+      ],
+    },
+    {
+      title: "Busca e filtros",
+      items: [
+        "Busca em titulo, descricao e subtarefas.",
+        "Filtro de colaborador no Dashboard tambem encontra quem esta so na subtarefa.",
       ],
     },
   ],

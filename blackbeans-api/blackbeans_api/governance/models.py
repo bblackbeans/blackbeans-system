@@ -780,6 +780,29 @@ class ClientRequest(models.Model):
         ordering = ["-created_at"]
 
 
+class ClientRequestAttachment(models.Model):
+    """Anexo (imagem, arquivo ou audio) de um pedido publico do cliente."""
+
+    class Kind(models.TextChoices):
+        IMAGE = "image", _("Image")
+        FILE = "file", _("File")
+        AUDIO = "audio", _("Audio")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client_request = ForeignKey(ClientRequest, on_delete=CASCADE, related_name="attachments")
+    kind = CharField(max_length=16, choices=Kind.choices, default=Kind.FILE)
+    filename = CharField(max_length=255)
+    content_type = CharField(max_length=100, blank=True, default="")
+    size_bytes = models.PositiveIntegerField(default=0)
+    file = models.FileField(upload_to="client_request_attachments/%Y/%m/")
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Client request attachment")
+        verbose_name_plural = _("Client request attachments")
+        ordering = ["created_at"]
+
+
 class AgentDefinition(models.Model):
     """Catalogo de agentes autonomos administrativos (jobs com contrato claro)."""
 
