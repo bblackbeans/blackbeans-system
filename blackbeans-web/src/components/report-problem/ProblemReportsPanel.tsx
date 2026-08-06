@@ -33,6 +33,7 @@ type ProblemReportListItem = {
   descricao: string;
   passos: string;
   status: string;
+  origem?: string;
   url: string;
   correlation_id: string;
   has_screenshot: boolean;
@@ -63,6 +64,25 @@ const STATUS_COLORS: Record<string, string> = {
   descartado: "default",
 };
 
+const ORIGEM_OPTIONS = [
+  { value: "all", label: "Todas as origens" },
+  { value: "system", label: "Sistema / infra" },
+  { value: "auto_error", label: "Erro automatico" },
+  { value: "feedback", label: "Reporte manual" },
+];
+
+const ORIGEM_LABELS: Record<string, string> = {
+  system: "Sistema",
+  auto_error: "Auto",
+  feedback: "Manual",
+};
+
+const ORIGEM_COLORS: Record<string, string> = {
+  system: "magenta",
+  auto_error: "orange",
+  feedback: "default",
+};
+
 type ProblemReportsPanelProps = {
   token: string;
 };
@@ -73,6 +93,7 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
   const fetchSeqRef = useRef(0);
   const [items, setItems] = useState<ProblemReportListItem[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [origemFilter, setOrigemFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -80,6 +101,7 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
   const [detail, setDetail] = useState<ProblemReportDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [checkingInfra, setCheckingInfra] = useState(false);
   const [statusDraft, setStatusDraft] = useState("novo");
   const [notesDraft, setNotesDraft] = useState("");
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -93,6 +115,7 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
         page_size: "20",
       });
       if (statusFilter !== "all") params.set("status", statusFilter);
+      if (origemFilter !== "all") params.set("origem", origemFilter);
       if (search.trim()) params.set("search", search.trim());
 
       const response = await apiRequest<{
@@ -113,7 +136,7 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
         setLoading(false);
       }
     }
-  }, [msg, page, search, statusFilter, token]);
+  }, [msg, origemFilter, page, search, statusFilter, token]);
 
   const fetchDetail = useCallback(
     async (reportId: string) => {
@@ -202,6 +225,34 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
     });
   };
 
+  const runInfraCheck = async () => {
+    setCheckingInfra(true);
+    try {
+      const response = await apiRequest<{
+        created?: number;
+        updated?: number;
+        resolved?: number;
+        alerts?: number;
+      }>("/health/infrastructure", { method: "POST", token, body: {} });
+      if (!response.ok) {
+        msg.error(response.error?.message ?? "Falha ao checar infraestrutura.");
+        return;
+      }
+      const created = Number(response.data?.created ?? 0);
+      const updated = Number(response.data?.updated ?? 0);
+      const resolved = Number(response.data?.resolved ?? 0);
+      const alerts = Number(response.data?.alerts ?? 0);
+      msg.success(
+        alerts > 0
+          ? `Check ok: ${alerts} alerta(s) — ${created} novo(s), ${updated} atualizado(s), ${resolved} resolvido(s).`
+          : `Check ok: nenhum alerta. ${resolved} resolvido(s).`,
+      );
+      await fetchList();
+    } finally {
+      setCheckingInfra(false);
+    }
+  };
+
   const screenshotData =
     detail?.contexto_json?.screenshot &&
     typeof detail.contexto_json.screenshot === "object" &&
@@ -224,6 +275,10 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
   const failedRequests = Array.isArray(detail?.contexto_json?.failed_requests)
     ? (detail?.contexto_json?.failed_requests as unknown[])
     : [];
+  const systemReasons = Array.isArray(detail?.contexto_json?.reasons)
+    ? (detail?.contexto_json?.reasons as unknown[]).map((r) => String(r))
+    : [];
+  const systemSeverity = String(detail?.contexto_json?.severity ?? "");
 
   if (selectedId) {
     return (
@@ -248,6 +303,8 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
                   </Typography.Title>
                   <Typography.Text type="secondary">
                     {detail.criado_em ? new Date(detail.criado_em).toLocaleString("pt-BR") : "-"}{" "}
+                    {detail.origem ? `· ${ORIGEM_LABELS[detail.origem] ?? detail.origem}` : ""}{" "}
+                    {systemSeverity ? `· ${systemSeverity}` : ""}{" "}
                     {detail.workspace_nome ? `· ${detail.workspace_nome}` : ""}{" "}
                     {detail.usuario_nome || detail.usuario_email
                       ? `· ${detail.usuario_nome || detail.usuario_email}`
@@ -258,6 +315,18 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
                 <Row gutter={[16, 16]}>
                   <Col xs={24} lg={16}>
                     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+                      {systemReasons.length > 0 ? (
+                        <Card title="Por que isso importa" size="small">
+                          <ul style={{ margin: 0, paddingLeft: 18 }}>
+                            {systemReasons.map((reason) => (
+                              <li key={reason}>
+                                <Typography.Text>{reason}</Typography.Text>
+                              </li>
+                            ))}
+                          </ul>
+                        </Card>
+                      ) : null}
+
                       <Card title="Descricao" size="small">
                         <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
                           {detail.descricao}
@@ -399,9 +468,14 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
       <Card
         title="Problemas reportados"
         extra={
-          <Button icon={<ReloadOutlined />} onClick={() => void fetchList()} loading={loading}>
-            Atualizar
-          </Button>
+          <Space wrap>
+            <Button loading={checkingInfra} onClick={() => void runInfraCheck()}>
+              Checar infra agora
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void fetchList()} loading={loading}>
+              Atualizar
+            </Button>
+          </Space>
         }
       >
         <Space wrap style={{ marginBottom: 12 }}>
@@ -413,6 +487,15 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
             }}
             style={{ minWidth: 180 }}
             options={[{ value: "all", label: "Todos os status" }, ...STATUS_OPTIONS]}
+          />
+          <Select
+            value={origemFilter}
+            onChange={(value) => {
+              setOrigemFilter(value);
+              setPage(1);
+            }}
+            style={{ minWidth: 180 }}
+            options={ORIGEM_OPTIONS}
           />
           <Input.Search
             allowClear
@@ -448,8 +531,21 @@ export function ProblemReportsPanel({ token }: ProblemReportsPanelProps) {
                 value ? new Date(value).toLocaleString("pt-BR") : "-",
             },
             {
+              title: "Origem",
+              dataIndex: "origem",
+              width: 110,
+              render: (value: string | undefined) => (
+                <Tag color={ORIGEM_COLORS[value ?? ""] ?? "default"}>
+                  {ORIGEM_LABELS[value ?? ""] ?? value ?? "-"}
+                </Tag>
+              ),
+            },
+            {
               title: "Usuario",
-              render: (row) => row.usuario_nome || row.usuario_email || "-",
+              render: (row) =>
+                row.origem === "system"
+                  ? "Monitor"
+                  : row.usuario_nome || row.usuario_email || "-",
             },
             {
               title: "Workspace",

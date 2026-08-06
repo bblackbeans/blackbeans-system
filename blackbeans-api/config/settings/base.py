@@ -367,6 +367,21 @@ AGENT_STALE_DAYS = env.int("AGENT_STALE_DAYS", default=7)
 PROBLEM_REPORTS_FEEDBACK_ENABLED = env.bool("PROBLEM_REPORTS_FEEDBACK_ENABLED", default=True)
 PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR = env.int("PROBLEM_REPORTS_RATE_LIMIT_PER_HOUR", default=10)
 
+# Alertas de infraestrutura → Problemas (origem=system)
+INFRA_ALERTS_ENABLED = env.bool("INFRA_ALERTS_ENABLED", default=True)
+# Limite "cheio" do banco (bytes). Ajuste ao plano do Postgres/Easypanel.
+INFRA_DB_SIZE_ALERT_MAX_BYTES = env.int("INFRA_DB_SIZE_ALERT_MAX_BYTES", default=10 * 1024**3)
+INFRA_DB_SIZE_WARN_PCT = env.float("INFRA_DB_SIZE_WARN_PCT", default=80)
+INFRA_DB_SIZE_CRITICAL_PCT = env.float("INFRA_DB_SIZE_CRITICAL_PCT", default=95)
+INFRA_DISK_WARN_PCT = env.float("INFRA_DISK_WARN_PCT", default=85)
+INFRA_DISK_CRITICAL_PCT = env.float("INFRA_DISK_CRITICAL_PCT", default=95)
+INFRA_DB_CONNECTIONS_WARN_PCT = env.float("INFRA_DB_CONNECTIONS_WARN_PCT", default=80)
+INFRA_DB_CONNECTIONS_CRITICAL_PCT = env.float("INFRA_DB_CONNECTIONS_CRITICAL_PCT", default=95)
+INFRA_DB_LATENCY_WARN_MS = env.float("INFRA_DB_LATENCY_WARN_MS", default=500)
+INFRA_DB_LATENCY_CRITICAL_MS = env.float("INFRA_DB_LATENCY_CRITICAL_MS", default=2000)
+INFRA_REDIS_LATENCY_WARN_MS = env.float("INFRA_REDIS_LATENCY_WARN_MS", default=200)
+INFRA_REDIS_LATENCY_CRITICAL_MS = env.float("INFRA_REDIS_LATENCY_CRITICAL_MS", default=1000)
+
 # Workspace operacional onde portfolios de clientes sao criados ao confirmar contrato
 WORKSPACE_PRODUCAO_NAME = env("WORKSPACE_PRODUCAO_NAME", default="Produção")
 TIME_PLAY_CUTOFF_HOUR = env.int("TIME_PLAY_CUTOFF_HOUR", default=18)

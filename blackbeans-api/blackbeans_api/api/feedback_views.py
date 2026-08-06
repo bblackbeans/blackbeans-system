@@ -214,12 +214,24 @@ class ProblemReportsListView(APIView):
 
         page_size = min(page_size, 100)
         search = (request.query_params.get("search") or "").strip()
+        source_filter = (request.query_params.get("origem") or request.query_params.get("source") or "").strip()
 
         queryset = ProblemReport.objects.select_related("user", "workspace").all()
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         if workspace_uuid:
             queryset = queryset.filter(workspace_id=workspace_uuid)
+        if source_filter:
+            allowed_sources = {"feedback", "auto_error", "system"}
+            if source_filter not in allowed_sources:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Filtro de origem invalido.",
+                    details={"origem": ["Use feedback, auto_error ou system."]},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(source=source_filter)
         if search:
             queryset = queryset.filter(Q(title__icontains=search) | Q(description__icontains=search))
 
@@ -242,6 +254,34 @@ class ProblemReportsListView(APIView):
                 "pages": pages,
                 "has_next": page < pages,
                 "has_prev": page > 1,
+            },
+        )
+
+
+class ProblemReportsSummaryView(APIView):
+    """Contadores leves para badge do menu Problemas."""
+
+    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        open_statuses = [ProblemReport.Status.NOVO, ProblemReport.Status.EM_ANALISE]
+        open_total = ProblemReport.objects.filter(status__in=open_statuses).count()
+        open_system = ProblemReport.objects.filter(
+            status__in=open_statuses,
+            source="system",
+        ).count()
+        open_infra = ProblemReport.objects.filter(
+            status__in=open_statuses,
+            source="system",
+            fingerprint__startswith="infra|",
+        ).count()
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "open_total": open_total,
+                "open_system": open_system,
+                "open_infra": open_infra,
             },
         )
 

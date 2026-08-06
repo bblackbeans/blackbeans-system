@@ -36,6 +36,7 @@ import {
   Affix,
   Alert,
   Avatar,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -133,7 +134,7 @@ const HELP_TIPS = {
   menuUsers: "Gestao de usuarios, permissoes e vinculos.",
   menuStatus: "Paleta e rotulos dos status de tarefas em todo o sistema.",
   menuStats: "Indicadores e visao consolidada da operacao.",
-  menuProblems: "Triagem de problemas reportados pelos usuarios (screenshot, gravacao, contexto).",
+  menuProblems: "Triagem de problemas (usuarios + alertas automaticos de banco cheio / desempenho).",
   menuAgents: "Agentes autonomos administrativos: catalogo, agenda e relatorios automaticos.",
   novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
   novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
@@ -2224,6 +2225,7 @@ export function AppShell() {
   const [hoursDetailCollaborator, setHoursDetailCollaborator] = useState<Record<string, unknown> | null>(null);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const whatsNewCheckedRef = useRef(false);
+  const [problemsOpenInfraCount, setProblemsOpenInfraCount] = useState(0);
   const [projectsListSearch, setProjectsListSearch] = useState("");
   const [projectsListClientFilter, setProjectsListClientFilter] = useState<string>("all");
   const [projectsListWorkspaceFilter, setProjectsListWorkspaceFilter] = useState<string>("all");
@@ -2292,13 +2294,30 @@ export function AppShell() {
             { key: "users", icon: <TeamOutlined />, label: menuLabel("Usuarios", HELP_TIPS.menuUsers) },
             { key: "status-config", icon: <CheckCircleOutlined />, label: menuLabel("Status globais", HELP_TIPS.menuStatus) },
             { key: "stats", icon: <StockOutlined />, label: menuLabel("Estatisticas", HELP_TIPS.menuStats) },
-            { key: "problems", icon: <BugOutlined />, label: menuLabel("Problemas", HELP_TIPS.menuProblems) },
+            {
+              key: "problems",
+              icon: <BugOutlined />,
+              label: (
+                <Badge
+                  count={problemsOpenInfraCount}
+                  size="small"
+                  offset={[10, 0]}
+                  title={
+                    problemsOpenInfraCount > 0
+                      ? `${problemsOpenInfraCount} alerta(s) de infraestrutura abertos`
+                      : undefined
+                  }
+                >
+                  {menuLabel("Problemas", HELP_TIPS.menuProblems)}
+                </Badge>
+              ),
+            },
             { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) },
           ],
         },
       ];
     },
-    [isAdmin],
+    [isAdmin, problemsOpenInfraCount],
   );
   const selectedBoard = useMemo(
     () => boards.find((board) => board.id === selectedBoardId) ?? null,
@@ -4738,6 +4757,26 @@ export function AppShell() {
       void fetchClientRequestsList();
     });
   }, [activeKey, isAdmin, token]);
+  useEffect(() => {
+    if (!token || !isAdmin) {
+      setProblemsOpenInfraCount(0);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      const response = await apiRequest<{ open_infra?: number }>("/problem-reports/summary", { token });
+      if (cancelled || !response.ok) return;
+      setProblemsOpenInfraCount(Number(response.data?.open_infra ?? 0));
+    };
+    void load();
+    const timer = window.setInterval(() => {
+      void load();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isAdmin, token, activeKey]);
   useEffect(() => {
     if ((activeKey !== "dashboard" && activeKey !== "tasks") || !token || !isAdmin) return;
     queueMicrotask(() => {
@@ -13457,7 +13496,9 @@ export function AppShell() {
         okText="Criar"
         cancelText="Cancelar"
         width={640}
-        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
+        rootClassName="bb-create-task-modal"
+        styles={{ body: { overflow: "visible", paddingTop: 8 } }}
+        destroyOnHidden={false}
       >
         <Form
           layout="vertical"
@@ -13506,9 +13547,9 @@ export function AppShell() {
             }
           }}
         >
-          <Row gutter={[12, 0]}>
+          <Row gutter={[12, 0]} style={{ maxWidth: "100%" }}>
             {!composeBoardId ? (
-              <Col xs={24}>
+              <Col span={24} style={{ minWidth: 0 }}>
                 <Form.Item
                   name="board_id"
                   label="Projeto / grupo (board)"
@@ -13518,6 +13559,7 @@ export function AppShell() {
                     showSearch
                     optionFilterProp="label"
                     placeholder="Escolha onde criar a tarefa"
+                    style={{ width: "100%" }}
                     options={boards.map((board) => {
                       const project = projects.find((p) => String(p.id) === String(board.project_id));
                       const projectName = String(project?.name ?? board.project_id ?? "Projeto");
@@ -13537,7 +13579,7 @@ export function AppShell() {
                 </Form.Item>
               </Col>
             ) : null}
-            <Col xs={24}>
+            <Col span={24} style={{ minWidth: 0 }}>
               <Form.Item
                 name="title"
                 label="Titulo"
@@ -13546,7 +13588,7 @@ export function AppShell() {
                 <Input placeholder="Ex.: Ajustar fluxo de apontamento" />
               </Form.Item>
             </Col>
-            <Col xs={24}>
+            <Col span={24} style={{ minWidth: 0 }}>
               <Form.Item name="description" label="Descricao">
                 <Input.TextArea rows={2} />
               </Form.Item>
@@ -13554,9 +13596,10 @@ export function AppShell() {
             <Form.Item name="group_id" hidden>
               <Input />
             </Form.Item>
-            <Col xs={24} md={12}>
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="priority" label="Prioridade">
                 <Select
+                  style={{ width: "100%" }}
                   options={[
                     { value: "low", label: "Baixa" },
                     { value: "medium", label: "Média" },
@@ -13566,22 +13609,23 @@ export function AppShell() {
                 />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="status" label="Status inicial">
-                <Select options={statusOptions} />
+                <Select style={{ width: "100%" }} options={statusOptions} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="effort_points" label="Esforco (horas previstas)">
                 <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="assignee_id" label="Responsavel">
                 <Select
                   allowClear
                   placeholder="Escolha o responsavel"
                   showSearch
+                  style={{ width: "100%" }}
                   filterOption={(input, option) => {
                     const id = Number(option?.value ?? NaN);
                     const row = taskAssigneePickList.find((u) => u.id === id);
@@ -13595,7 +13639,7 @@ export function AppShell() {
                       value: u.id,
                       label: (
                         <Space size={8}>
-                          <Avatar size="small" src={src || undefined} style={src ? undefined : undefined}>
+                          <Avatar size="small" src={src || undefined}>
                             {src ? null : initial}
                           </Avatar>
                           <span>{u.name}</span>
@@ -13606,18 +13650,14 @@ export function AppShell() {
                 />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
-              <Form.Item
-                name="start_date"
-                label="Prazo inicio"
-                extra="Opcional"
-              >
-                <Input type="datetime-local" />
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
+              <Form.Item name="start_date" label="Prazo inicio" extra="Opcional">
+                <Input type="datetime-local" style={{ width: "100%", maxWidth: "100%" }} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
+            <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="end_date" label="Prazo final" extra="Opcional">
-                <Input type="datetime-local" />
+                <Input type="datetime-local" style={{ width: "100%", maxWidth: "100%" }} />
               </Form.Item>
             </Col>
           </Row>
