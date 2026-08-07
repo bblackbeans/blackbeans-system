@@ -191,6 +191,33 @@ def _resolve_time_log_for_user(
     return None
 
 
+def _complete_other_open_time_logs(*, task: Task, user, keep_id, now=None) -> int:
+    """Encerra outras sessoes ACTIVE/PAUSED do mesmo usuario na tarefa (evita active+paused)."""
+    now = now or timezone.now()
+    closed = 0
+    for time_log in TimeLog.objects.filter(
+        task=task,
+        user=user,
+        status__in=[TimeLog.Status.ACTIVE, TimeLog.Status.PAUSED],
+    ).exclude(pk=keep_id):
+        elapsed = int((now - time_log.current_started_at).total_seconds()) if time_log.current_started_at else 0
+        time_log.accumulated_seconds += max(elapsed, 0)
+        time_log.current_started_at = None
+        time_log.ended_at = now
+        time_log.status = TimeLog.Status.COMPLETED
+        time_log.save(
+            update_fields=[
+                "accumulated_seconds",
+                "current_started_at",
+                "ended_at",
+                "status",
+                "updated_at",
+            ],
+        )
+        closed += 1
+    return closed
+
+
 def _recalculate_dependents(task: Task) -> None:
     """Propaga ajuste de datas em cadeia (BFS) a partir do predecessor."""
     if task.end_date is None:
@@ -1526,6 +1553,39 @@ class TaskTimeStartView(APIView):
 
         now = timezone.now()
         actor_name = get_user_display_name(request.user)
+        # Se ja existe sessao pausada do mesmo usuario, retoma em vez de criar outra
+        # (evita active+paused ao mesmo tempo quando o cliente chama /start).
+        paused_log = (
+            TimeLog.objects.filter(task=task, user=request.user, status=TimeLog.Status.PAUSED)
+            .order_by("-updated_at")
+            .first()
+        )
+        if paused_log is not None:
+            paused_log.current_started_at = now
+            paused_log.status = TimeLog.Status.ACTIVE
+            paused_log.save(update_fields=["current_started_at", "status", "updated_at"])
+            _complete_other_open_time_logs(task=task, user=request.user, keep_id=paused_log.pk, now=now)
+            _log_task_activity(
+                task=task,
+                actor_id=request.user.pk,
+                event_type="task.time.resumed",
+                summary=f"{actor_name} retomou o cronometro.",
+            )
+            log_audit_event(
+                event_type="time.resumed",
+                action="resume",
+                entity_type="time_log",
+                entity_id=str(paused_log.pk),
+                actor_id=request.user.pk,
+                workspace_id=str(task.board.project.portfolio.workspace_id),
+                correlation_id=correlation_id,
+                after={"task_id": str(task.pk), "status": paused_log.status, "via": "start"},
+            )
+            return success_response(
+                correlation_id=correlation_id,
+                data={"time_log": time_log_to_representation(paused_log)},
+            )
+
         time_log = TimeLog.objects.create(
             task=task,
             user=request.user,
@@ -1535,6 +1595,7 @@ class TaskTimeStartView(APIView):
             is_manual=False,
             source="timer",
         )
+        _complete_other_open_time_logs(task=task, user=request.user, keep_id=time_log.pk, now=now)
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
@@ -1593,6 +1654,7 @@ class TaskTimePauseView(APIView):
         time_log.current_started_at = None
         time_log.status = TimeLog.Status.PAUSED
         time_log.save(update_fields=["accumulated_seconds", "current_started_at", "status", "updated_at"])
+        _complete_other_open_time_logs(task=task, user=time_log.user, keep_id=time_log.pk, now=now)
         actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
@@ -1631,6 +1693,15 @@ class TaskTimeResumeView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if TimeLog.objects.filter(task=task, user=request.user, status=TimeLog.Status.ACTIVE).exists():
+            return error_response(
+                correlation_id=correlation_id,
+                code="time_log_already_active",
+                message="Ja existe sessao ativa para esta tarefa e usuario.",
+                details={},
+                http_status=status.HTTP_409_CONFLICT,
+            )
+
         time_log = _resolve_time_log_for_user(
             task=task,
             user=request.user,
@@ -1650,6 +1721,7 @@ class TaskTimeResumeView(APIView):
         time_log.current_started_at = now
         time_log.status = TimeLog.Status.ACTIVE
         time_log.save(update_fields=["current_started_at", "status", "updated_at"])
+        _complete_other_open_time_logs(task=task, user=time_log.user, keep_id=time_log.pk, now=now)
         actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,

@@ -89,6 +89,7 @@ LOCAL_APPS = [
     "blackbeans_api.governance",
     "blackbeans_api.clients",
     "blackbeans_api.feedback",
+    "blackbeans_api.leads",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
