@@ -23,6 +23,12 @@ from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateVi
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
+from blackbeans_api.api.leads_views import LeadDetailView
+from blackbeans_api.api.leads_views import LeadImportDetailView
+from blackbeans_api.api.leads_views import LeadImportPreviewView
+from blackbeans_api.api.leads_views import LeadImportsListCreateView
+from blackbeans_api.api.leads_views import LeadOrigensView
+from blackbeans_api.api.leads_views import LeadsListView
 from blackbeans_api.api.feedback_views import ProblemReportDetailView
 from blackbeans_api.api.feedback_views import ProblemReportFeedbackCreateView
 from blackbeans_api.api.feedback_views import ProblemReportsListView
@@ -280,4 +286,10 @@ urlpatterns = [
     path("problem-reports/summary", ProblemReportsSummaryView.as_view(), name="problem-reports-summary"),
     path("problem-reports/<uuid:report_id>", ProblemReportDetailView.as_view(), name="problem-reports-detail"),
     path("problem-reports", ProblemReportsListView.as_view(), name="problem-reports-list"),
+    path("leads/origens", LeadOrigensView.as_view(), name="leads-origens"),
+    path("leads/imports/preview", LeadImportPreviewView.as_view(), name="leads-imports-preview"),
+    path("leads/imports/<uuid:import_id>", LeadImportDetailView.as_view(), name="leads-imports-detail"),
+    path("leads/imports", LeadImportsListCreateView.as_view(), name="leads-imports"),
+    path("leads/<uuid:lead_id>", LeadDetailView.as_view(), name="leads-detail"),
+    path("leads", LeadsListView.as_view(), name="leads-list"),
 ]

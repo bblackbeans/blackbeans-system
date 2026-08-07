@@ -6,6 +6,7 @@ import {
   BugOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  ContactsOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
@@ -86,6 +87,7 @@ import { toBrowserMediaSrc } from "@/lib/media";
 import { isEmptyRichHtml, toEditorHtml } from "@/lib/rich-content";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
+import { LeadsPanel } from "@/components/leads/LeadsPanel";
 import { BB_THEME_EVENT, setBbTheme } from "@/components/providers";
 import MondayComposer, {
   clearComposerDraft,
@@ -136,6 +138,7 @@ const HELP_TIPS = {
   menuStats: "Indicadores e visao consolidada da operacao.",
   menuProblems: "Triagem de problemas (usuarios + alertas automaticos de banco cheio / desempenho).",
   menuAgents: "Agentes autonomos administrativos: catalogo, agenda e relatorios automaticos.",
+  menuLeads: "Banco de leads: importa planilhas, filtra por origem e registra retorno de contato.",
   novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
   novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
   novoProjeto: "Entrega vinculada a um cliente existente dentro do portfolio.",
@@ -508,6 +511,7 @@ type MenuKey =
   | "stats"
   | "problems"
   | "agents"
+  | "leads"
   | "projects"
   | "workspaces"
   | "client-requests";
@@ -528,6 +532,7 @@ const MENU_KEYS: MenuKey[] = [
   "stats",
   "problems",
   "agents",
+  "leads",
   "projects",
   "workspaces",
   "client-requests",
@@ -544,6 +549,7 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "stats",
   "problems",
   "agents",
+  "leads",
   "workspaces",
   "client-requests",
 ];
@@ -1724,6 +1730,27 @@ function resolveControllableTimeLog(
   return null;
 }
 
+function renderLiveTimeCell(displaySeconds: number, active: boolean) {
+  return (
+    <Space size={6} style={{ whiteSpace: "nowrap" }} onClick={(event) => event.stopPropagation()}>
+      <Typography.Text
+        style={{
+          whiteSpace: "nowrap",
+          color: active ? "var(--ant-color-primary, #1677ff)" : undefined,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {secondsToText(displaySeconds)}
+      </Typography.Text>
+      {active ? (
+        <Tooltip title="Contando">
+          <Badge status="processing" />
+        </Tooltip>
+      ) : null}
+    </Space>
+  );
+}
+
 function renderPriorityTag(value: string) {
   const meta = PRIORITY_META[value] ?? { label: value, color: "default" };
   return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -2313,6 +2340,7 @@ export function AppShell() {
               ),
             },
             { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) },
+            { key: "leads", icon: <ContactsOutlined />, label: menuLabel("Banco de leads", HELP_TIPS.menuLeads) },
           ],
         },
       ];
@@ -2365,10 +2393,12 @@ export function AppShell() {
     () => resolveControllableTimeLog(taskSummary.logs, "active", currentUserId, isAdmin),
     [currentUserId, isAdmin, taskSummary.logs],
   );
-  const pausedTimeLog = useMemo(
-    () => resolveControllableTimeLog(taskSummary.logs, "paused", currentUserId, isAdmin),
-    [currentUserId, isAdmin, taskSummary.logs],
-  );
+  const pausedTimeLog = useMemo(() => {
+    // Se ha sessao ativa (propria ou operavel), ignore paused na UI —
+    // evita Pausar + Retomar habilitados juntos (ex.: start criou active sem limpar paused).
+    if (activeTimeLog) return null;
+    return resolveControllableTimeLog(taskSummary.logs, "paused", currentUserId, isAdmin);
+  }, [activeTimeLog, currentUserId, isAdmin, taskSummary.logs]);
   const liveTaskTotalSeconds = useMemo(() => {
     if (!activeTimeLog) {
       return taskSummary.total_seconds;
@@ -4520,7 +4550,11 @@ export function AppShell() {
   }, [token, taskTimeSummaryIdsKey, taskTimeSummaryTargets]);
 
   useEffect(() => {
-    if (!anyTaskTimeSummaryActive) return;
+    if (!anyTaskTimeSummaryActive) {
+      setTaskTimeTickMs(0);
+      return;
+    }
+    setTaskTimeTickMs(Date.now());
     const intervalId = window.setInterval(() => setTaskTimeTickMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [anyTaskTimeSummaryActive]);
@@ -4957,13 +4991,19 @@ export function AppShell() {
         : apiRequest<{ tasks: TaskItem[] }>(`/tasks?parent_id=${encodeURIComponent(task.id)}`, { token }),
     ]);
     setTaskActivity(activityResp.data?.activities ?? []);
+    const summaryTotal = summaryResp.data?.total_seconds ?? 0;
+    const summaryLogs = summaryResp.data?.logs ?? [];
     setTaskSummary({
-      total_seconds: summaryResp.data?.total_seconds ?? 0,
-      logs: summaryResp.data?.logs ?? [],
+      total_seconds: summaryTotal,
+      logs: summaryLogs,
     });
     const nowTick = new Date().getTime();
     setTaskSummaryFetchedAtMs(nowTick);
     setLiveTickMs(nowTick);
+    setTaskTimeSummaryByTaskId((prev) => ({
+      ...prev,
+      [task.id]: { total_seconds: summaryTotal, logs: summaryLogs, fetchedAtMs: nowTick },
+    }));
     setTaskComments(commentsResp.data?.comments ?? []);
     const loadedSubtasks = subtasksResp.data?.tasks ?? [];
     setTaskSubtasks(loadedSubtasks);
@@ -5213,7 +5253,7 @@ export function AppShell() {
               },
               {
                 title: "Tempo",
-                width: 110,
+                width: 120,
                 render: (subtask: TaskItem) => {
                   const row = taskTimeSummaryByTaskId[subtask.id];
                   if (!row) {
@@ -5229,12 +5269,7 @@ export function AppShell() {
                   );
                   const active =
                     resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
-                  return (
-                    <Space size={4} style={{ whiteSpace: "nowrap" }}>
-                      <Typography.Text style={{ whiteSpace: "nowrap" }}>{secondsToText(display)}</Typography.Text>
-                      {active ? <Tag color="processing" style={{ marginInlineEnd: 0 }}>Contando</Tag> : null}
-                    </Space>
-                  );
+                  return renderLiveTimeCell(display, active);
                 },
               },
               {
@@ -5246,6 +5281,7 @@ export function AppShell() {
                     row != null &&
                     resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                   const paused =
+                    !active &&
                     row != null &&
                     resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
                   return (
@@ -5382,6 +5418,7 @@ export function AppShell() {
       return;
     }
     await refreshTaskTimeSummary(task.id);
+    setTaskTimeTickMs(Date.now());
   }
 
   function openManualTimeModal() {
@@ -7012,18 +7049,7 @@ export function AppShell() {
                                 );
                                 const active =
                                   resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
-                                return (
-                                  <Space
-                                    size={4}
-                                    style={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}
-                                    onClick={(event) => event.stopPropagation()}
-                                  >
-                                    <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                                      {secondsToText(display)}
-                                    </Typography.Text>
-                                    {active ? <Tag color="processing" style={{ marginInlineEnd: 0 }}>Contando</Tag> : null}
-                                  </Space>
-                                );
+                                return renderLiveTimeCell(display, active);
                               },
                             },
                             {
@@ -7034,6 +7060,7 @@ export function AppShell() {
                                   row != null &&
                                   resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                                 const paused =
+                                  !active &&
                                   row != null &&
                                   resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
                                 return (
@@ -7688,18 +7715,7 @@ export function AppShell() {
                             );
                             const active =
                               resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
-                            return (
-                              <Space
-                                size={4}
-                                style={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}
-                                onClick={(event) => event.stopPropagation()}
-                              >
-                                <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                                  {secondsToText(display)}
-                                </Typography.Text>
-                                {active ? <Tag color="processing" style={{ marginInlineEnd: 0 }}>Contando</Tag> : null}
-                              </Space>
-                            );
+                            return renderLiveTimeCell(display, active);
                           },
                         },
                         {
@@ -7710,6 +7726,7 @@ export function AppShell() {
                               row != null &&
                               resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                             const paused =
+                              !active &&
                               row != null &&
                               resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
                             return (
@@ -10389,6 +10406,10 @@ export function AppShell() {
                   <AgentsPanel token={token} />
                 ) : null}
 
+                {activeKey === "leads" && isAdmin && token ? (
+                  <LeadsPanel token={token} />
+                ) : null}
+
                 {activeKey === "client-requests" && isAdmin && (
                   <Card
                     title="Pedidos de clientes"
@@ -11966,22 +11987,7 @@ export function AppShell() {
                                                 currentUserId,
                                                 isAdmin,
                                               ) != null;
-                                            return (
-                                              <Space
-                                                size={4}
-                                                style={{ whiteSpace: "nowrap", flexWrap: "nowrap" }}
-                                                onClick={(event) => event.stopPropagation()}
-                                              >
-                                                <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                                                  {secondsToText(display)}
-                                                </Typography.Text>
-                                                {active ? (
-                                                  <Tag color="processing" style={{ marginInlineEnd: 0 }}>
-                                                    Contando
-                                                  </Tag>
-                                                ) : null}
-                                              </Space>
-                                            );
+                                            return renderLiveTimeCell(display, active);
                                           },
                                         },
                                         {
@@ -11997,6 +12003,7 @@ export function AppShell() {
                                                 isAdmin,
                                               ) != null;
                                             const paused =
+                                              !active &&
                                               row != null &&
                                               resolveControllableTimeLog(
                                                 row.logs,
@@ -13893,8 +13900,8 @@ export function AppShell() {
                 <TipButton
                   tip={HELP_TIPS.timerIniciar}
                   icon={<PlayCircleOutlined />}
-                  type={activeTimeLog ? "default" : "primary"}
-                  disabled={Boolean(activeTimeLog)}
+                  type={activeTimeLog || pausedTimeLog ? "default" : "primary"}
+                  disabled={Boolean(activeTimeLog) || Boolean(pausedTimeLog)}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}
                 >
                   Iniciar
@@ -13910,7 +13917,7 @@ export function AppShell() {
                 <TipButton
                   tip={HELP_TIPS.timerRetomar}
                   icon={<PlayCircleOutlined />}
-                  disabled={!pausedTimeLog}
+                  disabled={!pausedTimeLog || Boolean(activeTimeLog)}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/resume`, "POST", {})}
                 >
                   Retomar
@@ -14137,7 +14144,7 @@ export function AppShell() {
                       },
                       {
                         title: "Tempo",
-                        width: 100,
+                        width: 120,
                         render: (subtask: TaskItem) => {
                           const row = taskTimeSummaryByTaskId[subtask.id];
                           if (!row) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -14149,7 +14156,9 @@ export function AppShell() {
                             now,
                             currentUserId,
                           );
-                          return <Typography.Text>{secondsToText(display)}</Typography.Text>;
+                          const active =
+                            resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
+                          return renderLiveTimeCell(display, active);
                         },
                       },
                       {
@@ -14161,6 +14170,7 @@ export function AppShell() {
                             row != null &&
                             resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
                           const paused =
+                            !active &&
                             row != null &&
                             resolveControllableTimeLog(row.logs, "paused", currentUserId, isAdmin) != null;
                           return (
