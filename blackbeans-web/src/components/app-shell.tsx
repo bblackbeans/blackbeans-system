@@ -77,7 +77,7 @@ import type { FormInstance } from "antd/es/form";
 import type { SelectProps } from "antd/es/select";
 import type { MenuProps } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
 import dayjs, { type Dayjs } from "dayjs";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -182,9 +182,9 @@ const HELP_TIPS = {
   subirImagemPerfil: "Altera a foto exibida no perfil (salva localmente no navegador).",
   salvarPreferenciasEmail: "Grava como voce quer receber cada tipo de notificacao.",
   seguirTarefa: "Recebe avisos quando a tarefa for atualizada, comentada ou mudar de status.",
-  timerIniciar: "Inicia contagem de tempo nesta tarefa. Voce pode ter timers ativos em varias tarefas ao mesmo tempo.",
+  timerIniciar: "Inicia uma nova contagem. Se houver sessao pausada, ela e encerrada e comeca outra (horas no dia certo).",
   timerPausar: "Pausa a contagem sem perder o tempo ja registrado.",
-  timerRetomar: "Continua a contagem de onde parou.",
+  timerRetomar: "Continua a sessao pausada. Se for de outro dia, encerra a antiga e abre sessao nova hoje.",
   timerConcluir: "Marca a tarefa como concluida e encerra timers abertos.",
   salvarStatus: "Atualiza o status da tarefa no servidor.",
   salvarDescricao: "Salva a descricao da tarefa sem recarregar a pagina.",
@@ -1293,9 +1293,34 @@ function decimalHoursToHmText(value: number | null | undefined): string {
 
 function formatEffortHoursDisplay(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "0 h";
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return "0 h";
-  return `${Number.isInteger(n) ? String(n) : n.toFixed(1)} h`;
+  const n = Math.max(0, Math.round(Number(value)));
+  if (!Number.isFinite(n)) return "0 h";
+  return `${n} h`;
+}
+
+/** Input de horas previstas (inteiras) — effort_points no backend e PositiveInteger. */
+function EffortHoursInput(props: Omit<ComponentProps<typeof InputNumber>, "min" | "max" | "step" | "precision" | "formatter" | "parser">) {
+  return (
+    <InputNumber
+      min={0}
+      max={999}
+      step={1}
+      precision={0}
+      addonAfter="h"
+      style={{ width: "100%" }}
+      formatter={(value) => {
+        if (value === undefined || value === null || value === "") return "";
+        const n = Math.round(Number(value));
+        return Number.isFinite(n) ? String(n) : "";
+      }}
+      parser={(value) => {
+        const digits = String(value ?? "").replace(/[^\d]/g, "");
+        if (!digits) return 0;
+        return Math.min(999, Math.max(0, Number.parseInt(digits, 10)));
+      }}
+      {...props}
+    />
+  );
 }
 
 function normalizeBirthDateInput(value: string | null | undefined): string {
@@ -4972,7 +4997,7 @@ export function AppShell() {
       description: task.description ?? "",
       status: task.status,
       priority: task.priority,
-      effort_points: task.effort_points,
+      effort_points: Math.max(0, Math.round(Number(task.effort_points ?? 1))),
       assignee_id: task.assignee_id ?? undefined,
       start_date: toDateInputValue(task.start_date) || undefined,
       end_date: toDateInputValue(task.end_date) || undefined,
@@ -5126,7 +5151,7 @@ export function AppShell() {
           description: values.description ?? "",
           status: values.status ?? "todo",
           priority: values.priority ?? createSubtaskParent.priority,
-          effort_points: values.effort_points ?? 1,
+          effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
           assignee_id: values.assignee_id ?? null,
           start_date: startIso,
           end_date: endIso,
@@ -5366,7 +5391,7 @@ export function AppShell() {
         description: nextTask.description ?? "",
         status: nextTask.status,
         priority: nextTask.priority,
-        effort_points: nextTask.effort_points,
+        effort_points: Math.max(0, Math.round(Number(nextTask.effort_points ?? 1))),
         assignee_id: nextTask.assignee_id ?? undefined,
         start_date: toDateInputValue(nextTask.start_date) || undefined,
         end_date: toDateInputValue(nextTask.end_date) || undefined,
@@ -5625,7 +5650,7 @@ export function AppShell() {
       effort_points:
         values.effort_points === undefined || values.effort_points === null
           ? selectedTask.effort_points
-          : Number(values.effort_points),
+          : Math.max(0, Math.round(Number(values.effort_points))),
       assignee_id:
         values.assignee_id === undefined || values.assignee_id === null || values.assignee_id === ""
           ? null
@@ -13539,7 +13564,7 @@ export function AppShell() {
             const ok = await createTask({
               ...values,
               group_id: groupId,
-              effort_points: values.effort_points ?? 1,
+              effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
               start_date: startIso,
               end_date: endIso,
               project_id: targetBoard.project_id,
@@ -13622,8 +13647,8 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
-              <Form.Item name="effort_points" label="Esforco (horas previstas)">
-                <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+              <Form.Item name="effort_points" label="Esforço previsto (horas)">
+                <EffortHoursInput />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
@@ -13729,8 +13754,8 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="effort_points" label="Esforco (horas previstas)">
-                <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+              <Form.Item name="effort_points" label="Esforço previsto (horas)">
+                <EffortHoursInput />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -13846,7 +13871,7 @@ export function AppShell() {
                 </Col>
                 <Col xs={12} sm={8}>
                   <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
-                    Esforco
+                    Esforço
                   </Typography.Text>
                   <Tag color="purple">{formatEffortHoursDisplay(selectedTask.effort_points)}</Tag>
                 </Col>
@@ -13900,8 +13925,8 @@ export function AppShell() {
                 <TipButton
                   tip={HELP_TIPS.timerIniciar}
                   icon={<PlayCircleOutlined />}
-                  type={activeTimeLog || pausedTimeLog ? "default" : "primary"}
-                  disabled={Boolean(activeTimeLog) || Boolean(pausedTimeLog)}
+                  type={activeTimeLog ? "default" : "primary"}
+                  disabled={Boolean(activeTimeLog)}
                   onClick={() => taskAction(`/tasks/${selectedTask.id}/time/start`, "POST", {})}
                 >
                   Iniciar
@@ -13969,7 +13994,7 @@ export function AppShell() {
                     description: selectedTask.description ?? "",
                     status: selectedTask.status,
                     priority: selectedTask.priority,
-                    effort_points: selectedTask.effort_points,
+                    effort_points: Math.max(0, Math.round(Number(selectedTask.effort_points ?? 1))),
                     assignee_id: selectedTask.assignee_id ?? undefined,
                     start_date: toDateInputValue(selectedTask.start_date) || undefined,
                     end_date: toDateInputValue(selectedTask.end_date) || undefined,
@@ -14047,8 +14072,8 @@ export function AppShell() {
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={12}>
-                      <Form.Item label="Esforco previsto (h)" name="effort_points">
-                        <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+                      <Form.Item label="Esforço previsto (horas)" name="effort_points">
+                        <EffortHoursInput />
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={12}>
@@ -14090,6 +14115,7 @@ export function AppShell() {
               <Card
                 size="small"
                 title={`Subtarefas (${taskSubtasks.length || selectedTask.subtasks_count || 0})`}
+                styles={{ body: { overflowX: "hidden", paddingInline: 12 } }}
                 extra={
                   <Button
                     type="primary"
@@ -14110,41 +14136,33 @@ export function AppShell() {
                     rowKey="id"
                     size="small"
                     pagination={false}
+                    tableLayout="fixed"
+                    style={{ width: "100%" }}
                     dataSource={taskSubtasks}
                     onRow={(subtask) => ({
                       onClick: () => void openTask(subtask),
                       style: { cursor: "pointer" },
                     })}
                     columns={[
-                      { title: "Subtarefa", dataIndex: "title", ellipsis: true },
-                      assigneeColumn,
+                      {
+                        title: "Subtarefa",
+                        dataIndex: "title",
+                        ellipsis: true,
+                        render: (value: string) => (
+                          <Typography.Text ellipsis style={{ maxWidth: "100%" }}>
+                            {value}
+                          </Typography.Text>
+                        ),
+                      },
                       {
                         title: "Status",
                         dataIndex: "status",
-                        width: 110,
+                        width: 108,
                         render: (_: string, subtask: TaskItem) => renderEditableStatusTag(subtask),
                       },
                       {
-                        title: "Prioridade",
-                        dataIndex: "priority",
-                        width: 110,
-                        render: (value: string) => renderPriorityTag(value),
-                      },
-                      {
-                        title: "Prazo inicio",
-                        dataIndex: "start_date",
-                        width: 120,
-                        render: (value: string | null) => formatDateOnly(value),
-                      },
-                      {
-                        title: "Prazo fim",
-                        dataIndex: "end_date",
-                        width: 120,
-                        render: (value: string | null) => formatDateOnly(value),
-                      },
-                      {
                         title: "Tempo",
-                        width: 120,
+                        width: 96,
                         render: (subtask: TaskItem) => {
                           const row = taskTimeSummaryByTaskId[subtask.id];
                           if (!row) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -14158,12 +14176,22 @@ export function AppShell() {
                           );
                           const active =
                             resolveControllableTimeLog(row.logs, "active", currentUserId, isAdmin) != null;
-                          return renderLiveTimeCell(display, active);
+                          return (
+                            <Typography.Text
+                              style={{
+                                whiteSpace: "nowrap",
+                                fontVariantNumeric: "tabular-nums",
+                                color: active ? "var(--ant-color-primary, #1677ff)" : undefined,
+                              }}
+                            >
+                              {secondsToText(display)}
+                            </Typography.Text>
+                          );
                         },
                       },
                       {
-                        title: "Acoes",
-                        width: 120,
+                        title: "Ações",
+                        width: 96,
                         render: (subtask: TaskItem) => {
                           const row = taskTimeSummaryByTaskId[subtask.id];
                           const active =
@@ -14187,7 +14215,9 @@ export function AppShell() {
                                   tip={HELP_TIPS.timerIniciar}
                                   size="small"
                                   icon={<PlayCircleOutlined />}
-                                  onClick={() => void quickTaskTimeAction(subtask, paused ? "resume" : "start")}
+                                  onClick={() =>
+                                    void quickTaskTimeAction(subtask, paused ? "resume" : "start")
+                                  }
                                 />
                               )}
                               <TipButton
@@ -14962,7 +14992,7 @@ export function AppShell() {
               group_id: values.group_id ? String(values.group_id) : undefined,
               priority: values.priority,
               status: values.status,
-              effort_points: values.effort_points ?? 1,
+              effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
               assignee_id: values.assignee_id ?? null,
               start_date: fromDateInputValue(values.start_date),
               end_date: fromDateInputValue(values.end_date),
@@ -15105,8 +15135,8 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="effort_points" label="Esforco (h)">
-                <InputNumber min={0} max={999} step={0.5} style={{ width: "100%" }} />
+              <Form.Item name="effort_points" label="Esforço previsto (horas)">
+                <EffortHoursInput />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
