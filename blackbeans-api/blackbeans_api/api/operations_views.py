@@ -218,6 +218,58 @@ def _complete_other_open_time_logs(*, task: Task, user, keep_id, now=None) -> in
     return closed
 
 
+def _local_date_sao_paulo(dt):
+    from zoneinfo import ZoneInfo
+
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.utc)
+    return dt.astimezone(ZoneInfo("America/Sao_Paulo")).date()
+
+
+def _resume_paused_time_log(*, time_log: TimeLog, now=None) -> tuple[TimeLog, bool]:
+    """
+    Retoma sessao pausada.
+
+    Se a sessao comecou em outro dia (America/Sao_Paulo), encerra a antiga e abre
+    uma nova — assim horas do dashboard (filtro por started_at) caem na data certa.
+    Returns (log_ativo, split_criado).
+    """
+    now = now or timezone.now()
+    started_day = _local_date_sao_paulo(time_log.started_at)
+    today = _local_date_sao_paulo(now)
+    if started_day is not None and today is not None and started_day < today:
+        time_log.current_started_at = None
+        time_log.ended_at = now
+        time_log.status = TimeLog.Status.COMPLETED
+        time_log.save(
+            update_fields=[
+                "current_started_at",
+                "ended_at",
+                "status",
+                "updated_at",
+            ],
+        )
+        new_log = TimeLog.objects.create(
+            task=time_log.task,
+            user=time_log.user,
+            status=TimeLog.Status.ACTIVE,
+            started_at=now,
+            current_started_at=now,
+            is_manual=False,
+            source="timer",
+        )
+        _complete_other_open_time_logs(task=time_log.task, user=time_log.user, keep_id=new_log.pk, now=now)
+        return new_log, True
+
+    time_log.current_started_at = now
+    time_log.status = TimeLog.Status.ACTIVE
+    time_log.save(update_fields=["current_started_at", "status", "updated_at"])
+    _complete_other_open_time_logs(task=time_log.task, user=time_log.user, keep_id=time_log.pk, now=now)
+    return time_log, False
+
+
 def _recalculate_dependents(task: Task) -> None:
     """Propaga ajuste de datas em cadeia (BFS) a partir do predecessor."""
     if task.end_date is None:
@@ -1553,37 +1605,17 @@ class TaskTimeStartView(APIView):
 
         now = timezone.now()
         actor_name = get_user_display_name(request.user)
-        # Se ja existe sessao pausada do mesmo usuario, retoma em vez de criar outra
-        # (evita active+paused ao mesmo tempo quando o cliente chama /start).
-        paused_log = (
-            TimeLog.objects.filter(task=task, user=request.user, status=TimeLog.Status.PAUSED)
-            .order_by("-updated_at")
-            .first()
+        # Iniciar sempre abre sessao NOVA. Se houver pausada, encerra e comeca outra
+        # (Retomar continua a mesma sessao — ou divide por dia se for outro dia).
+        paused_logs = list(
+            TimeLog.objects.filter(task=task, user=request.user, status=TimeLog.Status.PAUSED),
         )
-        if paused_log is not None:
-            paused_log.current_started_at = now
-            paused_log.status = TimeLog.Status.ACTIVE
-            paused_log.save(update_fields=["current_started_at", "status", "updated_at"])
-            _complete_other_open_time_logs(task=task, user=request.user, keep_id=paused_log.pk, now=now)
-            _log_task_activity(
-                task=task,
-                actor_id=request.user.pk,
-                event_type="task.time.resumed",
-                summary=f"{actor_name} retomou o cronometro.",
-            )
-            log_audit_event(
-                event_type="time.resumed",
-                action="resume",
-                entity_type="time_log",
-                entity_id=str(paused_log.pk),
-                actor_id=request.user.pk,
-                workspace_id=str(task.board.project.portfolio.workspace_id),
-                correlation_id=correlation_id,
-                after={"task_id": str(task.pk), "status": paused_log.status, "via": "start"},
-            )
-            return success_response(
-                correlation_id=correlation_id,
-                data={"time_log": time_log_to_representation(paused_log)},
+        for paused_log in paused_logs:
+            paused_log.current_started_at = None
+            paused_log.ended_at = now
+            paused_log.status = TimeLog.Status.COMPLETED
+            paused_log.save(
+                update_fields=["current_started_at", "ended_at", "status", "updated_at"],
             )
 
         time_log = TimeLog.objects.create(
@@ -1596,11 +1628,16 @@ class TaskTimeStartView(APIView):
             source="timer",
         )
         _complete_other_open_time_logs(task=task, user=request.user, keep_id=time_log.pk, now=now)
+        summary = (
+            f"{actor_name} iniciou o cronometro (nova sessao; sessao pausada encerrada)."
+            if paused_logs
+            else f"{actor_name} iniciou o cronometro."
+        )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.time.started",
-            summary=f"{actor_name} iniciou o cronometro.",
+            summary=summary,
         )
         log_audit_event(
             event_type="time.started",
@@ -1610,7 +1647,11 @@ class TaskTimeStartView(APIView):
             actor_id=request.user.pk,
             workspace_id=str(task.board.project.portfolio.workspace_id),
             correlation_id=correlation_id,
-            after={"task_id": str(task.pk), "status": time_log.status},
+            after={
+                "task_id": str(task.pk),
+                "status": time_log.status,
+                "closed_paused_count": len(paused_logs),
+            },
         )
         return success_response(
             correlation_id=correlation_id,
@@ -1718,30 +1759,36 @@ class TaskTimeResumeView(APIView):
             )
 
         now = timezone.now()
-        time_log.current_started_at = now
-        time_log.status = TimeLog.Status.ACTIVE
-        time_log.save(update_fields=["current_started_at", "status", "updated_at"])
-        _complete_other_open_time_logs(task=task, user=time_log.user, keep_id=time_log.pk, now=now)
+        active_log, split = _resume_paused_time_log(time_log=time_log, now=now)
         actor_name = get_user_display_name(request.user)
+        summary = (
+            f"{actor_name} iniciou nova sessao (sessao pausada de outro dia foi encerrada)."
+            if split
+            else f"{actor_name} retomou o cronometro."
+        )
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
-            event_type="task.time.resumed",
-            summary=f"{actor_name} retomou o cronometro.",
+            event_type="task.time.started" if split else "task.time.resumed",
+            summary=summary,
         )
         log_audit_event(
-            event_type="time.resumed",
-            action="resume",
+            event_type="time.started" if split else "time.resumed",
+            action="start" if split else "resume",
             entity_type="time_log",
-            entity_id=str(time_log.pk),
+            entity_id=str(active_log.pk),
             actor_id=request.user.pk,
             workspace_id=str(task.board.project.portfolio.workspace_id),
             correlation_id=correlation_id,
-            after={"task_id": str(task.pk), "status": time_log.status},
+            after={
+                "task_id": str(task.pk),
+                "status": active_log.status,
+                "split_from_previous_day": split,
+            },
         )
         return success_response(
             correlation_id=correlation_id,
-            data={"time_log": time_log_to_representation(time_log)},
+            data={"time_log": time_log_to_representation(active_log)},
         )
 
 
