@@ -14,8 +14,16 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BlackBeans System",
-  description: "Painel operacional do BlackBeans System",
+  title: "Blackbeans",
+  description: "Painel operacional do Sistema BlackBeans",
+  icons: {
+    icon: [
+      { url: "/brand/logo-b.png", type: "image/png" },
+      { url: "/favicon.png", type: "image/png" },
+    ],
+    shortcut: "/brand/logo-b.png",
+    apple: "/brand/logo-b.png",
+  },
 };
 
 export default function RootLayout({

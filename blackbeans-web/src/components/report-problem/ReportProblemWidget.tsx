@@ -276,25 +276,33 @@ export function ReportProblemWidget({ token, workspaceId, hidden = false }: Repo
     <>
       {msgHolder}
       {!open && !hidden ? (
-        <div data-report-problem-ui style={{ position: "fixed", bottom: 24, right: 24, zIndex: 5100 }}>
+        <div data-report-problem-ui className="bb-report-problem-fab">
           {isRecording ? (
             <Button
               danger
               type="primary"
-              size="large"
+              size="middle"
+              className="bb-report-problem-fab-btn"
               icon={<VideoCameraOutlined />}
+              title="Parar gravacao"
+              aria-label={`Parar gravacao (${Math.round(recordingElapsedMs / 1000)}s)`}
               onClick={() => void handleStopRecording()}
             >
-              Parar gravacao ({Math.round(recordingElapsedMs / 1000)}s)
+              <span className="bb-report-problem-fab-label">
+                Parar ({Math.round(recordingElapsedMs / 1000)}s)
+              </span>
             </Button>
           ) : (
             <Button
               type="primary"
-              size="large"
+              size="middle"
+              className="bb-report-problem-fab-btn"
               icon={<BugOutlined />}
+              title="Relatar problema"
+              aria-label="Relatar problema"
               onClick={() => setOpen(true)}
             >
-              Relatar problema
+              <span className="bb-report-problem-fab-label">Relatar problema</span>
             </Button>
           )}
         </div>

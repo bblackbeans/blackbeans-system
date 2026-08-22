@@ -256,24 +256,64 @@ class BoardWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Board
-        fields = ("project_id", "name")
+        fields = ("project_id", "name", "pull_status_keys")
+        extra_kwargs = {
+            "pull_status_keys": {"required": False},
+        }
 
     def validate_project_id(self, value):
         if not Project.objects.filter(pk=value).exists():
             raise serializers.ValidationError("Projeto nao encontrado.")
         return value
 
+    def validate_pull_status_keys(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("pull_status_keys deve ser uma lista.")
+        cleaned = []
+        seen = set()
+        for item in value:
+            key = str(item).strip()
+            if not key or key.lower() in seen:
+                continue
+            seen.add(key.lower())
+            cleaned.append(key)
+        return cleaned
+
     def create(self, validated_data):
         project_id = validated_data.pop("project_id")
         return Board.objects.create(project_id=project_id, **validated_data)
 
 
+class BoardUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    pull_status_keys = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+        allow_empty=True,
+    )
+
+    def validate_pull_status_keys(self, value):
+        cleaned = []
+        seen = set()
+        for item in value or []:
+            key = str(item).strip()
+            if not key or key.lower() in seen:
+                continue
+            seen.add(key.lower())
+            cleaned.append(key)
+        return cleaned
+
+
 def board_to_representation(board: Board) -> dict:
+    keys = board.pull_status_keys if isinstance(getattr(board, "pull_status_keys", None), list) else []
     return {
         "id": str(board.pk),
         "project_id": str(board.project_id),
         "workspace_id": str(board.project.portfolio.workspace_id),
         "name": board.name,
+        "pull_status_keys": keys,
         "created_at": board.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": board.updated_at.isoformat().replace("+00:00", "Z"),
     }
@@ -471,7 +511,7 @@ def task_to_representation(task: Task, request=None) -> dict:
         "description": task.description,
         "status": task.status,
         "priority": task.priority,
-        "effort_points": task.effort_points,
+        "effort_points": float(task.effort_points) if task.effort_points is not None else 1.0,
         "assignee_id": task.assignee_id,
         "assignee_name": assignee_name,
         "assignee_email": assignee_email,
@@ -579,6 +619,30 @@ def task_comment_to_representation(comment: TaskComment, request=None) -> dict:
     return payload
 
 
+ALLOWED_ATTACHMENT_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".zip",
+    ".txt",
+    ".csv",
+    ".md",
+    ".html",
+    ".htm",
+}
+
+
 class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
     comment_id = serializers.UUIDField(required=False, allow_null=True)
 
@@ -594,10 +658,18 @@ class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_content_type(self, value):
-        raw = (value or "").strip().lower()
-        if not raw or raw == "application/octet-stream":
+        raw = (value or "").strip().lower().split(";")[0].strip()
+        if not raw or raw in {"application/octet-stream", "binary/octet-stream"}:
             return raw
-        allowed_prefixes = ("image/", "application/pdf", "application/zip", "application/x-zip-compressed", "text/")
+        if raw in {"image/jpg"}:
+            return "image/jpeg"
+        allowed_prefixes = (
+            "image/",
+            "application/pdf",
+            "application/zip",
+            "application/x-zip-compressed",
+            "text/",
+        )
         allowed_exact = {
             "text/plain",
             "application/msword",
@@ -608,6 +680,14 @@ class TaskAttachmentCreateSerializer(serializers.ModelSerializer):
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         }
         if raw.startswith(allowed_prefixes) or raw in allowed_exact:
+            return raw
+        filename = ""
+        if isinstance(self.initial_data, dict):
+            filename = str(self.initial_data.get("filename") or "")
+        ext = ""
+        if "." in filename:
+            ext = "." + filename.rsplit(".", 1)[-1].lower()
+        if ext in ALLOWED_ATTACHMENT_EXTENSIONS:
             return raw
         raise serializers.ValidationError("Tipo de arquivo nao permitido.")
 

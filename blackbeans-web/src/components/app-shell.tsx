@@ -6,13 +6,17 @@ import {
   BugOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  CalendarOutlined,
   ContactsOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   DownOutlined,
   EditOutlined,
   EyeOutlined,
+  FormOutlined,
   FolderOutlined,
   FolderOpenOutlined,
+  InfoCircleOutlined,
   LoginOutlined,
   LogoutOutlined,
   MenuOutlined,
@@ -87,7 +91,9 @@ import { toBrowserMediaSrc } from "@/lib/media";
 import { isEmptyRichHtml, toEditorHtml } from "@/lib/rich-content";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
+import { TaskIntakePanel } from "@/components/intake/TaskIntakePanel";
 import { LeadsPanel } from "@/components/leads/LeadsPanel";
+import { SprintPanel } from "@/components/sprints/SprintPanel";
 import { BB_THEME_EVENT, setBbTheme } from "@/components/providers";
 import MondayComposer, {
   clearComposerDraft,
@@ -113,6 +119,34 @@ const MY_WORK_SEARCH_FILTER_KEY = "bb_my_work_search_filter";
 const MENTION_SOUND_PREF_KEY = "bb_mention_sound_enabled";
 const STATUS_PALETTE_STORAGE_KEY = "bb_status_palette";
 const BRANDING_STORAGE_KEY = "bb_branding_config";
+const DEFAULT_APP_NAME = "Sistema BlackBeans";
+const DEFAULT_LOGO_URL = "/brand/logo-sidebar.png";
+/** Larguras das colunas de tarefas (soma ≈ área útil em Full HD com sidebar). */
+const TASK_COL = {
+  title: 300,
+  assignee: 56,
+  project: 160,
+  client: 150,
+  priority: 110,
+  status: 140,
+  start: 120,
+  end: 120,
+  time: 100,
+  actions: 150,
+} as const;
+/** Mínimo para scroll horizontal (notebook / viewport estreita). Full HD (~1600px úteis) não precisa scroll. */
+const TASK_TABLE_SCROLL_X =
+  TASK_COL.title +
+  TASK_COL.assignee +
+  TASK_COL.project +
+  TASK_COL.client +
+  TASK_COL.priority +
+  TASK_COL.status +
+  TASK_COL.start +
+  TASK_COL.end +
+  TASK_COL.time +
+  TASK_COL.actions +
+  48;
 const THEME_STORAGE_KEY = "bb_theme";
 const ADMIN_USERS_STORAGE_KEY = "bb_admin_users_cache";
 const ADMIN_USER_META_STORAGE_KEY = "bb_admin_users_meta";
@@ -139,6 +173,8 @@ const HELP_TIPS = {
   menuProblems: "Triagem de problemas (usuarios + alertas automaticos de banco cheio / desempenho).",
   menuAgents: "Agentes autonomos administrativos: catalogo, agenda e relatorios automaticos.",
   menuLeads: "Banco de leads: importa planilhas, filtra por origem e registra retorno de contato.",
+  menuTaskIntake: "Anexa a ata da reuniao, gera rascunhos e so cria tarefas no projeto apos aprovacao.",
+  menuSprint: "Pastas semanais (segunda a sexta) com snapshot travavel das tarefas de cada pessoa.",
   novaArea: "Area interna da agencia (ex.: Producao, Financeiro, Administrativo).",
   novoPortfolio: "Agrupa projetos dentro da area (ex.: contas, frentes ou setores).",
   novoProjeto: "Entrega vinculada a um cliente existente dentro do portfolio.",
@@ -147,6 +183,8 @@ const HELP_TIPS = {
   novaTarefa: "Cria a tarefa neste grupo. Ela aparece automaticamente nesta secao.",
   excluirGrupo: "Remove o grupo inteiro e suas tarefas.",
   moverSelecionadas: "Move tarefas marcadas para outro grupo do projeto.",
+  puxarStatus:
+    "Status que fazem tarefas deste projeto cairem automaticamente neste grupo ao criar ou mudar o status.",
   novoCliente: "Cadastra cliente no catalogo global; vincule ao criar um projeto.",
   novoServico: "Item do catalogo de servicos para precificar vendas.",
   novaVenda: "Inicia contrato comercial com cliente, servicos e financeiro.",
@@ -490,7 +528,13 @@ type ContractItem = {
 
 type AuthStep = "credentials" | "2fa";
 type TwoFactorMethod = "challenge" | "totp";
-type BoardItem = { id: string; name: string; project_id: string; workspace_id: string };
+type BoardItem = {
+  id: string;
+  name: string;
+  project_id: string;
+  workspace_id: string;
+  pull_status_keys?: string[];
+};
 type GroupItem = { id: string; board_id: string; name: string; position: number; wip_limit: number };
 type KanbanGroup = { group: GroupItem; tasks: TaskItem[] };
 type TaskDrawerTab = "summary" | "activity" | "comments";
@@ -512,6 +556,8 @@ type MenuKey =
   | "problems"
   | "agents"
   | "leads"
+  | "task-intake"
+  | "sprint"
   | "projects"
   | "workspaces"
   | "client-requests";
@@ -533,6 +579,8 @@ const MENU_KEYS: MenuKey[] = [
   "problems",
   "agents",
   "leads",
+  "task-intake",
+  "sprint",
   "projects",
   "workspaces",
   "client-requests",
@@ -550,6 +598,7 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "problems",
   "agents",
   "leads",
+  "task-intake",
   "workspaces",
   "client-requests",
 ];
@@ -852,6 +901,19 @@ function matchesTaskTextSearch(
 }
 
 const TASK_TABLE_PAGE_SIZE = 8;
+const TASK_TABLE_PAGE_SIZE_OPTIONS = ["8", "15", "25", "50"];
+
+type DashboardSprintWeek = {
+  id: string;
+  label: string;
+  is_locked: boolean;
+};
+
+type DashboardSprintItem = {
+  task_id: string | null;
+  assignee_id: number | null;
+  assignee_name: string;
+};
 
 const MONTH_SHORT_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
@@ -1292,33 +1354,66 @@ function decimalHoursToHmText(value: number | null | undefined): string {
 }
 
 function formatEffortHoursDisplay(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "0 h";
-  const n = Math.max(0, Math.round(Number(value)));
-  if (!Number.isFinite(n)) return "0 h";
-  return `${n} h`;
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n < 0) return "0h";
+  const totalMinutes = Math.round(n * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }
 
-/** Input de horas previstas (inteiras) — effort_points no backend e PositiveInteger. */
-function EffortHoursInput(props: Omit<ComponentProps<typeof InputNumber>, "min" | "max" | "step" | "precision" | "formatter" | "parser">) {
+/**
+ * Esforço previsto: TimePicker HH:mm (igual "Terminar em"), gravado em horas decimais.
+ * 01:30 → 1.5. Teto 23:59.
+ */
+function EffortHoursInput({
+  value,
+  onChange,
+  disabled,
+  id,
+}: {
+  value?: number | string | null;
+  onChange?: (value: number | null) => void;
+  disabled?: boolean;
+  id?: string;
+}) {
+  const hours = Number(value ?? 0);
+  const pickerValue = (() => {
+    if (!Number.isFinite(hours) || hours < 0) {
+      return dayjs().hour(1).minute(0).second(0);
+    }
+    const capped = Math.min(hours, 23 + 59 / 60);
+    const h = Math.floor(capped);
+    let m = Math.round((capped - h) * 60);
+    if (m >= 60) {
+      return dayjs()
+        .hour(Math.min(23, h + 1))
+        .minute(0)
+        .second(0);
+    }
+    return dayjs().hour(h).minute(m).second(0);
+  })();
+
   return (
-    <InputNumber
-      min={0}
-      max={999}
-      step={1}
-      precision={0}
-      addonAfter="h"
+    <TimePicker
+      id={id}
+      disabled={disabled}
       style={{ width: "100%" }}
-      formatter={(value) => {
-        if (value === undefined || value === null || value === "") return "";
-        const n = Math.round(Number(value));
-        return Number.isFinite(n) ? String(n) : "";
+      format="HH:mm"
+      allowClear={false}
+      needConfirm={false}
+      showNow={false}
+      placeholder="Esforco"
+      value={pickerValue}
+      onChange={(next: Dayjs | null) => {
+        if (!next) {
+          onChange?.(1);
+          return;
+        }
+        const decimal = next.hour() + next.minute() / 60;
+        onChange?.(Number(decimal.toFixed(2)));
       }}
-      parser={(value) => {
-        const digits = String(value ?? "").replace(/[^\d]/g, "");
-        if (!digits) return 0;
-        return Math.min(999, Math.max(0, Number.parseInt(digits, 10)));
-      }}
-      {...props}
     />
   );
 }
@@ -1643,41 +1738,64 @@ function renderCommentAttachments(attachments: TaskCommentAttachment[] | undefin
   return (
     <Space wrap size={8} style={{ marginTop: 8 }}>
       {imageFiles.length > 0 ? (
-        <AntImage.PreviewGroup>
+        <>
+          <AntImage.PreviewGroup>
+            {imageFiles.map((file) => {
+              const href = resolveMediaUrl(file.url);
+              if (!href) return null;
+              return (
+                <AntImage
+                  key={file.id}
+                  src={toBrowserMediaSrc(file.url)}
+                  alt={file.filename}
+                  width={160}
+                  style={{
+                    maxHeight: 220,
+                    objectFit: "contain",
+                    borderRadius: 8,
+                    border: "1px solid #f0f0f0",
+                    cursor: "pointer",
+                  }}
+                />
+              );
+            })}
+          </AntImage.PreviewGroup>
           {imageFiles.map((file) => {
-            const href = resolveMediaUrl(file.url);
+            const href = toBrowserMediaSrc(file.url) || resolveMediaUrl(file.url);
             if (!href) return null;
             return (
-              <AntImage
-                key={file.id}
-                src={toBrowserMediaSrc(file.url)}
-                alt={file.filename}
-                width={160}
-                style={{
-                  maxHeight: 220,
-                  objectFit: "contain",
-                  borderRadius: 8,
-                  border: "1px solid #f0f0f0",
-                  cursor: "pointer",
-                }}
-              />
+              <a
+                key={`dl-${file.id}`}
+                href={href}
+                download={file.filename}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <Button size="small" icon={<DownloadOutlined />} title={`Baixar ${file.filename}`}>
+                  {file.filename}
+                </Button>
+              </a>
             );
           })}
-        </AntImage.PreviewGroup>
+        </>
       ) : null}
       {otherFiles.map((file) => {
         const href = toBrowserMediaSrc(file.url) || resolveMediaUrl(file.url);
         return (
-          <Button
+          <a
             key={file.id}
-            size="small"
-            icon={<PaperClipOutlined />}
             href={href || undefined}
-            target={href ? "_blank" : undefined}
-            rel={href ? "noreferrer noopener" : undefined}
+            download={file.filename}
+            target="_blank"
+            rel="noreferrer noopener"
           >
-            {file.filename}
-          </Button>
+            <Button
+              size="small"
+              icon={<PaperClipOutlined />}
+            >
+              {file.filename}
+            </Button>
+          </a>
         );
       })}
     </Space>
@@ -1688,9 +1806,12 @@ function renderCommentAttachments(attachments: TaskCommentAttachment[] | undefin
 function formatColumnLabel(name: string) {
   const map: Record<string, string> = {
     Todo: "A fazer",
-    "In Progress": "Em progresso",
-    Done: "Concluida",
+    "In Progress": "Em andamento",
+    Done: "Concluido",
     Blocked: "Bloqueada",
+    Backlog: "Backlog",
+    "Em andamento": "Em andamento",
+    "Concluído": "Concluido",
   };
   return map[name] ?? name;
 }
@@ -1913,10 +2034,14 @@ function ProjectsSidebarTree({
               aria-selected={isSelected}
               tabIndex={0}
               className="bb-sidebar-row"
-              onClick={() => onSelect(node.key)}
+              onClick={() => {
+                if (hasChildren) onToggle(node.key);
+                onSelect(node.key);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
+                  if (hasChildren) onToggle(node.key);
                   onSelect(node.key);
                   return;
                 }
@@ -1934,7 +2059,7 @@ function ProjectsSidebarTree({
                 borderRadius: 6,
                 color: "#F4F0ED",
                 cursor: "pointer",
-                background: isSelected ? "rgba(22,119,255,0.22)" : "transparent",
+                background: isSelected ? undefined : "transparent",
                 outline: "none",
               }}
             >
@@ -2073,6 +2198,8 @@ export function AppShell() {
   const knownNotificationIdsRef = useRef<Set<string> | null>(null);
   const skipProjectSelectionResetRef = useRef(false);
   const [taskPeriodFilter, setTaskPeriodFilter] = useState<string>("all");
+  const [taskDateFrom, setTaskDateFrom] = useState<string>("");
+  const [taskDateTo, setTaskDateTo] = useState<string>("");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string[]>([]);
   const [taskProjectFilter, setTaskProjectFilter] = useState<string[]>([]);
   const [taskClientFilter, setTaskClientFilter] = useState<string[]>([]);
@@ -2085,8 +2212,13 @@ export function AppShell() {
   const [taskClientFilterMode, setTaskClientFilterMode] = useState<TaskFilterMatchMode>("include");
   const [taskBoardFilterMode, setTaskBoardFilterMode] = useState<TaskFilterMatchMode>("include");
   const [taskAssigneeFilterMode, setTaskAssigneeFilterMode] = useState<TaskFilterMatchMode>("include");
+  const [taskSprintFilterId, setTaskSprintFilterId] = useState<string | undefined>(undefined);
+  const [taskSprintPersonFilter, setTaskSprintPersonFilter] = useState<string | undefined>(undefined);
+  const [sprintFilterWeeks, setSprintFilterWeeks] = useState<DashboardSprintWeek[]>([]);
+  const [sprintFilterItems, setSprintFilterItems] = useState<DashboardSprintItem[]>([]);
   const [myWorkTablePage, setMyWorkTablePage] = useState(1);
   const [adminTasksTablePage, setAdminTasksTablePage] = useState(1);
+  const [taskTablePageSize, setTaskTablePageSize] = useState(TASK_TABLE_PAGE_SIZE);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [taskDrawerTab, setTaskDrawerTab] = useState<TaskDrawerTab>("summary");
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -2298,8 +2430,8 @@ export function AppShell() {
   } | null>(null);
   const [statusPalette, setStatusPalette] = useState<Record<string, { label: string; color: string }>>(DEFAULT_STATUS_META);
   const [brandingConfig, setBrandingConfig] = useState<{ app_name: string; logo_url: string }>({
-    app_name: "BlackBeans System",
-    logo_url: "",
+    app_name: DEFAULT_APP_NAME,
+    logo_url: DEFAULT_LOGO_URL,
   });
   const [profileAvatarDataUrl, setProfileAvatarDataUrl] = useState<string>("");
   const [meWorkspaceAccess, setMeWorkspaceAccess] = useState<{ all: boolean; workspace_ids: string[] } | null>(null);
@@ -2322,12 +2454,15 @@ export function AppShell() {
         return [
           { key: "dashboard", icon: <AppstoreOutlined />, label: menuLabel("Dashboard", "Resumo rapido da sua operacao.") },
           { key: "my-work", icon: <UnorderedListOutlined />, label: menuLabel("Meu trabalho", HELP_TIPS.menuMyWork) },
+          { key: "sprint", icon: <CalendarOutlined />, label: menuLabel("Sprint", HELP_TIPS.menuSprint) },
           { key: "projects", icon: <FolderOpenOutlined />, label: menuLabel("Projetos", HELP_TIPS.menuProjects) },
         ];
       }
       const base: NonNullable<MenuProps["items"]> = [
         { key: "dashboard", icon: <AppstoreOutlined />, label: menuLabel("Dashboard", "Visao geral: horas, tarefas e filtros operacionais.") },
         { key: "my-work", icon: <UnorderedListOutlined />, label: menuLabel("Meu trabalho", HELP_TIPS.menuMyWork) },
+        { key: "sprint", icon: <CalendarOutlined />, label: menuLabel("Sprint", HELP_TIPS.menuSprint) },
+        { key: "task-intake", icon: <FormOutlined />, label: menuLabel("Imputador de tarefas", HELP_TIPS.menuTaskIntake) },
         { key: "projects", icon: <FolderOpenOutlined />, label: menuLabel("Projetos", HELP_TIPS.menuProjects) },
         { key: "workspaces", icon: <FolderOutlined />, label: menuLabel("Areas de trabalho", HELP_TIPS.menuWorkspaces) },
       ];
@@ -2587,6 +2722,9 @@ export function AppShell() {
       if (!MENU_KEYS.includes(key as MenuKey)) return;
       navigateTo(key as MenuKey);
       setMobileNavOpen(false);
+      if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
     },
     [navigateTo],
   );
@@ -2740,6 +2878,19 @@ export function AppShell() {
         const assigneeActual = task.assignee_id ? String(task.assignee_id) : "unassigned";
         if (!matchTaskFilterValue(taskAssigneeFilter, assigneeActual, taskAssigneeFilterMode)) return false;
       }
+      if (taskSprintFilterId) {
+        const sprintTaskIds = new Set(
+          sprintFilterItems
+            .filter((item) => {
+              if (!item.task_id) return false;
+              if (!taskSprintPersonFilter) return true;
+              const assigneeKey = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
+              return assigneeKey === taskSprintPersonFilter;
+            })
+            .map((item) => item.task_id as string),
+        );
+        if (!sprintTaskIds.has(task.id)) return false;
+      }
       const endMs = task.end_date ? new Date(task.end_date).getTime() : null;
       const isOpen = task.status !== "done";
       switch (taskPeriodFilter) {
@@ -2772,6 +2923,19 @@ export function AppShell() {
         default:
           break;
       }
+      if (taskDateFrom || taskDateTo) {
+        const startMs = task.start_date ? new Date(task.start_date).getTime() : null;
+        const refMs = endMs ?? startMs;
+        if (refMs === null) return false;
+        if (taskDateFrom) {
+          const fromMs = new Date(`${taskDateFrom}T00:00:00`).getTime();
+          if (Number.isFinite(fromMs) && refMs < fromMs) return false;
+        }
+        if (taskDateTo) {
+          const toMs = new Date(`${taskDateTo}T23:59:59`).getTime();
+          if (Number.isFinite(toMs) && refMs > toMs) return false;
+        }
+      }
       return true;
     },
     [
@@ -2784,12 +2948,17 @@ export function AppShell() {
       taskBoardFilterMode,
       taskClientFilter,
       taskClientFilterMode,
+      taskDateFrom,
+      taskDateTo,
       taskPeriodFilter,
       taskPriorityFilter,
       taskPriorityFilterMode,
       taskProjectFilter,
       taskProjectFilterMode,
       taskSearchFilter,
+      taskSprintFilterId,
+      taskSprintPersonFilter,
+      sprintFilterItems,
       taskStatusFilter,
       taskStatusFilterMode,
     ],
@@ -3081,8 +3250,8 @@ export function AppShell() {
   const taskTimeSummaryTargets = useMemo(() => {
     const map = new Map<string, TaskItem>();
     const pageSlice = <T,>(rows: T[], page: number): T[] => {
-      const start = Math.max(0, (page - 1) * TASK_TABLE_PAGE_SIZE);
-      return rows.slice(start, start + TASK_TABLE_PAGE_SIZE);
+      const start = Math.max(0, (page - 1) * taskTablePageSize);
+      return rows.slice(start, start + taskTablePageSize);
     };
     if (activeKey === "my-work") {
       pageSlice(myWorkFilteredTasks, myWorkTablePage).forEach((t) => {
@@ -3132,6 +3301,7 @@ export function AppShell() {
     selectedProjectId,
     subtasksByParentId,
     tasksTabFiltered,
+    taskTablePageSize,
   ]);
   const taskTimeSummaryIdsKey = useMemo(
     () => taskTimeSummaryTargets.map((t) => t.id).sort().join(","),
@@ -3354,6 +3524,10 @@ export function AppShell() {
     selectedProjectId,
     selectedWorkspaceId,
   ]);
+  const visibleSidebarSelectedKey =
+    activeKey === "projects" || activeKey === "workspaces" ? selectedProjectSidebarKey : null;
+  const showStructureBrowse =
+    activeKey === "workspaces" || (activeKey === "projects" && Boolean(selectedWorkspaceId));
   const projectSidebarExpandedKeysSet = useMemo(
     () => new Set(projectSidebarExpandedKeys),
     [projectSidebarExpandedKeys],
@@ -3570,6 +3744,49 @@ export function AppShell() {
     }
   }, [token]);
 
+  useEffect(() => {
+    if (!token || !isAdmin) return;
+    if (activeKey !== "dashboard" && activeKey !== "tasks") return;
+    let cancelled = false;
+    void (async () => {
+      const response = await apiRequest<{ weeks: DashboardSprintWeek[] }>("/sprints", { token });
+      if (cancelled || !response.ok) return;
+      setSprintFilterWeeks(response.data?.weeks ?? []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeKey, isAdmin, token]);
+
+  useEffect(() => {
+    if (!token || !taskSprintFilterId) {
+      setSprintFilterItems([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const response = await apiRequest<{ week: { items?: DashboardSprintItem[] } }>(
+        `/sprints/${taskSprintFilterId}`,
+        { token },
+      );
+      if (cancelled || !response.ok) return;
+      setSprintFilterItems(response.data?.week?.items ?? []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [taskSprintFilterId, token]);
+
+  const sprintFilterPersonOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const item of sprintFilterItems) {
+      const value = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
+      if (seen.has(value)) continue;
+      seen.set(value, item.assignee_name || "Sem responsavel");
+    }
+    return Array.from(seen.entries()).map(([value, label]) => ({ value, label }));
+  }, [sprintFilterItems]);
+
   const hydrateTaskAssigneePickList = useCallback(async () => {
     if (!token) return;
     const mapUserRow = (row: {
@@ -3703,8 +3920,9 @@ export function AppShell() {
     () => ({
       title: "Resp",
       key: "assignee",
-      width: 72,
+      width: TASK_COL.assignee,
       align: "center" as const,
+      ellipsis: true,
       render: (_: unknown, record: TaskItem) => (
         <span onClick={(event) => event.stopPropagation()}>
           {renderAssigneeAvatar(record.assignee_id, "small", {
@@ -4195,6 +4413,7 @@ export function AppShell() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
+      try {
       const storedToken = localStorage.getItem(AUTH_STORAGE_KEY);
       const validToken = isTokenExpired(storedToken) ? null : storedToken;
       if (!validToken) {
@@ -4264,11 +4483,11 @@ export function AppShell() {
       if (rawBranding) {
         try {
           const parsed = JSON.parse(rawBranding) as { app_name?: string; logo_url?: string };
-          const nextBranding = {
-            app_name: String(parsed.app_name ?? "BlackBeans System"),
-            logo_url: String(parsed.logo_url ?? ""),
-          };
-          setBrandingConfig(nextBranding);
+          let appName = String(parsed.app_name ?? DEFAULT_APP_NAME).trim() || DEFAULT_APP_NAME;
+          let logoUrl = String(parsed.logo_url ?? "").trim();
+          if (appName === "BlackBeans System") appName = DEFAULT_APP_NAME;
+          if (!logoUrl) logoUrl = DEFAULT_LOGO_URL;
+          setBrandingConfig({ app_name: appName, logo_url: logoUrl });
         } catch {
           // ignore malformed branding config
         }
@@ -4296,7 +4515,12 @@ export function AppShell() {
       setNowMs(new Date().getTime());
       const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
       setBbThemeMode(storedTheme === "light" ? "light" : "dark");
-      setHydratedSession(true);
+      } catch {
+        setToken(null);
+        setActiveKey("dashboard");
+      } finally {
+        setHydratedSession(true);
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -4527,6 +4751,10 @@ export function AppShell() {
       if (cancelled) return;
       const fetchedAtMs = Date.now();
       if (!resp.ok) {
+        const status = Number(resp.status ?? 0);
+        if (status === 404 || status === 502) {
+          return;
+        }
         const chunkSize = 6;
         for (let i = 0; i < targetIds.length; i += chunkSize) {
           if (cancelled) return;
@@ -4997,7 +5225,7 @@ export function AppShell() {
       description: task.description ?? "",
       status: task.status,
       priority: task.priority,
-      effort_points: Math.max(0, Math.round(Number(task.effort_points ?? 1))),
+      effort_points: Math.max(0, Number(task.effort_points ?? 1)),
       assignee_id: task.assignee_id ?? undefined,
       start_date: toDateInputValue(task.start_date) || undefined,
       end_date: toDateInputValue(task.end_date) || undefined,
@@ -5049,7 +5277,7 @@ export function AppShell() {
     }
   }
 
-  function applyUpdatedTaskLocally(updated: TaskItem) {
+    function applyUpdatedTaskLocally(updated: TaskItem) {
     const merge = (list: TaskItem[]) =>
       list.map((row) => (row.id === updated.id ? { ...row, ...updated } : row));
     setTasks((prev) => merge(prev));
@@ -5064,10 +5292,19 @@ export function AppShell() {
     setBoardKanbanByBoardId((prev) => {
       const next: Record<string, KanbanGroup[]> = { ...prev };
       for (const boardId of Object.keys(next)) {
-        next[boardId] = (next[boardId] ?? []).map((group) => ({
+        const groups = next[boardId] ?? [];
+        const without = groups.map((group) => ({
           ...group,
-          tasks: merge(group.tasks),
+          tasks: (group.tasks ?? []).filter((row) => row.id !== updated.id),
         }));
+        const targetIdx = without.findIndex((group) => group.group.id === updated.group_id);
+        if (targetIdx >= 0) {
+          without[targetIdx] = {
+            ...without[targetIdx],
+            tasks: [...without[targetIdx].tasks, { ...updated }],
+          };
+        }
+        next[boardId] = without;
       }
       return next;
     });
@@ -5151,7 +5388,7 @@ export function AppShell() {
           description: values.description ?? "",
           status: values.status ?? "todo",
           priority: values.priority ?? createSubtaskParent.priority,
-          effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
+          effort_points: Math.max(0, Number(values.effort_points ?? 1)),
           assignee_id: values.assignee_id ?? null,
           start_date: startIso,
           end_date: endIso,
@@ -5391,7 +5628,7 @@ export function AppShell() {
         description: nextTask.description ?? "",
         status: nextTask.status,
         priority: nextTask.priority,
-        effort_points: Math.max(0, Math.round(Number(nextTask.effort_points ?? 1))),
+        effort_points: Math.max(0, Number(nextTask.effort_points ?? 1)),
         assignee_id: nextTask.assignee_id ?? undefined,
         start_date: toDateInputValue(nextTask.start_date) || undefined,
         end_date: toDateInputValue(nextTask.end_date) || undefined,
@@ -5642,15 +5879,20 @@ export function AppShell() {
       apiMessage.error("Prazo de inicio deve ser anterior ou igual ao prazo final.");
       return;
     }
+    const description = String(values.description ?? "");
+    if (description.includes("blob:")) {
+      apiMessage.warning("Aguarde o upload dos arquivos da descricao antes de salvar.");
+      return;
+    }
     const nextStatus = String(values.status ?? selectedTask.status);
-    await taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
+      await taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
       title: values.title,
-      description: values.description ?? "",
+      description,
       priority: values.priority,
       effort_points:
         values.effort_points === undefined || values.effort_points === null
           ? selectedTask.effort_points
-          : Math.max(0, Math.round(Number(values.effort_points))),
+          : Math.max(0, Number(values.effort_points)),
       assignee_id:
         values.assignee_id === undefined || values.assignee_id === null || values.assignee_id === ""
           ? null
@@ -5679,7 +5921,10 @@ export function AppShell() {
   async function uploadCommentAttachments(taskId: string, commentId: string, files: UploadFile[]) {
     for (const item of files) {
       const blob = item.originFileObj;
-      if (!blob) continue;
+      if (!blob) {
+        apiMessage.warning(`Nao foi possivel enviar ${item.name || "anexo"} (arquivo indisponivel).`);
+        continue;
+      }
       const formData = new FormData();
       formData.append("file", blob as File);
       formData.append("comment_id", commentId);
@@ -6463,14 +6708,6 @@ export function AppShell() {
     });
   }
 
-  if (!hydratedSession) {
-    return (
-      <Row justify="center" align="middle" style={{ minHeight: "100vh" }}>
-        <Spin size="large" />
-      </Row>
-    );
-  }
-
   if (!token) {
     return (
       <>
@@ -6526,33 +6763,28 @@ export function AppShell() {
       </a>
       <Layout style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>
         {!isCompactNav ? (
-          <Sider theme="dark" width={248}>
+          <Sider theme="dark" width={248} className="bb-app-sider" style={{ background: "#1a1a1a" }}>
             <div
               style={{
-                color: "#F4F0ED",
-                fontWeight: 700,
-                padding: "18px 18px 8px",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
+                padding: "14px 12px 10px",
+                display: "block",
               }}
             >
-              {brandingConfig.logo_url ? (
-                <img
-                  src={brandingConfig.logo_url}
-                  alt="Logo do sistema"
-                  style={{ width: 22, height: 22, objectFit: "cover", borderRadius: 6 }}
-                />
-              ) : null}
-              <span>{brandingConfig.app_name}</span>
+              <img
+                src={brandingConfig.logo_url || DEFAULT_LOGO_URL}
+                alt={brandingConfig.app_name || DEFAULT_APP_NAME}
+                style={{ width: "100%", height: "auto", display: "block", objectFit: "contain" }}
+              />
             </div>
             <nav aria-label="Navegacao principal">
               <Menu
                 theme="dark"
                 mode="inline"
+                className="bb-app-nav-menu"
                 selectedKeys={[activeKey]}
                 onClick={handleMainMenuClick}
                 items={menuItems}
+                style={{ background: "transparent" }}
               />
               <Divider style={{ borderColor: "rgba(255,255,255,0.14)", margin: "10px 0" }} />
               <div style={{ padding: "0 6px 12px" }}>
@@ -6571,7 +6803,7 @@ export function AppShell() {
                     data={projectSidebarTreeData}
                     expanded={projectSidebarExpandedKeysSet}
                     onToggle={toggleProjectSidebarKey}
-                    selectedKey={selectedProjectSidebarKey}
+                    selectedKey={visibleSidebarSelectedKey}
                     onSelect={handleSidebarTreeSelect}
                     onAction={handleSidebarTreeAction}
                     showActions={isAdmin}
@@ -6590,29 +6822,22 @@ export function AppShell() {
               paddingInline: isCompactNav ? 12 : 24,
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
+              justifyContent: "flex-end",
               gap: 12,
               flexWrap: "nowrap",
+              width: "100%",
             }}
           >
-            <Space align="center" style={{ flex: 1, minWidth: 0 }}>
-              {isCompactNav ? (
-                <Button
-                  type="text"
-                  icon={<MenuOutlined />}
-                  aria-label="Abrir menu de navegacao"
-                  onClick={() => setMobileNavOpen(true)}
-                />
-              ) : null}
-              <Typography.Title
-                level={4}
-                style={{ margin: 0, flex: 1, minWidth: 0, color: antToken.colorText }}
-                ellipsis
-              >
-                {brandingConfig.app_name}
-              </Typography.Title>
-            </Space>
-            <Space>
+            {isCompactNav ? (
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                aria-label="Abrir menu de navegacao"
+                onClick={() => setMobileNavOpen(true)}
+                style={{ marginRight: "auto" }}
+              />
+            ) : null}
+            <Space size={4} style={{ marginLeft: "auto" }}>
               <HelpTip title={HELP_TIPS.notificacoes}>
                 <Dropdown
                   trigger={["click"]}
@@ -6674,7 +6899,11 @@ export function AppShell() {
           <Content
             id="conteudo-principal"
             tabIndex={-1}
-            style={{ padding: isCompactNav ? 12 : 24, background: antToken.colorBgLayout }}
+            style={{
+              padding: isCompactNav ? 12 : 24,
+              paddingBottom: isCompactNav ? 64 : 72,
+              background: antToken.colorBgLayout,
+            }}
           >
             <Spin spinning={false}>
               <>
@@ -6752,22 +6981,47 @@ export function AppShell() {
                 {activeKey === "my-work" && (
                   <Row gutter={[16, 16]}>
                     <Col span={24}>
-                      <Card title="Meu trabalho">
-                        <Space wrap>
-                          <Tag>Total: {myWorkMetrics.total}</Tag>
-                          <Tag color="default">A fazer: {myWorkMetrics.todo}</Tag>
-                          <Tag color="processing">Em progresso: {myWorkMetrics.inProgress}</Tag>
-                          <Tag color="warning">Bloqueadas: {myWorkMetrics.blocked}</Tag>
-                          <Tag color="success">Concluidas: {myWorkMetrics.done}</Tag>
-                          <Tag color="error">Vencimento em 7 dias: {myWorkMetrics.dueSoon}</Tag>
-                        </Space>
-                        <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginTop: 12 }}
-                          title="Orientacao rapida"
-                          description="Use as cores padrao: status (cinza/azul/amarelo/verde) e prioridade (azul/dourado/laranja/vermelho). Clique na linha para abrir detalhes."
-                        />
+                      <Card
+                        size="small"
+                        className="bb-mywork-summary"
+                        title="Meu trabalho"
+                        extra={
+                          <HelpTip title="Clique na linha para abrir detalhes. Status: cinza, azul, amarelo, verde. Prioridade: azul, dourado, laranja, vermelho.">
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<InfoCircleOutlined />}
+                              aria-label="Orientacao rapida"
+                            />
+                          </HelpTip>
+                        }
+                      >
+                        <div className="bb-mywork-metrics">
+                          <span className="bb-mywork-chip">
+                            <span>Total</span>
+                            <strong>{myWorkMetrics.total}</strong>
+                          </span>
+                          <span className="bb-mywork-chip">
+                            <span>A fazer</span>
+                            <strong>{myWorkMetrics.todo}</strong>
+                          </span>
+                          <span className="bb-mywork-chip bb-mywork-chip--progress">
+                            <span>Em progresso</span>
+                            <strong>{myWorkMetrics.inProgress}</strong>
+                          </span>
+                          <span className="bb-mywork-chip bb-mywork-chip--blocked">
+                            <span>Bloqueadas</span>
+                            <strong>{myWorkMetrics.blocked}</strong>
+                          </span>
+                          <span className="bb-mywork-chip bb-mywork-chip--done">
+                            <span>Concluidas</span>
+                            <strong>{myWorkMetrics.done}</strong>
+                          </span>
+                          <span className="bb-mywork-chip bb-mywork-chip--due">
+                            <span>Vence em 7 dias</span>
+                            <strong>{myWorkMetrics.dueSoon}</strong>
+                          </span>
+                        </div>
                       </Card>
                     </Col>
                     <Col span={24}>
@@ -6976,11 +7230,21 @@ export function AppShell() {
                           rowKey="id"
                           size="small"
                           className="bb-compact-table"
+                          scroll={{ x: TASK_TABLE_SCROLL_X }}
                           dataSource={myWorkFilteredTasks}
                           pagination={{
-                            pageSize: TASK_TABLE_PAGE_SIZE,
+                            showSizeChanger: true,
+                            pageSizeOptions: TASK_TABLE_PAGE_SIZE_OPTIONS,
+                            pageSize: taskTablePageSize,
                             current: myWorkTablePage,
-                            onChange: (page) => setMyWorkTablePage(page),
+                            onChange: (page, size) => {
+                              if (size !== taskTablePageSize) {
+                                setTaskTablePageSize(size);
+                                setMyWorkTablePage(1);
+                                return;
+                              }
+                              setMyWorkTablePage(page);
+                            },
                           }}
                           expandable={{
                             expandedRowKeys: expandedMyWorkTaskKeys,
@@ -7010,7 +7274,7 @@ export function AppShell() {
                             {
                               title: "Titulo",
                               dataIndex: "title",
-                              width: 320,
+                              width: TASK_COL.title,
                               ellipsis: true,
                               sorter: (a, b) => a.title.localeCompare(b.title),
                               render: (value: string, record: MyWorkTaskRow) => renderTaskTitleCell(value, record),
@@ -7024,41 +7288,55 @@ export function AppShell() {
                             },
                             {
                               title: "Projeto",
+                              width: TASK_COL.project,
+                              ellipsis: true,
                               sorter: (a, b) => taskContext(a).projectLabel.localeCompare(taskContext(b).projectLabel),
                               render: (record: TaskItem) => taskContext(record).projectLabel,
                             },
                             {
                               title: "Cliente",
+                              width: TASK_COL.client,
+                              ellipsis: true,
                               sorter: (a, b) => taskContext(a).clientLabel.localeCompare(taskContext(b).clientLabel),
                               render: (record: TaskItem) => taskContext(record).clientLabel,
                             },
                             {
                               title: "Prioridade",
                               dataIndex: "priority",
+                              width: TASK_COL.priority,
+                              ellipsis: true,
                               sorter: (a, b) => a.priority.localeCompare(b.priority),
                               render: (v: string) => renderPriorityTag(v),
                             },
                             {
                               title: "Status",
                               dataIndex: "status",
+                              width: TASK_COL.status,
+                              ellipsis: true,
                               sorter: (a, b) => a.status.localeCompare(b.status),
                               render: (_: string, record: TaskItem) => renderEditableStatusTag(record),
                             },
                             {
                               title: "Prazo inicio",
                               dataIndex: "start_date",
+                              width: TASK_COL.start,
+                              ellipsis: true,
                               sorter: (a, b) => new Date(a.start_date ?? 0).getTime() - new Date(b.start_date ?? 0).getTime(),
                               render: (v: string | null) => formatDateOnly(v),
                             },
                             {
                               title: "Prazo fim",
                               dataIndex: "end_date",
+                              width: TASK_COL.end,
+                              ellipsis: true,
                               defaultSortOrder: "ascend",
                               sorter: compareTaskEndDateAsc,
                               render: (v: string | null) => formatDateOnly(v),
                             },
                             {
                               title: "Tempo",
+                              width: TASK_COL.time,
+                              ellipsis: true,
                               render: (record: TaskItem) => {
                                 const row = taskTimeSummaryByTaskId[record.id];
                                 if (!row) {
@@ -7079,6 +7357,7 @@ export function AppShell() {
                             },
                             {
                               title: "Acoes",
+                              width: TASK_COL.actions,
                               render: (record: TaskItem) => {
                                 const row = taskTimeSummaryByTaskId[record.id];
                                 const active =
@@ -7305,6 +7584,8 @@ export function AppShell() {
                           <Col span={24}>
                             <Table
                               size="small"
+                              className="bb-compact-table"
+                              scroll={{ x: 640 }}
                               rowKey={(row) => String((row as { user_id?: number | null }).user_id ?? "none")}
                               pagination={{ pageSize: 8 }}
                               dataSource={
@@ -7321,6 +7602,8 @@ export function AppShell() {
                                 {
                                   title: "Usuario",
                                   dataIndex: "name",
+                                  width: 200,
+                                  ellipsis: true,
                                   render: (value: string, row: Record<string, unknown>) =>
                                     `${value}${row.email ? ` (${row.email})` : ""}`,
                                 },
@@ -7328,6 +7611,7 @@ export function AppShell() {
                                   title: "Tipo",
                                   key: "user_type",
                                   width: 110,
+                                  ellipsis: true,
                                   render: (_: unknown, row: Record<string, unknown>) => {
                                     const isAdminRow =
                                       row.user_type === "admin" || Boolean(row.is_staff);
@@ -7338,6 +7622,7 @@ export function AppShell() {
                                   title: "Tarefas",
                                   key: "tasks_count",
                                   width: 90,
+                                  ellipsis: true,
                                   render: (_: unknown, row: Record<string, unknown>) =>
                                     Number(row.tasks_count ?? (Array.isArray(row.tasks) ? row.tasks.length : 0)),
                                 },
@@ -7345,12 +7630,14 @@ export function AppShell() {
                                   title: "Horas previstas",
                                   dataIndex: "effort_points_total",
                                   width: 130,
+                                  ellipsis: true,
                                   render: (value: number) => formatEffortHoursDisplay(Number(value ?? 0)),
                                 },
                                 {
                                   title: "Horas",
                                   dataIndex: "consumed_hours",
-                                  width: 120,
+                                  width: 110,
+                                  ellipsis: true,
                                   render: (value: number) => decimalHoursToHmText(value),
                                 },
                               ]}
@@ -7405,6 +7692,8 @@ export function AppShell() {
                             setTaskBoardFilter([]);
                             setTaskAssigneeFilter([]);
                             setTaskPeriodFilter("all");
+                            setTaskDateFrom("");
+                            setTaskDateTo("");
                             setTaskSearchFilter("");
                             setTaskStatusFilterMode("include");
                             setTaskPriorityFilterMode("include");
@@ -7412,6 +7701,9 @@ export function AppShell() {
                             setTaskClientFilterMode("include");
                             setTaskBoardFilterMode("include");
                             setTaskAssigneeFilterMode("include");
+                            setTaskSprintFilterId(undefined);
+                            setTaskSprintPersonFilter(undefined);
+                            setSprintFilterItems([]);
                             setAdminTasksTablePage(1);
                           }}
                         >
@@ -7424,7 +7716,10 @@ export function AppShell() {
                       <TipSelect
                         tip={HELP_TIPS.filterPeriodo}
                         value={taskPeriodFilter}
-                        onChange={(value) => setTaskPeriodFilter(value)}
+                        onChange={(value) => {
+                          setTaskPeriodFilter(value);
+                          setAdminTasksTablePage(1);
+                        }}
                         style={{ minWidth: 200 }}
                         options={[
                           { value: "all", label: "Todos os periodos" },
@@ -7437,6 +7732,41 @@ export function AppShell() {
                           { value: "done", label: "Concluidas" },
                         ]}
                       />
+                      <Input
+                        type="date"
+                        value={taskDateFrom}
+                        onChange={(event) => {
+                          setTaskDateFrom(event.target.value);
+                          setAdminTasksTablePage(1);
+                        }}
+                        style={{ width: 150 }}
+                        aria-label="Prazo de"
+                        title="De (prazo)"
+                      />
+                      <Typography.Text type="secondary">ate</Typography.Text>
+                      <Input
+                        type="date"
+                        value={taskDateTo}
+                        onChange={(event) => {
+                          setTaskDateTo(event.target.value);
+                          setAdminTasksTablePage(1);
+                        }}
+                        style={{ width: 150 }}
+                        aria-label="Prazo ate"
+                        title="Ate (prazo)"
+                      />
+                      {(taskDateFrom || taskDateTo) && (
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            setTaskDateFrom("");
+                            setTaskDateTo("");
+                            setAdminTasksTablePage(1);
+                          }}
+                        >
+                          Limpar datas
+                        </Button>
+                      )}
                       <Space.Compact>
                         <Select
                           value={taskStatusFilterMode}
@@ -7618,6 +7948,37 @@ export function AppShell() {
                           ]}
                         />
                       </Space.Compact>
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="Sprint"
+                        value={taskSprintFilterId}
+                        onChange={(value) => {
+                          setTaskSprintFilterId(value);
+                          setTaskSprintPersonFilter(undefined);
+                          setAdminTasksTablePage(1);
+                        }}
+                        style={{ minWidth: 180 }}
+                        options={sprintFilterWeeks.map((week) => ({
+                          value: week.id,
+                          label: `${week.label}${week.is_locked ? " (travada)" : ""}`,
+                        }))}
+                      />
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="Pessoa da sprint"
+                        value={taskSprintPersonFilter}
+                        disabled={!taskSprintFilterId}
+                        onChange={(value) => {
+                          setTaskSprintPersonFilter(value);
+                          setAdminTasksTablePage(1);
+                        }}
+                        style={{ minWidth: 200 }}
+                        options={sprintFilterPersonOptions}
+                      />
                       <Tooltip title={HELP_TIPS.buscarTitulo} mouseEnterDelay={0.35}>
                         <Input
                           allowClear
@@ -7633,12 +7994,22 @@ export function AppShell() {
                       rowKey="id"
                       size="small"
                       className="bb-compact-table"
+                      scroll={{ x: TASK_TABLE_SCROLL_X }}
                       loading={allTasksLoading}
                       dataSource={tasksTabFiltered}
                       pagination={{
-                        pageSize: TASK_TABLE_PAGE_SIZE,
+                        showSizeChanger: true,
+                        pageSizeOptions: TASK_TABLE_PAGE_SIZE_OPTIONS,
+                        pageSize: taskTablePageSize,
                         current: adminTasksTablePage,
-                        onChange: (page) => setAdminTasksTablePage(page),
+                        onChange: (page, size) => {
+                          if (size !== taskTablePageSize) {
+                            setTaskTablePageSize(size);
+                            setAdminTasksTablePage(1);
+                            return;
+                          }
+                          setAdminTasksTablePage(page);
+                        },
                       }}
                       expandable={{
                         expandedRowKeys: expandedAdminTasksKeys,
@@ -7676,7 +8047,7 @@ export function AppShell() {
                         {
                           title: "Titulo",
                           dataIndex: "title",
-                          width: 320,
+                          width: TASK_COL.title,
                           ellipsis: true,
                           sorter: (a, b) => a.title.localeCompare(b.title),
                           render: (value: string, record: TasksTabRow) => renderTaskTitleCell(value, record),
@@ -7690,41 +8061,55 @@ export function AppShell() {
                         },
                         {
                           title: "Projeto",
+                          width: TASK_COL.project,
+                          ellipsis: true,
                           sorter: (a, b) => taskContext(a).projectLabel.localeCompare(taskContext(b).projectLabel),
                           render: (record: TaskItem) => taskContext(record).projectLabel,
                         },
                         {
                           title: "Cliente",
+                          width: TASK_COL.client,
+                          ellipsis: true,
                           sorter: (a, b) => taskContext(a).clientLabel.localeCompare(taskContext(b).clientLabel),
                           render: (record: TaskItem) => taskContext(record).clientLabel,
                         },
                         {
                           title: "Prioridade",
                           dataIndex: "priority",
+                          width: TASK_COL.priority,
+                          ellipsis: true,
                           sorter: (a, b) => a.priority.localeCompare(b.priority),
                           render: (v: string) => renderPriorityTag(v),
                         },
                         {
                           title: "Status",
                           dataIndex: "status",
+                          width: TASK_COL.status,
+                          ellipsis: true,
                           sorter: (a, b) => a.status.localeCompare(b.status),
                           render: (_: string, record: TaskItem) => renderEditableStatusTag(record),
                         },
                         {
                           title: "Prazo inicio",
                           dataIndex: "start_date",
+                          width: TASK_COL.start,
+                          ellipsis: true,
                           sorter: (a, b) => new Date(a.start_date ?? 0).getTime() - new Date(b.start_date ?? 0).getTime(),
                           render: (v: string | null) => formatDateOnly(v),
                         },
                         {
                           title: "Prazo fim",
                           dataIndex: "end_date",
+                          width: TASK_COL.end,
+                          ellipsis: true,
                           defaultSortOrder: "ascend",
                           sorter: compareTaskEndDateAsc,
                           render: (v: string | null) => formatDateOnly(v),
                         },
                         {
                           title: "Tempo",
+                          width: TASK_COL.time,
+                          ellipsis: true,
                           render: (record: TaskItem) => {
                             const row = taskTimeSummaryByTaskId[record.id];
                             if (!row) {
@@ -7745,6 +8130,7 @@ export function AppShell() {
                         },
                         {
                           title: "Acoes",
+                          width: TASK_COL.actions,
                           render: (record: TaskItem) => {
                             const row = taskTimeSummaryByTaskId[record.id];
                             const active =
@@ -8283,8 +8669,8 @@ export function AppShell() {
                           key={`branding-${brandingConfig.app_name}-${brandingConfig.logo_url}`}
                           onFinish={(values) => {
                             const next = {
-                              app_name: String(values.app_name ?? "BlackBeans System"),
-                              logo_url: brandingConfig.logo_url,
+                              app_name: String(values.app_name ?? DEFAULT_APP_NAME),
+                              logo_url: brandingConfig.logo_url || DEFAULT_LOGO_URL,
                             };
                             setBrandingConfig(next);
                             if (typeof window !== "undefined") {
@@ -8333,10 +8719,10 @@ export function AppShell() {
                             </Button>
                             <Button
                               onClick={() => {
-                                const reset = { app_name: "BlackBeans System", logo_url: "" };
+                                const reset = { app_name: DEFAULT_APP_NAME, logo_url: DEFAULT_LOGO_URL };
                                 setBrandingConfig(reset);
                                 if (typeof window !== "undefined") {
-                                  localStorage.removeItem(BRANDING_STORAGE_KEY);
+                                  localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(reset));
                                 }
                                 apiMessage.success("Configuracoes padrao restauradas.");
                               }}
@@ -10435,6 +10821,14 @@ export function AppShell() {
                   <LeadsPanel token={token} />
                 ) : null}
 
+                {activeKey === "task-intake" && isAdmin && token ? (
+                  <TaskIntakePanel token={token} />
+                ) : null}
+
+                {activeKey === "sprint" && token ? (
+                  <SprintPanel token={token} isAdmin={isAdmin} />
+                ) : null}
+
                 {activeKey === "client-requests" && isAdmin && (
                   <Card
                     title="Pedidos de clientes"
@@ -10730,7 +11124,7 @@ export function AppShell() {
                   </Row>
                 )}
 
-                {activeKey === "projects" && !selectedProjectId && (
+                {activeKey === "projects" && !selectedWorkspaceId && !selectedProjectId && (
                   <Card title="Projetos">
                     <Space wrap style={{ marginBottom: 16, width: "100%" }}>
                       <Input
@@ -10799,8 +11193,14 @@ export function AppShell() {
                               >
                                 <Space orientation="vertical" size={4}>
                                   <Typography.Text strong>{String(project.name ?? projectId)}</Typography.Text>
-                                  <Typography.Text type="secondary">Cliente: {clientName}</Typography.Text>
-                                  <Typography.Text type="secondary">Area: {workspaceName}</Typography.Text>
+                                  <span className="bb-meta-line">
+                                    <span className="bb-meta-label">Cliente:</span>{" "}
+                                    <span className="bb-meta-value">{clientName}</span>
+                                  </span>
+                                  <span className="bb-meta-line">
+                                    <span className="bb-meta-label">Área:</span>{" "}
+                                    <span className="bb-meta-value">{workspaceName}</span>
+                                  </span>
                                 </Space>
                               </Card>
                             </Col>
@@ -10811,17 +11211,30 @@ export function AppShell() {
                   </Card>
                 )}
 
-                {(activeKey === "workspaces" || (activeKey === "projects" && Boolean(selectedProjectId))) && (
+                {showStructureBrowse && (
 
                   <Space orientation="vertical" size={16} style={{ width: "100%" }}>
                     <Space wrap align="center" style={{ justifyContent: "space-between", width: "100%" }}>
-                      <Space wrap size={4} align="center">
-                        {activeKey === "workspaces" ? (
+                      <Space wrap size={4} align="center" className="bb-crumb-path">
+                        <Button
+                          type="link"
+                          onClick={() => {
+                            setSelectedWorkspaceId(null);
+                            setSelectedPortfolioId(null);
+                            setSelectedClientId(null);
+                            setSelectedProjectId(null);
+                            setSelectedBoardId(null);
+                          }}
+                          style={{ paddingInline: 0 }}
+                        >
+                          {activeKey === "workspaces" ? "Areas de trabalho" : "Projetos"}
+                        </Button>
+                        {selectedWorkspace ? (
                           <>
+                            <Typography.Text type="secondary">/</Typography.Text>
                             <Button
                               type="link"
                               onClick={() => {
-                                setSelectedWorkspaceId(null);
                                 setSelectedPortfolioId(null);
                                 setSelectedClientId(null);
                                 setSelectedProjectId(null);
@@ -10829,62 +11242,31 @@ export function AppShell() {
                               }}
                               style={{ paddingInline: 0 }}
                             >
-                              Areas de trabalho
+                              {`Area de trabalho: ${String(selectedWorkspace.name ?? "Area de trabalho")}`}
                             </Button>
-                            {selectedWorkspace ? (
-                              <>
-                                <Typography.Text type="secondary">/</Typography.Text>
-                                <Button
-                                  type="link"
-                                  onClick={() => {
-                                    setSelectedPortfolioId(null);
-                                    setSelectedClientId(null);
-                                    setSelectedProjectId(null);
-                                    setSelectedBoardId(null);
-                                  }}
-                                  style={{ paddingInline: 0 }}
-                                >
-                                  {`Area de trabalho: ${String(selectedWorkspace.name ?? "Area de trabalho")}`}
-                                </Button>
-                              </>
-                            ) : null}
-                            {selectedPortfolio ? (
-                              <>
-                                <Typography.Text type="secondary">/</Typography.Text>
-                                <Button
-                                  type="link"
-                                  onClick={() => {
-                                    setSelectedProjectId(null);
-                                    setSelectedBoardId(null);
-                                  }}
-                                  style={{ paddingInline: 0 }}
-                                >
-                                  {`Portfolio: ${String(selectedPortfolio.name ?? "Portfolio")}`}
-                                </Button>
-                              </>
-                            ) : null}
                           </>
-                        ) : (
-                          <Button
-                            type="link"
-                            onClick={() => {
-                              setSelectedWorkspaceId(null);
-                              setSelectedPortfolioId(null);
-                              setSelectedClientId(null);
-                              setSelectedProjectId(null);
-                              setSelectedBoardId(null);
-                            }}
-                            style={{ paddingInline: 0 }}
-                          >
-                            Projetos
-                          </Button>
-                        )}
+                        ) : null}
+                        {selectedPortfolio ? (
+                          <>
+                            <Typography.Text type="secondary">/</Typography.Text>
+                            <Button
+                              type="link"
+                              onClick={() => {
+                                setSelectedProjectId(null);
+                                setSelectedBoardId(null);
+                              }}
+                              style={{ paddingInline: 0 }}
+                            >
+                              {`Portfolio: ${String(selectedPortfolio.name ?? "Portfolio")}`}
+                            </Button>
+                          </>
+                        ) : null}
                         {selectedProject ? (
                           <>
                             <Typography.Text type="secondary">/</Typography.Text>
-                            <Typography.Text strong>{`Projeto: ${String(selectedProject.name ?? "Projeto")}`}</Typography.Text>
+                            <Typography.Text strong className="bb-crumb-current">{`Projeto: ${String(selectedProject.name ?? "Projeto")}`}</Typography.Text>
                             <Typography.Text type="secondary">/</Typography.Text>
-                            <Typography.Text strong>Tarefas</Typography.Text>
+                            <Typography.Text strong className="bb-crumb-current">Tarefas</Typography.Text>
                           </>
                         ) : null}
                       </Space>
@@ -10896,14 +11278,14 @@ export function AppShell() {
                             </Button>
                           </HelpTip>
                         ) : null}
-                        {activeKey === "workspaces" && selectedWorkspaceId && !selectedPortfolioId && isAdmin ? (
+                        {showStructureBrowse && selectedWorkspaceId && !selectedPortfolioId && isAdmin ? (
                           <HelpTip title={HELP_TIPS.novoPortfolio}>
                             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreatePortfolioOpen(true)}>
                               Novo portfolio
                             </Button>
                           </HelpTip>
                         ) : null}
-                        {activeKey === "workspaces" && selectedPortfolioId && !selectedProjectId && isAdmin ? (
+                        {showStructureBrowse && selectedPortfolioId && !selectedProjectId && isAdmin ? (
                           <HelpTip title={HELP_TIPS.novoProjeto}>
                             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateProjectOpen(true)}>
                               Novo projeto
@@ -11162,8 +11544,14 @@ export function AppShell() {
                                     }
                                   >
                                     <Space orientation="vertical" size={4}>
-                                      <Tag color="processing">{wsPortfolios} portfolios</Tag>
-                                      <Tag color="purple">{wsProjects} projetos</Tag>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Portfolios:</span>{" "}
+                                        <span className="bb-meta-value">{wsPortfolios}</span>
+                                      </span>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Projetos:</span>{" "}
+                                        <span className="bb-meta-value">{wsProjects}</span>
+                                      </span>
                                     </Space>
                                   </Card>
                                 </Col>
@@ -11174,7 +11562,7 @@ export function AppShell() {
                       </Card>
                     )}
 
-                    {activeKey === "workspaces" && selectedWorkspaceId && !selectedPortfolioId && (
+                    {showStructureBrowse && selectedWorkspaceId && !selectedPortfolioId && (
                       <Card title={`Portfolios em ${String(selectedWorkspace?.name ?? "")}`}>
                         {portfoliosForWorkspace(selectedWorkspaceId).length === 0 ? (
                           <Empty
@@ -11242,7 +11630,10 @@ export function AppShell() {
                                     }
                                   >
                                     <Space orientation="vertical" size={4}>
-                                      <Tag color="purple">{projectsCount} projetos</Tag>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Projetos:</span>{" "}
+                                        <span className="bb-meta-value">{projectsCount}</span>
+                                      </span>
                                       {portfolio.description ? (
                                         <Typography.Text type="secondary">
                                           {String(portfolio.description)}
@@ -11258,7 +11649,7 @@ export function AppShell() {
                       </Card>
                     )}
 
-                    {activeKey === "workspaces" && selectedWorkspaceId && selectedPortfolioId && !selectedProjectId && (
+                    {showStructureBrowse && selectedWorkspaceId && selectedPortfolioId && !selectedProjectId && (
                       <Card title={`Projetos em ${String(selectedPortfolio?.name ?? "")}`}>
                         {projectsForPortfolio(selectedPortfolioId).length === 0 ? (
                           <Empty
@@ -11361,9 +11752,18 @@ export function AppShell() {
                                     }
                                   >
                                     <Space orientation="vertical" size={4}>
-                                      <Tag color="gold">{clientName}</Tag>
-                                      <Tag color="processing">{projectBoards} grupos</Tag>
-                                      <Typography.Text type="secondary">Status: {String(project.status ?? "-")}</Typography.Text>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Cliente:</span>{" "}
+                                        <span className="bb-meta-value">{clientName}</span>
+                                      </span>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Grupos:</span>{" "}
+                                        <span className="bb-meta-value">{projectBoards}</span>
+                                      </span>
+                                      <span className="bb-meta-line">
+                                        <span className="bb-meta-label">Status:</span>{" "}
+                                        <span className="bb-meta-value">{String(project.status ?? "-")}</span>
+                                      </span>
                                       {contractLine ? (
                                         <>
                                           <Typography.Text type="secondary">
@@ -11507,6 +11907,56 @@ export function AppShell() {
                                         fetchKanbanForBoard(boardId, value as BoardViewMode).catch(() => undefined);
                                       }}
                                     />
+                                    <HelpTip title={HELP_TIPS.puxarStatus}>
+                                      <Select
+                                        mode="multiple"
+                                        allowClear
+                                        maxTagCount="responsive"
+                                        size="small"
+                                        style={{ minWidth: 220 }}
+                                        placeholder="Puxar status"
+                                        disabled={!isAdmin}
+                                        value={board.pull_status_keys ?? []}
+                                        options={statusOptions}
+                                        onChange={async (keys) => {
+                                          const response = await apiRequest<{
+                                            board?: BoardItem;
+                                            realigned?: number;
+                                          }>(`/boards/${boardId}`, {
+                                            method: "PATCH",
+                                            token,
+                                            body: { pull_status_keys: keys },
+                                          });
+                                          if (!response.ok) {
+                                            apiMessage.error(
+                                              response.error?.message ?? "Falha ao salvar puxar status.",
+                                            );
+                                            return;
+                                          }
+                                          const nextBoard = response.data?.board;
+                                          setBoards((prev) =>
+                                            prev.map((row) =>
+                                              row.id === boardId
+                                                ? {
+                                                    ...row,
+                                                    pull_status_keys:
+                                                      nextBoard?.pull_status_keys ?? keys,
+                                                  }
+                                                : row,
+                                            ),
+                                          );
+                                          const moved = Number(response.data?.realigned ?? 0);
+                                          apiMessage.success(
+                                            moved > 0
+                                              ? `Puxar status salvo. ${moved} tarefa(s) realinhada(s).`
+                                              : "Puxar status salvo.",
+                                          );
+                                          await refreshBoardViewsForProject(selectedProjectId);
+                                          if (isAdmin) await fetchAllTasks().catch(() => undefined);
+                                          await fetchTasks().catch(() => undefined);
+                                        }}
+                                      />
+                                    </HelpTip>
                                     {isAdmin ? (
                                       <>
                                         {boardViewModeForBoard === "list" ? (
@@ -11892,16 +12342,28 @@ export function AppShell() {
                                       rowKey="id"
                                       size="small"
                                       className="bb-compact-table"
+                                      scroll={{ x: TASK_TABLE_SCROLL_X }}
                                       dataSource={boardListTasks}
                                       locale={{ emptyText: "Nenhuma tarefa neste grupo." }}
                                       pagination={{
-                                        pageSize: TASK_TABLE_PAGE_SIZE,
+                                        showSizeChanger: true,
+                                        pageSizeOptions: TASK_TABLE_PAGE_SIZE_OPTIONS,
+                                        pageSize: taskTablePageSize,
                                         current: boardListTablePageByBoardId[boardId] ?? 1,
-                                        onChange: (page) =>
+                                        onChange: (page, size) => {
+                                          if (size !== taskTablePageSize) {
+                                            setTaskTablePageSize(size);
+                                            setBoardListTablePageByBoardId((prev) => ({
+                                              ...prev,
+                                              [boardId]: 1,
+                                            }));
+                                            return;
+                                          }
                                           setBoardListTablePageByBoardId((prev) => ({
                                             ...prev,
                                             [boardId]: page,
-                                          })),
+                                          }));
+                                        },
                                       }}
                                       rowSelection={
                                         isAdmin
@@ -11942,7 +12404,7 @@ export function AppShell() {
                                         {
                                           title: "Titulo",
                                           dataIndex: "title",
-                                          width: 280,
+                                          width: TASK_COL.title,
                                           ellipsis: true,
                                           sorter: (a, b) => a.title.localeCompare(b.title),
                                           render: (value: string, record: TaskItem) =>
@@ -11957,6 +12419,7 @@ export function AppShell() {
                                         },
                                         {
                                           title: "Cliente",
+                                          width: TASK_COL.client,
                                           ellipsis: true,
                                           sorter: (a: TaskItem, b: TaskItem) =>
                                             taskContext(a).clientLabel.localeCompare(taskContext(b).clientLabel),
@@ -11965,12 +12428,16 @@ export function AppShell() {
                                         {
                                           title: "Prioridade",
                                           dataIndex: "priority",
+                                          width: TASK_COL.priority,
+                                          ellipsis: true,
                                           sorter: (a, b) => a.priority.localeCompare(b.priority),
                                           render: (v: string) => renderPriorityTag(v),
                                         },
                                         {
                                           title: "Status",
                                           dataIndex: "status",
+                                          width: TASK_COL.status,
+                                          ellipsis: true,
                                           sorter: (a, b) => a.status.localeCompare(b.status),
                                           render: (_: string, record: TaskItem) =>
                                             renderEditableStatusTag(record),
@@ -11978,6 +12445,8 @@ export function AppShell() {
                                         {
                                           title: "Prazo inicio",
                                           dataIndex: "start_date",
+                                          width: TASK_COL.start,
+                                          ellipsis: true,
                                           sorter: (a, b) =>
                                             new Date(a.start_date ?? 0).getTime() -
                                             new Date(b.start_date ?? 0).getTime(),
@@ -11986,12 +12455,16 @@ export function AppShell() {
                                         {
                                           title: "Prazo fim",
                                           dataIndex: "end_date",
+                                          width: TASK_COL.end,
+                                          ellipsis: true,
                                           defaultSortOrder: "ascend",
                                           sorter: compareTaskEndDateAsc,
                                           render: (v: string | null) => formatDateOnly(v),
                                         },
                                         {
                                           title: "Tempo",
+                                          width: TASK_COL.time,
+                                          ellipsis: true,
                                           render: (record: TaskItem) => {
                                             const row = taskTimeSummaryByTaskId[record.id];
                                             if (!row) {
@@ -12017,6 +12490,7 @@ export function AppShell() {
                                         },
                                         {
                                           title: "Acoes",
+                                          width: TASK_COL.actions,
                                           render: (record: TaskItem) => {
                                             const row = taskTimeSummaryByTaskId[record.id];
                                             const active =
@@ -12128,39 +12602,34 @@ export function AppShell() {
         onClose={() => setMobileNavOpen(false)}
         open={isCompactNav && mobileNavOpen}
         size={280}
+        rootClassName="bb-app-nav-drawer"
         styles={{
-          body: { padding: 0, background: "#001529" },
+          body: { padding: 0, background: "#1a1a1a" },
           header: { display: "none" },
         }}
         aria-label="Menu de navegacao"
       >
         <div
           style={{
-            color: "#F4F0ED",
-            fontWeight: 700,
-            padding: "18px 18px 8px",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
+            padding: "14px 12px 10px",
+            display: "block",
           }}
         >
-          {brandingConfig.logo_url ? (
-            <img
-              src={brandingConfig.logo_url}
-              alt="Logo do sistema"
-              style={{ width: 22, height: 22, objectFit: "cover", borderRadius: 6 }}
-            />
-          ) : null}
-          <span>{brandingConfig.app_name}</span>
+          <img
+            src={brandingConfig.logo_url || DEFAULT_LOGO_URL}
+            alt={brandingConfig.app_name || DEFAULT_APP_NAME}
+            style={{ width: "100%", height: "auto", display: "block", objectFit: "contain" }}
+          />
         </div>
         <nav aria-label="Navegacao principal (menu movel)">
           <Menu
             theme="dark"
             mode="inline"
+            className="bb-app-nav-menu"
             selectedKeys={[activeKey]}
             onClick={handleMainMenuClick}
             items={menuItems}
-            style={{ borderInlineEnd: "none" }}
+            style={{ borderInlineEnd: "none", background: "transparent" }}
           />
           <Divider style={{ borderColor: "rgba(255,255,255,0.14)", margin: "10px 0" }} />
           <div style={{ padding: "0 6px 16px" }}>
@@ -12179,7 +12648,7 @@ export function AppShell() {
                 data={projectSidebarTreeData}
                 expanded={projectSidebarExpandedKeysSet}
                 onToggle={toggleProjectSidebarKey}
-                selectedKey={selectedProjectSidebarKey}
+                selectedKey={visibleSidebarSelectedKey}
                 onSelect={handleSidebarTreeSelect}
                 onAction={handleSidebarTreeAction}
                 showActions={isAdmin}
@@ -13564,7 +14033,7 @@ export function AppShell() {
             const ok = await createTask({
               ...values,
               group_id: groupId,
-              effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
+              effort_points: Math.max(0, Number(values.effort_points ?? 1)),
               start_date: startIso,
               end_date: endIso,
               project_id: targetBoard.project_id,
@@ -13994,7 +14463,7 @@ export function AppShell() {
                     description: selectedTask.description ?? "",
                     status: selectedTask.status,
                     priority: selectedTask.priority,
-                    effort_points: Math.max(0, Math.round(Number(selectedTask.effort_points ?? 1))),
+                    effort_points: Math.max(0, Number(selectedTask.effort_points ?? 1)),
                     assignee_id: selectedTask.assignee_id ?? undefined,
                     start_date: toDateInputValue(selectedTask.start_date) || undefined,
                     end_date: toDateInputValue(selectedTask.end_date) || undefined,
@@ -14387,6 +14856,7 @@ export function AppShell() {
                             draftKey={commentDraftKey}
                             placeholder="Escreva uma atualizacao... Digite @ para mencionar. Cole ou anexe imagens."
                             submitLabel="Atualizar"
+                            hasQueuedAttachments={taskCommentFiles.length > 0}
                             onSubmit={(html) => createTaskComment(selectedTask.id, html)}
                           />
                           {taskCommentFiles.length > 0 ? (
@@ -14519,6 +14989,7 @@ export function AppShell() {
                                       }}
                                       placeholder="Edite a atualizacao... Digite @ para mencionar"
                                       submitLabel="Salvar"
+                                      hasQueuedAttachments={taskCommentEditFiles.length > 0}
                                       onSubmit={(html) =>
                                         updateTaskComment(selectedTask.id, rootComment.id, html)
                                       }
@@ -14629,6 +15100,7 @@ export function AppShell() {
                                               }}
                                               placeholder="Edite a resposta... Digite @ para mencionar"
                                               submitLabel="Salvar"
+                                              hasQueuedAttachments={taskCommentEditFiles.length > 0}
                                               onSubmit={(html) =>
                                                 updateTaskComment(selectedTask.id, reply.comment.id, html)
                                               }
@@ -14992,7 +15464,7 @@ export function AppShell() {
               group_id: values.group_id ? String(values.group_id) : undefined,
               priority: values.priority,
               status: values.status,
-              effort_points: Math.max(0, Math.round(Number(values.effort_points ?? 1))),
+              effort_points: Math.max(0, Number(values.effort_points ?? 1)),
               assignee_id: values.assignee_id ?? null,
               start_date: fromDateInputValue(values.start_date),
               end_date: fromDateInputValue(values.end_date),

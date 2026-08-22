@@ -23,6 +23,19 @@ from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateVi
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
+from blackbeans_api.api.intake_views import TaskIntakeConvertView
+from blackbeans_api.api.intake_views import TaskIntakeDetailView
+from blackbeans_api.api.intake_views import TaskIntakeDraftCreateView
+from blackbeans_api.api.intake_views import TaskIntakeDraftDetailView
+from blackbeans_api.api.intake_views import TaskIntakeListCreateView
+from blackbeans_api.api.leads_views import LeadCompaniesListCreateView
+from blackbeans_api.api.sprints_views import SprintItemDateView
+from blackbeans_api.api.sprints_views import SprintWeekDetailView
+from blackbeans_api.api.sprints_views import SprintWeekGenerateView
+from blackbeans_api.api.sprints_views import SprintWeekListView
+from blackbeans_api.api.sprints_views import SprintWeekLockView
+from blackbeans_api.api.sprints_views import SprintWeekUnlockView
+from blackbeans_api.api.leads_views import LeadCompanyDetailView
 from blackbeans_api.api.leads_views import LeadDetailView
 from blackbeans_api.api.leads_views import LeadImportDetailView
 from blackbeans_api.api.leads_views import LeadImportPreviewView
@@ -290,6 +303,35 @@ urlpatterns = [
     path("leads/imports/preview", LeadImportPreviewView.as_view(), name="leads-imports-preview"),
     path("leads/imports/<uuid:import_id>", LeadImportDetailView.as_view(), name="leads-imports-detail"),
     path("leads/imports", LeadImportsListCreateView.as_view(), name="leads-imports"),
+    path("leads/companies/<uuid:company_id>", LeadCompanyDetailView.as_view(), name="leads-companies-detail"),
+    path("leads/companies", LeadCompaniesListCreateView.as_view(), name="leads-companies"),
     path("leads/<uuid:lead_id>", LeadDetailView.as_view(), name="leads-detail"),
     path("leads", LeadsListView.as_view(), name="leads-list"),
+    path("task-intake", TaskIntakeListCreateView.as_view(), name="task-intake-list-create"),
+    path(
+        "task-intake/<uuid:batch_id>/drafts",
+        TaskIntakeDraftCreateView.as_view(),
+        name="task-intake-draft-create",
+    ),
+    path(
+        "task-intake/<uuid:batch_id>/drafts/<uuid:draft_id>",
+        TaskIntakeDraftDetailView.as_view(),
+        name="task-intake-draft-detail",
+    ),
+    path(
+        "task-intake/<uuid:batch_id>/convert",
+        TaskIntakeConvertView.as_view(),
+        name="task-intake-convert",
+    ),
+    path("task-intake/<uuid:batch_id>", TaskIntakeDetailView.as_view(), name="task-intake-detail"),
+    path("sprints/generate", SprintWeekGenerateView.as_view(), name="sprints-generate"),
+    path("sprints/<uuid:sprint_id>/lock", SprintWeekLockView.as_view(), name="sprints-lock"),
+    path("sprints/<uuid:sprint_id>/unlock", SprintWeekUnlockView.as_view(), name="sprints-unlock"),
+    path(
+        "sprints/<uuid:sprint_id>/items/<uuid:item_id>",
+        SprintItemDateView.as_view(),
+        name="sprints-item-date",
+    ),
+    path("sprints/<uuid:sprint_id>", SprintWeekDetailView.as_view(), name="sprints-detail"),
+    path("sprints", SprintWeekListView.as_view(), name="sprints-list"),
 ]

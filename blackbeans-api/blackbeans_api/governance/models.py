@@ -194,6 +194,8 @@ class Board(models.Model):
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = ForeignKey(Project, on_delete=CASCADE, related_name="boards")
     name = CharField(_("Name"), max_length=255, blank=True, default="")
+    # Status do catalogo que "puxam" tarefas automaticamente para este quadro no projeto.
+    pull_status_keys = JSONField(default=list, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -283,7 +285,7 @@ class Task(models.Model):
     description = TextField(blank=True, default="")
     status = CharField(max_length=64, default=Status.TODO)
     priority = CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
-    effort_points = models.PositiveIntegerField(default=1)
+    effort_points = models.DecimalField(max_digits=6, decimal_places=2, default=1)
     assignee = ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -860,3 +862,168 @@ class AgentRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.agent.slug} @ {self.started_at} ({self.status})"
+
+
+class TaskIntakeBatch(models.Model):
+    """Lote do imputador: ata anexada + rascunhos para aprovacao."""
+
+    class Status(models.TextChoices):
+        PENDING_REVIEW = "pending_review", _("Pending review")
+        CONVERTED = "converted", _("Converted")
+        DISCARDED = "discarded", _("Discarded")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_by = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_batches",
+    )
+    filename = CharField(max_length=512, blank=True, default="")
+    ata_file = models.FileField(upload_to="task_intake/%Y/%m/", blank=True, null=True)
+    extracted_text = TextField(blank=True, default="")
+    suggested_client_name = CharField(max_length=255, blank=True, default="")
+    suggested_client = ForeignKey(
+        "clients.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_batches",
+    )
+    status = CharField(max_length=24, choices=Status.choices, default=Status.PENDING_REVIEW)
+    converted_project = ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_batches",
+    )
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Task intake batch")
+        verbose_name_plural = _("Task intake batches")
+        ordering = ["-created_at"]
+
+
+class TaskIntakeDraft(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        APPROVED = "approved", _("Approved")
+        DISCARDED = "discarded", _("Discarded")
+        CONVERTED = "converted", _("Converted")
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch = ForeignKey(TaskIntakeBatch, on_delete=CASCADE, related_name="drafts")
+    title = CharField(max_length=255)
+    description = TextField(blank=True, default="")
+    assignee_hint = CharField(max_length=255, blank=True, default="")
+    suggested_assignee = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_drafts",
+    )
+    suggested_client = ForeignKey(
+        "clients.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_drafts",
+    )
+    target_project = ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="task_intake_drafts",
+    )
+    task_status = CharField(max_length=64, blank=True, default="todo")
+    priority = CharField(max_length=16, blank=True, default="medium")
+    due_date = DateField(null=True, blank=True)
+    status = CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    converted_task = ForeignKey(
+        Task,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_intake_drafts",
+    )
+    position = models.PositiveIntegerField(default=0)
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Task intake draft")
+        verbose_name_plural = _("Task intake drafts")
+        ordering = ["position", "created_at"]
+
+
+class SprintWeek(models.Model):
+    """Pasta de sprint (segunda a sexta). Snapshot travavel."""
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    week_start = models.DateField(db_index=True)
+    week_end = models.DateField(db_index=True)
+    locked_at = DateTimeField(null=True, blank=True)
+    locked_by = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="locked_sprints",
+    )
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Sprint week")
+        verbose_name_plural = _("Sprint weeks")
+        ordering = ["-week_start"]
+        constraints = [
+            UniqueConstraint(fields=["week_start", "week_end"], name="uniq_sprint_week_range"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.week_start} — {self.week_end}"
+
+    @property
+    def is_locked(self) -> bool:
+        return self.locked_at is not None
+
+
+class SprintItem(models.Model):
+    """Copia da tarefa na sprint. Depois de travar, nao reflete a tarefa ao vivo."""
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sprint = ForeignKey(SprintWeek, on_delete=CASCADE, related_name="items")
+    task = ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name="sprint_items")
+    assignee = ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sprint_items",
+    )
+    title = CharField(max_length=255)
+    status = CharField(max_length=64, blank=True, default="")
+    start_date = DateTimeField(null=True, blank=True)
+    end_date = DateTimeField(null=True, blank=True)
+    effort_points = models.PositiveIntegerField(default=0)
+    hours_logged = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    project_name = CharField(max_length=255, blank=True, default="")
+    client_name = CharField(max_length=255, blank=True, default="")
+    priority = CharField(max_length=24, blank=True, default="")
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Sprint item")
+        verbose_name_plural = _("Sprint items")
+        ordering = ["assignee_id", "end_date", "title"]
+        indexes = [
+            models.Index(fields=["sprint", "assignee"], name="sprint_item_assignee_idx"),
+        ]

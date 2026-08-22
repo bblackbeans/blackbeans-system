@@ -1,0 +1,15 @@
+---
+description: Autor correto dos commits Git neste repositório
+alwaysApply: true
+---
+
+# Autor dos commits
+
+Ao criar commits neste repositório:
+
+- **Nunca** force outro autor com `git -c user.name=...` / `user.email=...`
+- Use o `user.name` / `user.email` já configurados no repo
+- Valores corretos (se precisar conferir):
+  - `user.name`: `KaueRonald`
+  - `user.email`: `kaueronald21.kr@gmail.com`
+- **Não** use `kaueronald21` / `kaueronald21@gmail.com`

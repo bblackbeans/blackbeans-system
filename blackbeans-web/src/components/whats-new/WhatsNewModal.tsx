@@ -6,6 +6,7 @@ import {
   EnvironmentOutlined,
   ExperimentOutlined,
   LeftOutlined,
+  PictureOutlined,
   RightOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
@@ -76,6 +77,95 @@ const THEMES = {
     imageBg: "rgba(218, 147, 48, 0.08)",
   },
 } as const;
+
+function publicPathHint(src?: string): string {
+  if (!src) return "public/whats-new/";
+  return `public${src}`;
+}
+
+function ScreenshotSlot({
+  src,
+  alt,
+  panel,
+}: {
+  src?: string;
+  alt: string;
+  panel: (typeof THEMES)[BbTheme];
+}) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    setBroken(false);
+  }, [src]);
+  const showImage = Boolean(src) && !broken;
+
+  return (
+    <div
+      className="bb-whats-new-screenshot"
+      style={{
+        borderRadius: 10,
+        border: showImage ? `1px solid ${panel.cardBorder}` : `1px dashed ${panel.badgeBorder}`,
+        background: panel.imageBg,
+        overflow: "hidden",
+        minHeight: 180,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          color: panel.section,
+          fontWeight: 700,
+          fontSize: 12,
+          letterSpacing: 0.5,
+          textTransform: "uppercase",
+          padding: "10px 12px 8px",
+        }}
+      >
+        <PictureOutlined />
+        O que mudou
+      </div>
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={alt}
+          onError={() => setBroken(true)}
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: 360,
+            objectFit: "contain",
+            objectPosition: "center top",
+            background: panel.cardBg,
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            minHeight: 150,
+            margin: "0 12px 12px",
+            borderRadius: 8,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: 16,
+            textAlign: "center",
+            color: panel.muted,
+            fontSize: 13,
+            lineHeight: 1.45,
+          }}
+        >
+          <PictureOutlined style={{ fontSize: 22, color: panel.section }} />
+          <span>Print — publique o PNG em {publicPathHint(src)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PageSidePanel({
   page,
@@ -160,19 +250,21 @@ function PageSidePanel({
         </div>
       ) : null}
 
-      <div
-        style={{
-          marginTop: "auto",
-          paddingTop: 10,
-          borderTop: `1px solid ${panel.cardBorder}`,
-          color: panel.muted,
-          fontSize: 12,
-          lineHeight: 1.4,
-        }}
-      >
-        <EnvironmentOutlined style={{ marginRight: 6, color: panel.section }} />
-        {page.where}
-      </div>
+      {page.where ? (
+        <div
+          style={{
+            marginTop: "auto",
+            paddingTop: 10,
+            borderTop: `1px solid ${panel.cardBorder}`,
+            color: panel.muted,
+            fontSize: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          <EnvironmentOutlined style={{ marginRight: 6, color: panel.section }} />
+          {page.where}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -226,7 +318,7 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
       open={open}
       onCancel={onClose}
       footer={null}
-      width={720}
+      width={800}
       centered
       destroyOnHidden
       closable={false}
@@ -255,7 +347,7 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
               : "0 24px 64px rgba(0, 0, 0, 0.55)",
         }}
       >
-        <div style={{ padding: "22px 24px 12px" }}>
+        <div className="bb-whats-new-scroll" style={{ padding: "22px 24px 12px", maxHeight: "70vh", overflowY: "auto" }}>
           <div
             style={{
               display: "flex",
@@ -322,17 +414,19 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
             })}
           </div>
 
-          <h3
-            style={{
-              color: panel.title,
-              margin: "0 0 6px",
-              fontWeight: 700,
-              fontSize: 20,
-              lineHeight: 1.3,
-            }}
-          >
-            {page.title}
-          </h3>
+          {page.title ? (
+            <h3
+              style={{
+                color: panel.title,
+                margin: "0 0 6px",
+                fontWeight: 700,
+                fontSize: 20,
+                lineHeight: 1.3,
+              }}
+            >
+              {page.title}
+            </h3>
+          ) : null}
 
           {page.id === "fim" ? (
             <div
@@ -340,56 +434,10 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
-                gap: 18,
-                textAlign: "center",
-                padding: "8px 4px 4px",
+                gap: 16,
+                padding: "4px 4px 8px",
               }}
             >
-              <div
-                style={{
-                  maxWidth: 520,
-                  borderRadius: 12,
-                  border: `1px solid ${panel.cardBorder}`,
-                  background: panel.imageBg,
-                  padding: "22px 22px 18px",
-                }}
-              >
-                <p
-                  style={{
-                    margin: 0,
-                    color: panel.item,
-                    fontSize: 16,
-                    lineHeight: 1.55,
-                    fontWeight: 500,
-                  }}
-                >
-                  {page.summary}
-                </p>
-                {page.ps ? (
-                  <p
-                    style={{
-                      margin: "18px 0 0",
-                      color: panel.muted,
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <strong style={{ color: panel.item }}>ps.</strong> {page.ps}
-                  </p>
-                ) : null}
-                <div
-                  style={{
-                    marginTop: 16,
-                    color: panel.section,
-                    fontWeight: 700,
-                    fontSize: 13,
-                    letterSpacing: 0.3,
-                  }}
-                >
-                  Assinado: Dev
-                </div>
-              </div>
-
               {page.imageSrc ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -398,16 +446,31 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
                   style={{
                     display: "block",
                     width: "100%",
-                    maxWidth: 520,
+                    maxWidth: 640,
                     height: "auto",
-                    maxHeight: 320,
+                    maxHeight: 420,
                     objectFit: "contain",
-                    objectPosition: "center top",
+                    objectPosition: "center",
                     borderRadius: 12,
                     border: `1px solid ${panel.cardBorder}`,
                     background: panel.cardBg,
                   }}
                 />
+              ) : null}
+              {page.summary ? (
+                <p
+                  style={{
+                    margin: 0,
+                    color: panel.title,
+                    fontSize: 18,
+                    lineHeight: 1.45,
+                    fontWeight: 600,
+                    textAlign: "center",
+                    maxWidth: 520,
+                  }}
+                >
+                  {page.summary}
+                </p>
               ) : null}
             </div>
           ) : (
@@ -423,76 +486,90 @@ export function WhatsNewModal({ open, onClose, release = WHATS_NEW_RELEASE }: Wh
                 {page.summary}
               </p>
 
+              {page.showScreenshot ? (
+                <div style={{ marginBottom: 14 }}>
+                  <ScreenshotSlot
+                    src={page.imageSrc}
+                    alt={page.imageAlt || "Print da tela"}
+                    panel={panel}
+                  />
+                </div>
+              ) : null}
+
               <div className="bb-whats-new-book-grid">
                 <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-                  <div
-                    style={{
-                      borderRadius: 10,
-                      border: `1px solid ${panel.cardBorder}`,
-                      background: panel.cardBg,
-                      padding: "12px 14px",
-                    }}
-                  >
+                  {page.where ? (
                     <div
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        color: panel.section,
-                        fontWeight: 700,
-                        fontSize: 12,
-                        letterSpacing: 0.5,
-                        textTransform: "uppercase",
-                        marginBottom: 8,
+                        borderRadius: 10,
+                        border: `1px solid ${panel.cardBorder}`,
+                        background: panel.cardBg,
+                        padding: "12px 14px",
                       }}
                     >
-                      <EnvironmentOutlined />
-                      Onde fica
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          color: panel.section,
+                          fontWeight: 700,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                          textTransform: "uppercase",
+                          marginBottom: 8,
+                        }}
+                      >
+                        <EnvironmentOutlined />
+                        Onde fica
+                      </div>
+                      <div style={{ color: panel.item, fontSize: 13, lineHeight: 1.45 }}>{page.where}</div>
                     </div>
-                    <div style={{ color: panel.item, fontSize: 13, lineHeight: 1.45 }}>{page.where}</div>
-                  </div>
+                  ) : null}
 
-                  <div
-                    style={{
-                      borderRadius: 10,
-                      border: `1px solid ${panel.cardBorder}`,
-                      background: panel.cardBg,
-                      padding: "12px 14px",
-                    }}
-                  >
+                  {page.howToTest.length > 0 ? (
                     <div
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        color: panel.section,
-                        fontWeight: 700,
-                        fontSize: 12,
-                        letterSpacing: 0.5,
-                        textTransform: "uppercase",
-                        marginBottom: 8,
+                        borderRadius: 10,
+                        border: `1px solid ${panel.cardBorder}`,
+                        background: panel.cardBg,
+                        padding: "12px 14px",
                       }}
                     >
-                      <ExperimentOutlined />
-                      Como testar
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          color: panel.section,
+                          fontWeight: 700,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                          textTransform: "uppercase",
+                          marginBottom: 8,
+                        }}
+                      >
+                        <ExperimentOutlined />
+                        Como testar
+                      </div>
+                      <ol
+                        style={{
+                          margin: 0,
+                          paddingLeft: 18,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          color: panel.item,
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {page.howToTest.map((step) => (
+                          <li key={step}>{step}</li>
+                        ))}
+                      </ol>
                     </div>
-                    <ol
-                      style={{
-                        margin: 0,
-                        paddingLeft: 18,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 6,
-                        color: panel.item,
-                        fontSize: 13,
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      {page.howToTest.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  </div>
+                  ) : null}
 
                   {page.highlights && page.highlights.length > 0 ? (
                     <ul

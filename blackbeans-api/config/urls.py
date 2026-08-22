@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import include
 from django.urls import path
 from django.urls import re_path
@@ -7,8 +8,19 @@ from django.views import defaults as default_views
 from django.views.generic import TemplateView
 from django.views.static import serve
 
+
+def api_root(_request):
+    """Raiz da API — nao e o produto. O sistema web fica no proxy/front."""
+    return JsonResponse(
+        {
+            "service": "blackbeans-api",
+            "docs": "/api/v1/",
+        }
+    )
+
+
 urlpatterns = [
-    path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
+    path("", api_root, name="home"),
     path(
         "about/",
         TemplateView.as_view(template_name="pages/about.html"),
