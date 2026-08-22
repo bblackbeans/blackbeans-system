@@ -29,6 +29,13 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.bb-compact-table .ant-table-thead > tr > th,
+.bb-compact-table .ant-table-tbody > tr > td {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 .bb-compact-table .ant-table-tbody > tr > td {
   padding-block: 6px;
 }
@@ -38,7 +45,7 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  max-width: 320px;
+  max-width: 300px;
 }
 
 .bb-compact-table .bb-task-title-cell .bb-task-title-text {
@@ -207,6 +214,102 @@ html[data-bb-theme="dark"] .bb-rich-link {
   z-index: 5000 !important;
 }
 
+.bb-report-problem-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 8px;
+  z-index: 5100;
+  max-width: calc(100vw - 32px);
+}
+
+.bb-report-problem-fab-btn.ant-btn {
+  height: 36px;
+  padding-inline: 12px;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.bb-report-problem-fab-btn.ant-btn .ant-btn-icon {
+  font-size: 14px;
+}
+
+/* Mobile: FAB só ícone (não cobrir a tela) */
+@media (max-width: 575px) {
+  .bb-report-problem-fab {
+    right: 12px;
+    bottom: 4px;
+  }
+
+  .bb-report-problem-fab-btn.ant-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    padding-inline: 0;
+    border-radius: 999px;
+  }
+
+  .bb-report-problem-fab-btn .bb-report-problem-fab-label {
+    display: none;
+  }
+}
+
+/* Mobile: título do Card não compete com botões (evita "D" + Nova tarefa) */
+@media (max-width: 767px) {
+  .ant-card .ant-card-head {
+    min-height: auto;
+  }
+
+  .ant-card .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .ant-card .ant-card-head-title {
+    flex: 1 1 100%;
+    max-width: 100%;
+    white-space: normal !important;
+    overflow: visible;
+    text-overflow: unset;
+    padding-inline-end: 0;
+  }
+
+  .ant-card .ant-card-extra {
+    flex: 1 1 100%;
+    margin-inline-start: 0 !important;
+    padding-top: 0;
+  }
+
+  #conteudo-principal {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  #conteudo-principal .ant-card,
+  #conteudo-principal .ant-card-body {
+    max-width: 100%;
+  }
+
+  #conteudo-principal .ant-space-compact {
+    max-width: 100%;
+  }
+
+  #conteudo-principal .ant-space-compact > .ant-select {
+    min-width: 0 !important;
+    flex: 1 1 auto;
+  }
+
+  #conteudo-principal input[type="date"] {
+    width: min(150px, 42vw) !important;
+    max-width: 100%;
+  }
+}
+
 /* Modal de novidades — shell segue o tema; scroll fino e discreto. */
 .bb-whats-new-modal .ant-modal-content {
   padding: 0 !important;
@@ -242,6 +345,10 @@ html[data-bb-theme="dark"] .bb-rich-link {
   .bb-whats-new-book-grid {
     grid-template-columns: 1fr !important;
   }
+}
+
+.bb-whats-new-screenshot img {
+  vertical-align: middle;
 }
 
 .bb-whats-new-scroll {
@@ -426,9 +533,9 @@ html[data-bb-theme="dark"] .bb-monday-editor-prose .mention {
 
 .bb-upload-toast {
   position: fixed;
-  /* Acima do FAB "Relatar problema" (bottom 24 + ~48px botao) */
-  right: 24px;
-  bottom: 96px;
+  /* Acima do FAB "Relatar problema" (bottom 8 + ~36px botao) */
+  right: 16px;
+  bottom: 52px;
   z-index: 5200;
   min-width: 240px;
   max-width: 340px;
@@ -558,6 +665,8 @@ html[data-bb-theme="dark"] .bb-monday-editor-prose .mention {
 .bb-rich-html {
   word-break: break-word;
   line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .bb-rich-html img,
@@ -634,6 +743,176 @@ html[data-bb-theme="dark"] .bb-bulk-select-bar.ant-card {
 
 html[data-bb-theme="dark"] .bb-bulk-select-bar .ant-card-body {
   background: transparent !important;
+}
+
+/* Sidebar branding */
+.bb-app-sider.ant-layout-sider,
+.bb-app-sider .ant-layout-sider-children {
+  background: #1a1a1a !important;
+}
+
+.bb-app-nav-menu.ant-menu-dark,
+.bb-app-nav-menu.ant-menu-dark > .ant-menu,
+.bb-app-nav-menu.ant-menu-dark .ant-menu-sub,
+.bb-app-nav-menu.ant-menu-dark .ant-menu-sub.ant-menu-inline,
+.bb-app-nav-menu.ant-menu-dark.ant-menu-inline .ant-menu-sub.ant-menu-inline,
+.bb-app-sider .ant-menu-dark,
+.bb-app-sider .ant-menu-dark > .ant-menu,
+.bb-app-sider .ant-menu-dark .ant-menu-sub,
+.bb-app-sider .ant-menu-dark .ant-menu-sub.ant-menu-inline {
+  background: #1a1a1a !important;
+}
+
+.bb-app-nav-drawer .ant-drawer-body,
+.bb-app-nav-drawer .ant-drawer-content {
+  background: #1a1a1a !important;
+}
+
+/* Item de menu selecionado — borda dourada premium */
+.bb-app-nav-menu.ant-menu-dark .ant-menu-item-selected,
+.bb-app-nav-menu.ant-menu-dark .ant-menu-submenu-selected > .ant-menu-submenu-title {
+  background: linear-gradient(
+    135deg,
+    rgba(218, 147, 48, 0.38) 0%,
+    rgba(218, 147, 48, 0.22) 100%
+  ) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(245, 196, 100, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 0 0 1px rgba(218, 147, 48, 0.22),
+    0 4px 16px rgba(218, 147, 48, 0.18);
+}
+
+.bb-app-nav-menu.ant-menu-dark .ant-menu-item-selected::after {
+  border-inline-end: none !important;
+}
+
+/* Estrutura de projetos — hover / foco */
+.bb-sidebar-row {
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.bb-sidebar-row:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.bb-sidebar-row[aria-selected="true"] {
+  background: linear-gradient(
+    135deg,
+    rgba(218, 147, 48, 0.34) 0%,
+    rgba(218, 147, 48, 0.2) 100%
+  ) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(245, 196, 100, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(218, 147, 48, 0.2),
+    0 3px 12px rgba(218, 147, 48, 0.16);
+}
+
+.bb-sidebar-row[aria-selected="true"]:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(218, 147, 48, 0.42) 0%,
+    rgba(218, 147, 48, 0.28) 100%
+  ) !important;
+}
+
+.bb-sidebar-row:focus-visible {
+  background: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: inset 0 0 0 1px rgba(218, 147, 48, 0.55);
+}
+
+.bb-mywork-summary .ant-card-body {
+  padding-block: 10px;
+}
+
+.bb-mywork-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bb-mywork-chip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 88px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.bb-mywork-chip span {
+  font-size: 11px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.bb-mywork-chip strong {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: inherit;
+}
+
+.bb-mywork-chip--progress {
+  border-color: rgba(64, 150, 255, 0.35);
+  background: rgba(64, 150, 255, 0.1);
+}
+
+.bb-mywork-chip--blocked {
+  border-color: rgba(218, 147, 48, 0.4);
+  background: rgba(218, 147, 48, 0.1);
+}
+
+.bb-mywork-chip--done {
+  border-color: rgba(82, 196, 26, 0.35);
+  background: rgba(82, 196, 26, 0.1);
+}
+
+.bb-mywork-chip--due {
+  border-color: rgba(255, 77, 79, 0.35);
+  background: rgba(255, 77, 79, 0.1);
+}
+
+html[data-bb-theme="light"] .bb-mywork-chip {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+html[data-bb-theme="light"] .bb-mywork-chip span {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.bb-meta-line {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bb-meta-label {
+  color: #da9330;
+  font-weight: 600;
+}
+
+.bb-meta-value {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html[data-bb-theme="light"] .bb-meta-value {
+  color: #141312;
+}
+
+.bb-crumb-path .ant-btn-link,
+.bb-crumb-path .ant-btn-link span,
+.bb-crumb-path .bb-crumb-current {
+  color: #da9330 !important;
+}
+
+.bb-crumb-path .ant-btn-link:hover,
+.bb-crumb-path .ant-btn-link:hover span {
+  color: #e8ab4a !important;
 }
 
 

@@ -1,7 +1,8 @@
 "use client";
 
+import { DownloadOutlined } from "@ant-design/icons";
+import { Button, Modal } from "antd";
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { Modal } from "antd";
 import { toBrowserMediaSrc } from "@/lib/media";
 import { looksLikeHtml, normalizeHtmlMediaPaths, sanitizeRichHtml, toEditorHtml } from "@/lib/rich-content";
 
@@ -86,8 +87,10 @@ function NativeRichImage({ src, alt }: { src: string; alt: string }) {
     );
   }
 
+  const filename = alt && alt !== "imagem" ? alt : resolved.split("/").pop() || "imagem";
+
   return (
-    <span className="bb-rich-image-wrap" style={{ display: "block" }}>
+    <span className="bb-rich-image-wrap" style={{ display: "block", position: "relative" }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={resolved}
@@ -98,10 +101,24 @@ function NativeRichImage({ src, alt }: { src: string; alt: string }) {
         onClick={() => setPreview(true)}
         style={{ maxWidth: "100%", width: "auto", borderRadius: 8, cursor: "zoom-in", display: "block" }}
       />
+      <a
+        href={resolved}
+        download={filename}
+        target="_blank"
+        rel="noreferrer noopener"
+        style={{ position: "absolute", top: 6, right: 6 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Button size="small" icon={<DownloadOutlined />} title="Baixar imagem" />
+      </a>
       <Modal
         open={preview}
         onCancel={() => setPreview(false)}
-        footer={null}
+        footer={
+          <a href={resolved} download={filename} target="_blank" rel="noreferrer noopener">
+            <Button icon={<DownloadOutlined />}>Baixar</Button>
+          </a>
+        }
         centered
         width="min(960px, 96vw)"
         styles={{ body: { padding: 0, textAlign: "center", background: "#000" } }}

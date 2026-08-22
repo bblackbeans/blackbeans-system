@@ -167,10 +167,15 @@ function isNoiseJsMessage(message: string): boolean {
   );
 }
 
-function isAuthRefreshNoise(url: string, status: number): boolean {
-  if (status !== 401) return false;
-  // 401 em qualquer chamada autenticada durante refresh de sessao e ruido comum
-  return true;
+function isInfraNoiseRequest(url: string, status: number, bodyPreview?: string): boolean {
+  const path = url.toLowerCase();
+  if (status === 401) return true;
+  const isSummaries = path.includes("/tasks/time-summaries");
+  const isHealth = /\/health(\/|$|\?)/i.test(path);
+  if ((isSummaries || isHealth) && (status === 404 || status === 502 || status === 0)) return true;
+  const preview = (bodyPreview || "").toLowerCase();
+  if ((isSummaries || isHealth) && preview.includes("not found")) return true;
+  return false;
 }
 
 function shouldSkipAutoError(fingerprint: string): boolean {
@@ -304,7 +309,10 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
       };
       failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
       // Ignorar 401 (sessao/refresh) e endpoints de auth.
-      if (isAuthRefreshNoise(url, response.status) || AUTH_REFRESH_IN_FLIGHT_HINT.test(url)) {
+      if (
+        isInfraNoiseRequest(url, response.status, bodyPreview) ||
+        AUTH_REFRESH_IN_FLIGHT_HINT.test(url)
+      ) {
         return response;
       }
       void autoCreateProblemReport({
@@ -325,6 +333,9 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
         ts: nowIso(),
       };
       failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
+      if (isInfraNoiseRequest(url, 0, entry.body_preview) || AUTH_REFRESH_IN_FLIGHT_HINT.test(url)) {
+        throw error;
+      }
       void autoCreateProblemReport({
         title: `Rede: ${method} falhou`,
         description: `${method} ${url}\n${entry.body_preview ?? ""}`.slice(0, 8000),

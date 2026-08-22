@@ -75,10 +75,11 @@ async function proxyMedia(request: NextRequest, path: string[]) {
   }
 
   const headers = new Headers();
+  const pathJoined = path.join("/").toLowerCase();
+  const filename = decodeURIComponent(path[path.length - 1] ?? "arquivo");
   const contentType = response.headers.get("content-type");
   if (contentType) {
     // Gravacoes do pedido publico sao audio/webm, mas mimetypes pode marcar video/webm.
-    const pathJoined = path.join("/").toLowerCase();
     if (
       (contentType === "video/webm" || contentType === "application/octet-stream") &&
       (pathJoined.endsWith(".webm") || pathJoined.endsWith(".ogg") || pathJoined.includes("gravacao"))
@@ -88,6 +89,15 @@ async function proxyMedia(request: NextRequest, path: string[]) {
       headers.set("Content-Type", contentType);
     }
   }
+
+  // Forca download para arquivos que o browser nao deve abrir inline.
+  const isImage = (contentType ?? "").toLowerCase().startsWith("image/");
+  const isAudio = (contentType ?? "").toLowerCase().startsWith("audio/");
+  if (!isImage && !isAudio) {
+    const safeFilename = filename.replace(/[^\w.\-\u00C0-\u024F ]/g, "_");
+    headers.set("Content-Disposition", `attachment; filename="${safeFilename}"`);
+  }
+
   const contentLength = response.headers.get("content-length");
   if (contentLength) headers.set("Content-Length", contentLength);
   headers.set("Cache-Control", "public, max-age=3600, immutable");

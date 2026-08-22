@@ -88,6 +88,7 @@ type Props = {
   disabled?: boolean;
   className?: string;
   /** Slot extra no rodape (legado). Preferir onAttachFiles. */
+  hasQueuedAttachments?: boolean;
   extraFooter?: React.ReactNode;
 };
 
@@ -180,6 +181,7 @@ const MondayComposer = forwardRef<MondayComposerHandle, Props>(function MondayCo
     disabled,
     className,
     extraFooter,
+    hasQueuedAttachments = false,
   },
   ref,
 ) {
@@ -404,7 +406,7 @@ const MondayComposer = forwardRef<MondayComposerHandle, Props>(function MondayCo
                 row.onclick = (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  currentProps?.command({ id: item.id, label: item.id });
+                  currentProps?.command({ id: item.id, label: item.label || item.id });
                 };
                 component!.appendChild(row);
               });
@@ -460,7 +462,7 @@ const MondayComposer = forwardRef<MondayComposerHandle, Props>(function MondayCo
                 }
                 if (props.event.key === "Enter") {
                   const item = items[selected];
-                  if (item) currentProps?.command({ id: item.id, label: item.id });
+                  if (item) currentProps?.command({ id: item.id, label: item.label || item.id });
                   return true;
                 }
                 return false;
@@ -526,7 +528,9 @@ const MondayComposer = forwardRef<MondayComposerHandle, Props>(function MondayCo
     onUpdate: ({ editor: ed }) => {
       const html = normalizeHtmlMediaPaths(ed.getHTML());
       lastEmittedHtml.current = html;
-      onChangeRef.current?.(html);
+      if (!html.includes("blob:")) {
+        onChangeRef.current?.(html);
+      }
       if (!skipNextDraftWrite.current) writeDraft(draftKeyRef.current, html);
       skipNextDraftWrite.current = false;
     },
@@ -852,7 +856,12 @@ const MondayComposer = forwardRef<MondayComposerHandle, Props>(function MondayCo
             <Button
               type="primary"
               size="small"
-              disabled={disabled || submitting || hasUploading || isEmptyRichHtml(editor?.getHTML() ?? "")}
+              disabled={
+                disabled ||
+                submitting ||
+                hasUploading ||
+                (isEmptyRichHtml(editor?.getHTML() ?? "") && !hasQueuedAttachments)
+              }
               loading={submitting || hasUploading}
               onClick={() => void handleSubmit()}
             >

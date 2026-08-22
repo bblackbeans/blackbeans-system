@@ -49,6 +49,46 @@ class LeadImport(models.Model):
         return f"{self.origem} ({self.freshness}) — {self.row_count} leads"
 
 
+class LeadCompany(models.Model):
+    class Freshness(models.TextChoices):
+        NOVO = "novo", _("Novo")
+        ANTIGO = "antigo", _("Antigo")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=512, db_index=True)
+    name_normalized = models.CharField(max_length=512, blank=True, default="", db_index=True)
+    cnpj = models.CharField(max_length=14, blank=True, null=True, unique=True, db_index=True)
+    origem = models.CharField(max_length=200, blank=True, default="", db_index=True)
+    freshness = models.CharField(
+        max_length=16,
+        choices=Freshness.choices,
+        default=Freshness.NOVO,
+        db_index=True,
+    )
+    has_cnpj = models.BooleanField(default=False, db_index=True)
+    has_phone = models.BooleanField(default=False, db_index=True)
+    has_email = models.BooleanField(default=False, db_index=True)
+    completeness_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    contacts_count = models.PositiveIntegerField(default=0)
+    notes = models.TextField(blank=True, default="")
+    search_text = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Lead company")
+        verbose_name_plural = _("Lead companies")
+        ordering = ["-completeness_score", "name"]
+        indexes = [
+            models.Index(fields=["has_cnpj", "has_phone", "has_email"]),
+            models.Index(fields=["origem", "freshness"]),
+            models.Index(fields=["completeness_score"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name or str(self.pk)
+
+
 class Lead(models.Model):
     class ContactStatus(models.TextChoices):
         NAO_CONTATADO = "nao_contatado", _("Nao contatado")
@@ -59,11 +99,27 @@ class Lead(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     import_batch = models.ForeignKey(
         LeadImport,
-        on_delete=CASCADE,
+        on_delete=SET_NULL,
+        null=True,
+        blank=True,
         related_name="leads",
+    )
+    company = models.ForeignKey(
+        LeadCompany,
+        on_delete=SET_NULL,
+        null=True,
+        blank=True,
+        related_name="contacts",
     )
     payload = JSONField(default=dict, blank=True)
     display_name = models.CharField(max_length=512, blank=True, default="", db_index=True)
+    email = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    phone = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    cnpj = models.CharField(max_length=14, blank=True, default="", db_index=True)
+    has_cnpj = models.BooleanField(default=False, db_index=True)
+    has_phone = models.BooleanField(default=False, db_index=True)
+    has_email = models.BooleanField(default=False, db_index=True)
+    completeness_score = models.PositiveSmallIntegerField(default=0, db_index=True)
     search_text = models.TextField(blank=True, default="")
     contact_status = models.CharField(
         max_length=32,
@@ -78,11 +134,13 @@ class Lead(models.Model):
     class Meta:
         verbose_name = _("Lead")
         verbose_name_plural = _("Leads")
-        ordering = ["-created_at"]
+        ordering = ["-completeness_score", "-created_at"]
         indexes = [
             models.Index(fields=["contact_status"]),
             models.Index(fields=["display_name"]),
             models.Index(fields=["import_batch", "contact_status"]),
+            models.Index(fields=["company", "contact_status"]),
+            models.Index(fields=["has_cnpj", "has_phone", "has_email"]),
         ]
 
     def __str__(self) -> str:

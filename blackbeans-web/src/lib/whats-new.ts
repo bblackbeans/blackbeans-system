@@ -3,7 +3,7 @@
  * Ao publicar: incremente APP_WHATS_NEW_VERSION e adicione paginas em WHATS_NEW_RELEASE.pages.
  * Opcional: coloque prints em /public/whats-new/ e referencie em imageSrc.
  */
-export const APP_WHATS_NEW_VERSION = "1.3.1";
+export const APP_WHATS_NEW_VERSION = "1.4.0-msg";
 
 export type WhatsNewPage = {
   id: string;
@@ -17,9 +17,11 @@ export type WhatsNewPage = {
   howToTest: string[];
   /** Bullets extras (o que mudou) */
   highlights?: string[];
-  /** Ex.: "/whats-new/subtarefas.png" em public/ */
+  /** Ex.: "/whats-new/sprint.png" em public/ */
   imageSrc?: string;
   imageAlt?: string;
+  /** Reserva o bloco de print mesmo sem arquivo ainda */
+  showScreenshot?: boolean;
   /** Pos-scriptum na pagina final */
   ps?: string;
 };
@@ -38,135 +40,107 @@ export type WhatsNewSection = {
 };
 
 export const WHATS_NEW_RELEASE: WhatsNewRelease = {
-  version: APP_WHATS_NEW_VERSION,
-  title: "Novidades da versao 1.3.1",
-  subtitle: "Folheie as paginas: o que mudou, onde fica e como testar.",
+  version: "1.4.0",
+  title: "Novidades da versao 1.4.0",
+  subtitle: "Board puxa status, sprint semanal e imputador de atas.",
   pages: [
     {
       id: "cover",
       chapter: "Capa",
-      title: "Bem-vindo as novidades da versao",
+      title: "Versao 1.4.0",
       summary:
-        "Cada mudanca tem uma pagina: local no sistema, o que mudou e um mini roteiro de teste.",
-      where: "Este modal aparece no login quando ha versao nova (ou via ?whatsNew=1).",
+        "Tres novidades grandes: o board puxa tarefas pelo status, a sprint vira pasta da semana e o imputador transforma ata em tarefas.",
+      where: "",
       howToTest: [
-        "Use as setas ← → ou os botoes Anterior / Proximo.",
-        "Pule capitulos pelos pontos ou pelos rotulos no topo.",
-        "No fim, clique em Entendi para marcar como visto.",
+        "Folheie com Anterior / Proximo ou as setas do teclado.",
+        "No fim, clique em Entendi.",
       ],
       highlights: [
-        "Versao 1.3.1 — subtarefas, tempo estilo Monday, grupos por status, pedido com audio e guias de teste.",
+        "Puxar status no board, Sprint na sidebar e Imputador de tarefas.",
       ],
     },
     {
-      id: "subtarefas",
-      chapter: "Subtarefas",
-      title: "Subtarefas iguais as tarefas mae",
+      id: "board",
+      chapter: "Board",
+      title: "O board puxa a tarefa pelo status",
       summary:
-        "Ao expandir uma tarefa, as subtarefas mostram prazo inicio, prazo fim, tempo e as mesmas acoes (play, editar, excluir).",
-      where: "Dashboard · Meu trabalho · Projeto (lista do board) → seta de expandir na linha da tarefa.",
+        "No cabecalho do quadro, Puxar status diz quais status caem naquele board. Ao criar ou mudar o status, a tarefa vai para o board que puxa aquele status e para o grupo certo: A fazer, Em andamento ou Concluido.",
+      where: "Projetos → abra um projeto → cabecalho do quadro → Puxar status.",
       howToTest: [
-        "Abra Dashboard ou Meu trabalho e expanda uma tarefa com subtarefas.",
-        "Confirme as colunas Prazo inicio, Prazo fim, Tempo e Acoes.",
-        "Inicie o play numa subtarefa e abra o drawer dela pelo lapis.",
+        "Num projeto com dois boards, faca um puxar Em andamento e o outro puxar A fazer.",
+        "Mude o status de uma tarefa: ela deve ir para o board correspondente.",
+        "Dois boards do mesmo projeto nao podem puxar o mesmo status.",
       ],
       highlights: [
-        "Mesmo padrao visual nas tres areas (Dashboard, Meu trabalho e board).",
-        "Correcao do aviso do Ant Design na expansao de Meu trabalho.",
+        "A tarefa segue o status, nao o contrario.",
+        "Depois do board, o grupo (A fazer / Em andamento / Concluido) tambem alinha.",
       ],
-      imageAlt: "Tabela expandida com subtarefas e colunas alinhadas",
+      showScreenshot: true,
+      imageSrc: "/whats-new/board-puxar-status.png",
+      imageAlt: "Seletor Puxar status no cabecalho do board",
     },
     {
-      id: "tempo",
-      chapter: "Tempo",
-      title: "Editar tempo estilo Monday",
+      id: "sprint",
+      chapter: "Sprint",
+      title: "Pasta da semana, por pessoa",
       summary:
-        "Adicionar ou editar sessao usa calendario (dia) + horario de inicio e fim separados, com duracao ao vivo.",
-      where: "Abra uma tarefa → aba Registros de tempo → Adicionar sessao ou Editar num registro.",
+        "Sprint e uma pasta de segunda a sexta com um retrato das tarefas de cada pessoa. Gerar monta a lista da semana. Travar congela o retrato: mudancas futuras nas tarefas nao entram mais nessa pasta. Admin pode ajustar as datas.",
+      where: "Menu Sprint (sidebar).",
       howToTest: [
-        "Abra uma tarefa e va em Registros de tempo.",
-        "Clique Editar num registro (ou Adicionar sessao).",
-        "Mude so o dia, depois so o horario de fim — veja a duracao (00h XXm XXs) atualizar.",
-        "Salve: sessao editada fica em vermelho com rotulo (editado); manual fica (manual).",
+        "Abra Sprint e gere a semana atual.",
+        "Confira as tarefas agrupadas por pessoa.",
+        "Trave a pasta e veja que ela deixa de acompanhar mudancas novas.",
       ],
       highlights: [
-        "Util quando o play ficou ligado demais.",
-        "Modal sem datetime unico — dia e horarios separados.",
+        "Snapshot da semana, nao o board ao vivo.",
+        "Travar = essa pasta nao muda mais.",
       ],
-      imageAlt: "Modal de atualizar sessao com dia e horarios",
+      showScreenshot: true,
+      imageSrc: "/whats-new/sprint.png",
+      imageAlt: "Pasta de sprint com tarefas agrupadas por pessoa",
     },
     {
-      id: "grupos",
-      chapter: "Grupos",
-      title: "Grupos automaticos por status",
+      id: "imputador",
+      chapter: "Imputador",
+      title: "Da ata para as tarefas",
       summary:
-        "Mudar o status move a tarefa para o grupo certo do board (e cria o grupo se nao existir).",
-      where: "Qualquer tarefa no board / tabela → coluna Status (ou no drawer).",
+        "Anexe a ata da reuniao. O sistema gera rascunhos para voce editar. So vira tarefa no projeto quando voce converter — uma a uma ou todas. Responsavel, status, prioridade e prazo sao opcionais (padrao: A fazer, prioridade media, sem data). Cliente e projeto sao obrigatorios: no padrao da ata ou em cada rascunho.",
+      where: "Menu Imputador de tarefas (sidebar).",
       howToTest: [
-        "Pegue uma tarefa em Backlog / A fazer e mude para Em andamento — deve ir ao grupo Em andamento.",
-        "Mude para Concluido — deve ir ao grupo Concluido.",
-        "Volte para A fazer — deve voltar ao Backlog (ou alias Todo / A fazer).",
+        "Anexe um PDF com texto selecionavel (nao escaneado).",
+        "Ajuste cliente/projeto padrao ou por tarefa e clique Converter.",
+        "Ata convertida fecha; clique no titulo para reabrir.",
       ],
       highlights: [
-        "Backlog / a fazer → Backlog",
-        "Concluido → Concluido",
-        "Qualquer outro status → Em andamento",
+        "Nada vai para o projeto sem voce confirmar.",
+        "Ata convertida fica fechada no acordeao.",
       ],
+      showScreenshot: true,
+      imageSrc: "/whats-new/imputador.png",
+      imageAlt: "Imputador com rascunhos da ata e botao Converter",
     },
     {
-      id: "pedido",
-      chapter: "Pedido",
-      title: "Pedido publico com audio",
-      summary:
-        "No formulario publico o cliente grava audio com nivel do microfone e preview; o admin ouve no pedido.",
-      where: "Pagina /pedido (publico) · Admin → Pedidos de clientes → Visualizar.",
-      howToTest: [
-        "Abra /pedido, clique Gravar audio, fale e confira a barra de nivel.",
-        "Pare e ouça o Preview (barra de progresso deve andar).",
-        "Envie o pedido; no admin, abra Detalhes e reproduza o anexo.",
-      ],
+      id: "tambem",
+      chapter: "Tambem",
+      title: "Ajustes menores",
+      summary: "Detalhes que acompanham as tres funcionalidades.",
+      where: "Projetos (arvore) · Imputador de tarefas.",
+      howToTest: [],
       highlights: [
-        "Preview local com scrub corrigido.",
-        "Anexos e midia via /media mais estaveis.",
-      ],
-      imageAlt: "Preview da gravacao no pedido publico",
-    },
-    {
-      id: "busca",
-      chapter: "Busca",
-      title: "Busca e filtro de colaborador",
-      summary:
-        "A busca olha titulo, descricao e subtarefas. No Dashboard, filtrar colaborador tambem acha quem so esta na subtarefa.",
-      where: "Dashboard (filtros no topo) · Meu trabalho (busca).",
-      howToTest: [
-        "No Dashboard, busque um trecho que so existe na subtarefa — a mae deve aparecer.",
-        "Filtre por um colaborador que so e responsavel da subtarefa — a mae entra na lista.",
-        "Em Meu trabalho, repita a busca por texto da subtarefa.",
-      ],
-    },
-    {
-      id: "modal-tarefa",
-      chapter: "UI",
-      title: "Modal Nova tarefa sem scroll feio",
-      summary: "O formulario de criar tarefa cabe na largura do modal, sem barra horizontal.",
-      where: "Projeto / board → Nova tarefa (ou atalho equivalente).",
-      howToTest: [
-        "Abra Nova tarefa.",
-        "Confirme que nao ha barra de rolagem horizontal no rodape do formulario.",
-        "Preencha prazos inicio/fim e crie normalmente.",
+        "Na arvore de Projetos, o clique abre a area ou o portfolio — nao a lista geral.",
+        "Apagar rascunho no imputador pede confirmacao.",
+        "Cliente e projeto mostram asterisco de obrigatorio.",
       ],
     },
     {
       id: "fim",
       chapter: "Fim",
-      title: "Um recado do Dev",
-      summary:
-        "Um bom dia para nossos colaboradores — em especial a chefia Babi e Fagu (que gosta desse lembrete) — e lembrem: precisamos achar um nome melhor para esse sistema do que Blackbeans System kkkk",
+      title: "",
+      summary: "Aos poucos esse sistema ta ficando muito bom",
       where: "",
       howToTest: [],
       imageSrc: "/whats-new/equipe-blackbeans.png",
       imageAlt: "Time Black Beans",
-      ps: "nao gastei horas de trabalho nisso, eu nao fui pra academia e acabou saindo isso kkkk",
     },
   ],
 };

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const maxDuration = 180;
+
 const BACKEND_BASE_URL = process.env.INTERNAL_API_URL ?? "http://api:8000";
 
 /** Raiz do host da API (sem barra final); remove sufixo duplicado `/api/v1` se vier na env. */

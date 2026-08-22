@@ -15,6 +15,14 @@ export type ApiResult<T = unknown> = {
   correlationId?: string;
 };
 
+function fallbackRequestError(status: number): string {
+  if (status === 413) return "Arquivo grande demais. Use PDF, Word ou texto de ate 15MB.";
+  if (status === 502 || status === 504) {
+    return "O servidor demorou para processar a ata. Tente um arquivo menor ou .docx/.txt.";
+  }
+  return "Erro inesperado na requisicao.";
+}
+
 export async function apiRequest<T = unknown>(path: string, options: ApiOptions = {}): Promise<ApiResult<T>> {
   const { method = "GET", token, body } = options;
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
@@ -72,7 +80,7 @@ export async function apiRequest<T = unknown>(path: string, options: ApiOptions 
       correlationId,
       error: {
         code: payload.error?.code,
-        message: payload.error?.message ?? "Erro inesperado na requisicao.",
+        message: payload.error?.message ?? fallbackRequestError(response.status),
         details: payload.error?.details,
       },
     };

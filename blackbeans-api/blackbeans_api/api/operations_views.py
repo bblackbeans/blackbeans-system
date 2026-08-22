@@ -17,6 +17,7 @@ from blackbeans_api.api.operations_serializers import PortfolioWriteSerializer
 from blackbeans_api.api.operations_serializers import ProjectWriteSerializer
 from blackbeans_api.api.operations_serializers import WorkspaceWriteSerializer
 from blackbeans_api.api.operations_serializers import BoardWriteSerializer
+from blackbeans_api.api.operations_serializers import BoardUpdateSerializer
 from blackbeans_api.api.operations_serializers import board_to_representation
 from blackbeans_api.api.operations_serializers import BoardGroupCreateSerializer
 from blackbeans_api.api.operations_serializers import BoardGroupUpdateSerializer
@@ -58,6 +59,15 @@ from blackbeans_api.governance.models import TaskDependency
 from blackbeans_api.governance.models import TimeLog
 from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.audit import log_audit_event
+from blackbeans_api.governance.board_status import apply_status_from_group
+from blackbeans_api.governance.board_status import done_catalog_key
+from blackbeans_api.governance.board_status import ensure_canonical_groups
+from blackbeans_api.governance.board_status import realign_project_tasks_by_pull_status
+from blackbeans_api.governance.board_status import status_bucket
+from blackbeans_api.governance.board_status import status_bucket_for_task
+from blackbeans_api.governance.board_status import sync_task_board_by_pull_status
+from blackbeans_api.governance.board_status import sync_task_group_by_status
+from blackbeans_api.governance.board_status import validate_pull_status_keys_unique
 from blackbeans_api.governance.notification_service import dispatch_task_comment
 from blackbeans_api.governance.notification_service import dispatch_task_mentions
 from blackbeans_api.governance.notification_service import dispatch_task_priority_changed
@@ -327,7 +337,7 @@ def _spawn_next_recurrence(task: Task) -> Task | None:
     duration = base_end - base_start if base_end >= base_start else timedelta(0)
     next_start = base_start + delta
     next_end = next_start + duration
-    return Task.objects.create(
+    spawned = Task.objects.create(
         board=task.board,
         group=task.group,
         parent=task.parent,
@@ -343,6 +353,9 @@ def _spawn_next_recurrence(task: Task) -> Task | None:
         recurrence_frequency=freq,
         recurrence_anchor_task=anchor,
     )
+    _sync_task_placement_by_status(spawned)
+    spawned.refresh_from_db()
+    return spawned
 
 
 def _has_in_progress_tasks_workspace(*, workspace_id: UUID) -> bool:
@@ -371,77 +384,18 @@ def _has_in_progress_tasks_group(*, group_id: UUID) -> bool:
     return Task.objects.filter(group_id=group_id, status=Task.Status.IN_PROGRESS).exists()
 
 
-# Regra interna: status → grupo do board (Backlog / Em andamento / Concluído).
-_STATUS_GROUP_BACKLOG = "Backlog"
-_STATUS_GROUP_PROGRESS = "Em andamento"
-_STATUS_GROUP_DONE = "Concluído"
-
-
-def _status_bucket_for_group(status_key: str) -> str:
-    key = (status_key or "").strip().lower()
-    if key in {"todo", "backlog", "a_fazer", "a-fazer"}:
-        return "backlog"
-    if key in {"done", "concluido", "concluída", "concluida"}:
-        return "done"
-    # Catalogo: is_done_like
-    try:
-        from blackbeans_api.governance.models import TaskStatusDefinition
-
-        row = TaskStatusDefinition.objects.filter(key=status_key, is_active=True).first()
-        if row and row.is_done_like:
-            return "done"
-    except Exception:
-        pass
-    return "progress"
-
-
-def _group_name_aliases(bucket: str) -> set[str]:
-    if bucket == "backlog":
-        return {"backlog", "a fazer", "todo", "to do", "a-fazer"}
-    if bucket == "done":
-        return {"concluído", "concluido", "done", "concluída", "concluida"}
-    return {"em andamento", "in progress", "doing", "andamento"}
-
-
-def _canonical_group_name(bucket: str) -> str:
-    if bucket == "backlog":
-        return _STATUS_GROUP_BACKLOG
-    if bucket == "done":
-        return _STATUS_GROUP_DONE
-    return _STATUS_GROUP_PROGRESS
-
-
-def _find_or_create_status_group(board: Board, bucket: str) -> BoardGroup:
-    aliases = _group_name_aliases(bucket)
-    for group in BoardGroup.objects.filter(board=board).order_by("position"):
-        if group.name.strip().lower() in aliases:
-            return group
-    # Criar com posicao livre
-    used = set(BoardGroup.objects.filter(board=board).values_list("position", flat=True))
-    position = 1
-    while position in used:
-        position += 1
-    # Preferencias de ordem: Backlog=1, Em andamento=2, Concluído=3 quando livres
-    preferred = {"backlog": 1, "progress": 2, "done": 3}.get(bucket, position)
-    if preferred not in used:
-        position = preferred
-    return BoardGroup.objects.create(
-        board=board,
-        name=_canonical_group_name(bucket),
-        position=position,
-        wip_limit=999,
-    )
-
-
 def _sync_task_group_by_status(task: Task) -> bool:
     """Move a tarefa para o grupo do board conforme o status. Retorna True se mudou."""
-    bucket = _status_bucket_for_group(task.status)
-    target = _find_or_create_status_group(task.board, bucket)
-    if task.group_id == target.pk:
-        return False
-    task.group = target
-    task.save(update_fields=["group", "updated_at"])
-    return True
+    return sync_task_group_by_status(task)
+
+
+def _sync_task_placement_by_status(task: Task) -> bool:
+    """Puxa para o board configurado e depois alinha a coluna interna."""
+    moved_board = sync_task_board_by_pull_status(task)
+    if moved_board:
+        task.refresh_from_db()
+    moved_group = sync_task_group_by_status(task)
+    return moved_board or moved_group
 
 
 class WorkspaceListCreateView(APIView):
@@ -1136,13 +1090,18 @@ class BoardDetailView(APIView):
         if view == "list":
             payload = {"view": "list", "tasks": [task_to_representation(t) for t in tasks]}
         elif view == "kanban":
-            groups = BoardGroup.objects.filter(board=board).order_by("position")
+            canonical = ensure_canonical_groups(board)
+            buckets = ("backlog", "progress", "done")
+            grouped: dict[str, list] = {key: [] for key in buckets}
+            for task in tasks:
+                grouped[status_bucket_for_task(task)].append(task)
             payload_groups = []
-            for g in groups:
+            for key in buckets:
+                group = canonical[key]
                 payload_groups.append(
                     {
-                        "group": board_group_to_representation(g),
-                        "tasks": [task_to_representation(t) for t in tasks if t.group_id == g.pk],
+                        "group": board_group_to_representation(group),
+                        "tasks": [task_to_representation(t) for t in grouped[key]],
                     },
                 )
             payload = {"view": "kanban", "groups": payload_groups}
@@ -1150,6 +1109,67 @@ class BoardDetailView(APIView):
             payload = {"view": "timeline", "tasks": [task_to_representation(t) for t in tasks]}
 
         return success_response(correlation_id=correlation_id, data={"board": board_to_representation(board), **payload})
+
+    def patch(self, request: Request, board_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            board = Board.objects.select_related("project", "project__portfolio").get(pk=board_id)
+        except Board.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_not_found",
+                message="Board nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = BoardUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if not data:
+            return success_response(
+                correlation_id=correlation_id,
+                data={"board": board_to_representation(board), "realigned": 0},
+            )
+
+        realigned = 0
+        if "pull_status_keys" in data:
+            conflicts = validate_pull_status_keys_unique(
+                project_id=board.project_id,
+                board_id=board.pk,
+                keys=data["pull_status_keys"],
+            )
+            if conflicts:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="pull_status_conflict",
+                    message=(
+                        "Status ja configurado em outro quadro do projeto: "
+                        + ", ".join(conflicts)
+                    ),
+                    details={"conflicts": conflicts},
+                    http_status=status.HTTP_409_CONFLICT,
+                )
+
+        with transaction.atomic():
+            update_fields: list[str] = []
+            if "name" in data:
+                board.name = data["name"]
+                update_fields.append("name")
+            if "pull_status_keys" in data:
+                board.pull_status_keys = data["pull_status_keys"]
+                update_fields.append("pull_status_keys")
+            if update_fields:
+                update_fields.append("updated_at")
+                board.save(update_fields=update_fields)
+            if "pull_status_keys" in data:
+                realigned = realign_project_tasks_by_pull_status(project_id=board.project_id)
+
+        board = Board.objects.select_related("project", "project__portfolio").get(pk=board.pk)
+        return success_response(
+            correlation_id=correlation_id,
+            data={"board": board_to_representation(board), "realigned": realigned},
+        )
 
     def delete(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -1219,7 +1239,7 @@ class TaskListCreateView(APIView):
         serializer = TaskWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
-        _sync_task_group_by_status(task)
+        _sync_task_placement_by_status(task)
         actor_name = get_user_display_name(request.user)
         _log_task_activity(
             task=task,
@@ -1274,14 +1294,28 @@ class TaskDetailView(APIView):
         with transaction.atomic():
             serializer.save()
             task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
-            if "status" in serializer.validated_data and task.status != before_status:
-                if task.status == Task.Status.DONE:
+            group_moved = "group_id" in serializer.validated_data
+            if group_moved and "status" not in serializer.validated_data:
+                if apply_status_from_group(task):
+                    extra = ["status", "updated_at"]
+                    if status_bucket_for_task(task) == "done":
+                        _close_open_time_logs_for_task(task)
+                        if task.end_date is None:
+                            task.end_date = timezone.now()
+                            extra.append("end_date")
+                    task.save(update_fields=extra)
+            if ("status" in serializer.validated_data and task.status != before_status) or group_moved:
+                if status_bucket_for_task(task) == "done":
                     _close_open_time_logs_for_task(task)
                     if task.end_date is None:
                         task.end_date = timezone.now()
                         task.save(update_fields=["end_date", "updated_at"])
-                _sync_task_group_by_status(task)
+                _sync_task_placement_by_status(task)
                 task = Task.objects.filter(pk=task_id).annotate(subtasks_count=Count("subtasks")).get()
+                if status_bucket_for_task(task) == "done" and status_bucket(before_status) != "done":
+                    spawned = _spawn_next_recurrence(task)
+                    if spawned is not None:
+                        pass
         if "priority" in serializer.validated_data and task.priority != before_priority:
             dispatch_task_priority_changed(
                 task=task,
@@ -1290,7 +1324,7 @@ class TaskDetailView(APIView):
                 new_priority=task.priority,
                 correlation_id=correlation_id,
             )
-        if "status" in serializer.validated_data and task.status != before_status:
+        if task.status != before_status:
             dispatch_task_status_changed(
                 task=task,
                 actor=request.user,
@@ -1530,16 +1564,16 @@ class TaskStatusView(APIView):
         update_fields = ["status", "updated_at"]
         spawned = None
         with transaction.atomic():
-            if new_status == Task.Status.DONE:
+            if status_bucket(new_status) == "done":
                 _close_open_time_logs_for_task(task)
                 if task.end_date is None:
                     task.end_date = timezone.now()
                     update_fields.append("end_date")
             task.status = new_status
             task.save(update_fields=update_fields)
-            _sync_task_group_by_status(task)
+            _sync_task_placement_by_status(task)
             task.refresh_from_db()
-            if new_status == Task.Status.DONE and before != Task.Status.DONE:
+            if status_bucket(new_status) == "done" and status_bucket(before) != "done":
                 spawned = _spawn_next_recurrence(task)
         dispatch_task_status_changed(
             task=task,
@@ -1887,41 +1921,42 @@ class TaskCompleteView(APIView):
             status_value=TimeLog.Status.ACTIVE,
             allow_staff_fallback=True,
         )
-        if time_log is None:
-            return error_response(
-                correlation_id=correlation_id,
-                code="time_log_not_active",
-                message="Nao ha sessao ativa para encerrar.",
-                details={},
-                http_status=status.HTTP_409_CONFLICT,
-            )
 
         now = timezone.now()
         spawned = None
+        done_key = done_catalog_key()
         with transaction.atomic():
             _close_open_time_logs_for_task(task, now=now)
-            task.status = Task.Status.DONE
-            task.end_date = now
+            task.status = done_key
+            if task.end_date is None:
+                task.end_date = now
             task.save(update_fields=["status", "end_date", "updated_at"])
+            _sync_task_placement_by_status(task)
+            task.refresh_from_db()
             spawned = _spawn_next_recurrence(task)
-        time_log.refresh_from_db()
+        if time_log is not None:
+            time_log.refresh_from_db()
 
         _log_task_activity(
             task=task,
             actor_id=request.user.pk,
             event_type="task.completed",
-            summary="Tarefa concluida e apontamento de tempo encerrado.",
+            summary="Tarefa concluida.",
         )
         log_audit_event(
             event_type="time.completed",
             action="complete",
-            entity_type="time_log",
-            entity_id=str(time_log.pk),
+            entity_type="time_log" if time_log is not None else "task",
+            entity_id=str(time_log.pk) if time_log is not None else str(task.pk),
             actor_id=request.user.pk,
             workspace_id=str(task.board.project.portfolio.workspace_id),
             correlation_id=correlation_id,
             before={"task_status": Task.Status.IN_PROGRESS},
-            after={"task_id": str(task.pk), "task_status": task.status, "time_status": time_log.status},
+            after={
+                "task_id": str(task.pk),
+                "task_status": task.status,
+                "time_status": time_log.status if time_log is not None else None,
+            },
         )
         dispatch_task_completed_notifications.delay(
             task_id=str(task.pk),
@@ -1929,12 +1964,12 @@ class TaskCompleteView(APIView):
             correlation_id=correlation_id,
         )
         _recalculate_dependents(task)
-        if spawned is not None:
-            # keep response shape; next occurrence available via list refresh
-            pass
         return success_response(
             correlation_id=correlation_id,
-            data={"task": task_to_representation(task), "time_log": time_log_to_representation(time_log)},
+            data={
+                "task": task_to_representation(task),
+                "time_log": time_log_to_representation(time_log) if time_log is not None else None,
+            },
         )
 
 
