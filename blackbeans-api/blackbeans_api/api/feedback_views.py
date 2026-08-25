@@ -34,10 +34,6 @@ from blackbeans_api.governance.models import Workspace
 logger = logging.getLogger(__name__)
 
 AUTO_ERROR_DEDUPE_HOURS = 6
-OPEN_STATUSES = {
-    ProblemReport.Status.NOVO,
-    ProblemReport.Status.EM_ANALISE,
-}
 
 
 def _parse_positive_int(raw_value: str | None, default: int) -> int:
@@ -119,7 +115,6 @@ class ProblemReportFeedbackCreateView(APIView):
                     user=user,
                     source="auto_error",
                     fingerprint=fingerprint,
-                    status__in=OPEN_STATUSES,
                     created_at__gte=since,
                 )
                 .order_by("-created_at")

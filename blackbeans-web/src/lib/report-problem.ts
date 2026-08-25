@@ -167,14 +167,42 @@ function isNoiseJsMessage(message: string): boolean {
   );
 }
 
+function isBackgroundPollPath(url: string): boolean {
+  const path = url.toLowerCase();
+  return (
+    path.includes("/notifications") ||
+    path.includes("/tasks/time-summaries") ||
+    /\/tasks\/[^/]+\/time-summary(\/|$|\?)/i.test(path) ||
+    /\/health(\/|$|\?)/i.test(path)
+  );
+}
+
+function isTransientNetworkFailure(error: unknown, bodyPreview?: string): boolean {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") {
+    return true;
+  }
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return true;
+  }
+  const m = (bodyPreview || (error instanceof Error ? error.message : String(error || ""))).toLowerCase();
+  return (
+    m.includes("failed to fetch") ||
+    m.includes("load failed") ||
+    m.includes("networkerror") ||
+    m.includes("network request failed") ||
+    m.includes("the operation was aborted") ||
+    m.includes("aborterror")
+  );
+}
+
 function isInfraNoiseRequest(url: string, status: number, bodyPreview?: string): boolean {
   const path = url.toLowerCase();
   if (status === 401) return true;
-  const isSummaries = path.includes("/tasks/time-summaries");
-  const isHealth = /\/health(\/|$|\?)/i.test(path);
-  if ((isSummaries || isHealth) && (status === 404 || status === 502 || status === 0)) return true;
+  if (status === 0 && isTransientNetworkFailure(undefined, bodyPreview)) return true;
+  const isPoll = isBackgroundPollPath(path);
+  if (isPoll && (status === 0 || status === 404 || status === 502 || status === 504)) return true;
   const preview = (bodyPreview || "").toLowerCase();
-  if ((isSummaries || isHealth) && preview.includes("not found")) return true;
+  if (isPoll && preview.includes("not found")) return true;
   return false;
 }
 
@@ -333,7 +361,13 @@ async function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promi
         ts: nowIso(),
       };
       failedRequests = pushFifo(failedRequests, entry, MAX_FAILED_REQUESTS);
-      if (isInfraNoiseRequest(url, 0, entry.body_preview) || AUTH_REFRESH_IN_FLIGHT_HINT.test(url)) {
+      const pageHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      if (
+        pageHidden ||
+        isTransientNetworkFailure(error, entry.body_preview) ||
+        isInfraNoiseRequest(url, 0, entry.body_preview) ||
+        AUTH_REFRESH_IN_FLIGHT_HINT.test(url)
+      ) {
         throw error;
       }
       void autoCreateProblemReport({
