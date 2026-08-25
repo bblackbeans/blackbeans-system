@@ -296,6 +296,7 @@ class Task(models.Model):
     start_date = DateTimeField(null=True, blank=True)
     end_date = DateTimeField(null=True, blank=True)
     is_recurring = models.BooleanField(default=False)
+    always_in_sprint = models.BooleanField(default=False)
     recurrence_frequency = CharField(
         max_length=16,
         blank=True,
@@ -1017,6 +1018,8 @@ class SprintItem(models.Model):
     project_name = CharField(max_length=255, blank=True, default="")
     client_name = CharField(max_length=255, blank=True, default="")
     priority = CharField(max_length=24, blank=True, default="")
+    is_recurring = models.BooleanField(default=False)
+    always_in_sprint = models.BooleanField(default=False)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

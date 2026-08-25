@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from django.db import transaction
+from django.db.models import Q
 from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -21,7 +22,6 @@ from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
-from blackbeans_api.governance.board_status import status_bucket
 from blackbeans_api.governance.models import SprintItem
 from blackbeans_api.governance.models import SprintWeek
 from blackbeans_api.governance.models import Task
@@ -56,12 +56,19 @@ def week_bounds_dt(week_start, week_end):
     return start_dt, end_dt
 
 
-def exclude_status_keys() -> set[str]:
-    keys: set[str] = {"todo", "done", "BACKLOG", "CONCLUÍDO", "CONCLUIDO", "concluido"}
-    for row in TaskStatusDefinition.objects.filter(is_active=True):
-        if status_bucket(row.key, label=row.label) in {"backlog", "done"}:
-            keys.add(row.key)
-    return keys
+def task_overlaps_week(start_date, end_date, week_start, week_end) -> bool:
+    span_start = start_date or end_date
+    span_end = end_date or start_date
+    if span_start is None or span_end is None:
+        return False
+    start_dt, end_dt = week_bounds_dt(week_start, week_end)
+    return span_start <= end_dt and span_end >= start_dt
+
+
+def assignee_role_fields(assignee) -> tuple[str, str]:
+    if assignee is not None and (assignee.is_staff or assignee.is_superuser):
+        return "admin", "Admin"
+    return "collaborator", "Colaborador"
 
 
 def hours_for_task(task_id) -> Decimal:
@@ -110,12 +117,15 @@ def item_to_representation(item: SprintItem, catalog: dict[str, dict[str, str]] 
             priority = item.task.priority or ""
     meta = (catalog or {}).get(item.status) or {}
     status_label = meta.get("label") or STATUS_LABEL_PT.get(item.status, item.status or "—")
+    role, role_label = assignee_role_fields(assignee)
     return {
         "id": str(item.pk),
         "sprint_id": str(item.sprint_id),
         "task_id": str(item.task_id) if item.task_id else None,
         "assignee_id": assignee.pk if assignee else None,
         "assignee_name": (assignee.name or assignee.username or assignee.email) if assignee else "Sem responsavel",
+        "assignee_role": role,
+        "assignee_role_label": role_label,
         "title": item.title,
         "status": item.status,
         "status_label": status_label,
@@ -125,6 +135,8 @@ def item_to_representation(item: SprintItem, catalog: dict[str, dict[str, str]] 
         "end_date": _iso(item.end_date),
         "effort_points": item.effort_points,
         "hours_logged": str(item.hours_logged),
+        "is_recurring": bool(item.is_recurring),
+        "always_in_sprint": bool(item.always_in_sprint),
         "project_name": project_name,
         "client_name": client_name,
         "updated_at": _iso(item.updated_at),
@@ -154,19 +166,21 @@ def week_to_representation(week: SprintWeek, *, include_items: bool = False) -> 
 
 def generate_snapshot(week: SprintWeek) -> int:
     start_dt, end_dt = week_bounds_dt(week.week_start, week.week_end)
-    excluded = exclude_status_keys()
     qs = (
         Task.objects.filter(assignee_id__isnull=False)
-        .exclude(status__in=excluded)
-        .annotate(due=Coalesce("end_date", "start_date"))
-        .filter(due__gte=start_dt, due__lte=end_dt)
+        .annotate(
+            span_start=Coalesce("start_date", "end_date"),
+            span_end=Coalesce("end_date", "start_date"),
+        )
+        .filter(
+            Q(always_in_sprint=True)
+            | Q(span_start__lte=end_dt, span_end__gte=start_dt),
+        )
         .select_related("assignee", "board__project__client")
     )
     SprintItem.objects.filter(sprint=week).delete()
     created = 0
     for task in qs:
-        if status_bucket(task.status) in {"backlog", "done"}:
-            continue
         project_name, client_name = _task_project_client(task)
         SprintItem.objects.create(
             sprint=week,
@@ -176,11 +190,13 @@ def generate_snapshot(week: SprintWeek) -> int:
             status=task.status,
             start_date=task.start_date,
             end_date=task.end_date,
-            effort_points=task.effort_points or 0,
+            effort_points=int(task.effort_points or 0),
             hours_logged=hours_for_task(task.pk),
             project_name=project_name,
             client_name=client_name,
             priority=task.priority or "",
+            is_recurring=bool(task.is_recurring),
+            always_in_sprint=bool(task.always_in_sprint),
         )
         created += 1
     return created
@@ -356,8 +372,6 @@ class SprintItemDateView(APIView):
             start_date = _parse_dt(start_raw)
         if "end_date" in request.data:
             end_date = _parse_dt(end_raw)
-        start_dt, end_dt = week_bounds_dt(item.sprint.week_start, item.sprint.week_end)
-        due = end_date or start_date
         with transaction.atomic():
             item.start_date = start_date
             item.end_date = end_date
@@ -366,7 +380,12 @@ class SprintItemDateView(APIView):
                 task.start_date = start_date
                 task.end_date = end_date
                 task.save(update_fields=["start_date", "end_date", "updated_at"])
-            if due is not None and (due < start_dt or due > end_dt):
+            pinned = bool(item.always_in_sprint) or bool(
+                item.task_id and getattr(item.task, "always_in_sprint", False),
+            )
+            if not pinned and not task_overlaps_week(
+                start_date, end_date, item.sprint.week_start, item.sprint.week_end
+            ):
                 item.delete()
                 return success_response(
                     correlation_id=correlation_id,

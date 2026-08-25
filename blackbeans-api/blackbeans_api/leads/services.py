@@ -371,6 +371,119 @@ def get_or_create_company_for_payload(
     return company, enriched
 
 
+_LEAD_COMPANY_BACKFILL_LOCK = "leads:backfill_companies"
+_LEAD_BACKFILL_FIELDS = (
+    "company",
+    "display_name",
+    "email",
+    "phone",
+    "cnpj",
+    "has_cnpj",
+    "has_phone",
+    "has_email",
+    "completeness_score",
+    "search_text",
+    "updated_at",
+)
+
+
+def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200) -> dict[str, int]:
+    """Associa leads a LeadCompany e recalcula qualidade. Corrige imports anteriores ao modelo de empresa."""
+    from django.db import transaction
+    from django.db.models import Count
+    from django.utils import timezone
+
+    from blackbeans_api.leads.models import Lead
+    from blackbeans_api.leads.models import LeadCompany
+
+    batch_size = max(1, int(batch_size))
+    processed = 0
+    company_cache: dict[str, Any] = {}
+    touched: dict[str, Any] = {}
+    last_pk = None
+
+    while True:
+        queryset = Lead.objects.select_related("import_batch", "company").order_by("pk")
+        if only_missing:
+            queryset = queryset.filter(company__isnull=True)
+        if last_pk is not None:
+            queryset = queryset.filter(pk__gt=last_pk)
+        batch = list(queryset[:batch_size])
+        if not batch:
+            break
+        last_pk = batch[-1].pk
+        now = timezone.now()
+        with transaction.atomic():
+            for lead in batch:
+                column_keys = list((lead.import_batch.column_keys if lead.import_batch else None) or [])
+                if not column_keys:
+                    column_keys = list((lead.payload or {}).keys())
+                origem = ""
+                freshness = "novo"
+                if lead.import_batch:
+                    origem = lead.import_batch.origem
+                    freshness = lead.import_batch.freshness
+                company, enriched = get_or_create_company_for_payload(
+                    payload=dict(lead.payload or {}),
+                    column_keys=column_keys,
+                    origem=origem,
+                    freshness=freshness,
+                    cache=company_cache,
+                )
+                lead.company = company
+                lead.display_name = enriched["display_name"] or lead.display_name
+                lead.email = enriched["email"]
+                lead.phone = enriched["phone"]
+                lead.cnpj = enriched["cnpj"]
+                lead.has_cnpj = enriched["has_cnpj"]
+                lead.has_phone = enriched["has_phone"]
+                lead.has_email = enriched["has_email"]
+                lead.completeness_score = enriched["completeness_score"]
+                lead.search_text = build_search_text(
+                    payload=dict(lead.payload or {}),
+                    origem=origem,
+                    display_name=lead.display_name,
+                )
+                lead.updated_at = now
+                touched[str(company.pk)] = company
+                processed += 1
+            Lead.objects.bulk_update(batch, list(_LEAD_BACKFILL_FIELDS), batch_size=batch_size)
+
+    company_ids = list(touched.keys())
+    if company_ids:
+        companies = LeadCompany.objects.filter(pk__in=company_ids).prefetch_related("contacts")
+        for company in companies:
+            recompute_company_quality(company)
+
+    orphan_companies = LeadCompany.objects.annotate(n=Count("contacts")).filter(n=0)
+    orphan_count = 0
+    for company in orphan_companies.iterator():
+        recompute_company_quality(company)
+        orphan_count += 1
+
+    return {
+        "processed": processed,
+        "companies": len(company_ids),
+        "orphans": orphan_count,
+    }
+
+
+def ensure_orphan_leads_have_companies() -> dict[str, int] | None:
+    """Roda o backfill uma vez se ainda existirem leads sem empresa (lista vazia com origens preenchidas)."""
+    from django.core.cache import cache
+
+    from blackbeans_api.leads.models import Lead
+
+    if not Lead.objects.filter(company__isnull=True).exists():
+        return None
+    if not cache.add(_LEAD_COMPANY_BACKFILL_LOCK, "1", timeout=900):
+        return None
+    try:
+        return backfill_lead_companies(only_missing=True)
+    finally:
+        cache.delete(_LEAD_COMPANY_BACKFILL_LOCK)
+
+
 def _rows_from_matrix(matrix: list[list[Any]]) -> tuple[list[str], list[dict[str, Any]]]:
     if not matrix:
         raise LeadParseError("Planilha vazia.")

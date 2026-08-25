@@ -33,6 +33,7 @@ from blackbeans_api.leads.services import LeadParseError
 from blackbeans_api.leads.services import build_company_search_text
 from blackbeans_api.leads.services import build_search_text
 from blackbeans_api.leads.services import compute_completeness_score
+from blackbeans_api.leads.services import ensure_orphan_leads_have_companies
 from blackbeans_api.leads.services import get_or_create_company_for_payload
 from blackbeans_api.leads.services import normalize_company_name
 from blackbeans_api.leads.services import normalize_email
@@ -158,6 +159,10 @@ class LeadCompaniesListCreateView(APIView):
                 message="Parametros invalidos.",
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
+
+        ensure_orphan_leads_have_companies()
+        queryset = LeadCompany.objects.all()
+        queryset = _apply_quality_filters(queryset, request)
 
         page_size = min(page_size, 100)
         origem = (request.query_params.get("origem") or "").strip()
