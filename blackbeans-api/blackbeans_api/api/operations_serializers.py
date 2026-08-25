@@ -382,6 +382,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "is_recurring",
+            "always_in_sprint",
             "recurrence_frequency",
         )
         extra_kwargs = {
@@ -392,6 +393,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "start_date": {"required": False, "allow_null": True},
             "end_date": {"required": False, "allow_null": True},
             "is_recurring": {"required": False},
+            "always_in_sprint": {"required": False},
             "recurrence_frequency": {"required": False, "allow_blank": True},
         }
 
@@ -519,6 +521,7 @@ def task_to_representation(task: Task, request=None) -> dict:
         "start_date": _iso(task.start_date),
         "end_date": _iso(task.end_date),
         "is_recurring": bool(getattr(task, "is_recurring", False)),
+        "always_in_sprint": bool(getattr(task, "always_in_sprint", False)),
         "recurrence_frequency": getattr(task, "recurrence_frequency", None) or "",
         "created_at": _iso(task.created_at),
         "updated_at": _iso(task.updated_at),

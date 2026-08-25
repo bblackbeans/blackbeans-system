@@ -50,6 +50,7 @@ type SprintItem = {
   effort_points: number;
   hours_logged: string;
   is_recurring?: boolean;
+  always_in_sprint?: boolean;
   project_name: string;
   client_name?: string;
 };
@@ -314,6 +315,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
         <Space size={6} wrap={false}>
           <Typography.Text ellipsis={{ tooltip: title }}>{title}</Typography.Text>
           {item.is_recurring ? <Tag color="purple">Recorrente</Tag> : null}
+          {item.always_in_sprint ? <Tag color="cyan">Na sprint</Tag> : null}
         </Space>
       ),
     },

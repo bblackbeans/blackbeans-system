@@ -436,6 +436,7 @@ def dispatch_task_updated(*, task: Task, actor: User, fields: list[str], correla
         "start_date": "prazo de inicio",
         "end_date": "prazo final",
         "is_recurring": "recorrencia",
+        "always_in_sprint": "sempre na sprint",
         "recurrence_frequency": "frequencia de recorrencia",
     }
     pretty_fields = [field_labels.get(field, field.replace("_", " ")) for field in fields]

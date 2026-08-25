@@ -63,7 +63,18 @@ def make_board():
     return board, group
 
 
-def make_task(*, board, group, assignee, title, task_status="todo", start=None, end=None, recurring=False):
+def make_task(
+    *,
+    board,
+    group,
+    assignee,
+    title,
+    task_status="todo",
+    start=None,
+    end=None,
+    recurring=False,
+    always_in_sprint=False,
+):
     return Task.objects.create(
         board=board,
         group=group,
@@ -73,6 +84,7 @@ def make_task(*, board, group, assignee, title, task_status="todo", start=None, 
         start_date=start,
         end_date=end,
         is_recurring=recurring,
+        always_in_sprint=always_in_sprint,
         effort_points=2,
     )
 
@@ -168,6 +180,15 @@ def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client,
         end=noon(WEEK_END),
     )
 
+    make_task(
+        board=board,
+        group=group,
+        assignee=collaborator,
+        title="Reunioes internas",
+        task_status="todo",
+        always_in_sprint=True,
+    )
+
     response = admin_client.post("/api/v1/sprints/generate", {"week_start": WEEK_START.isoformat()}, format="json")
     assert response.status_code == status.HTTP_200_OK
     found = titles_from(response)
@@ -177,6 +198,7 @@ def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client,
     assert "Comecou antes termina agora" in found
     assert "Relatorio semanal" in found
     assert "Tarefa do admin" in found
+    assert "Reunioes internas" in found
     assert "Sem data" not in found
     assert "Semana anterior" not in found
 
@@ -184,6 +206,9 @@ def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client,
     assert recurring["is_recurring"] is True
     assert recurring["assignee_role"] == "collaborator"
     assert recurring["assignee_role_label"] == "Colaborador"
+
+    pinned = item_by_title(response, "Reunioes internas")
+    assert pinned["always_in_sprint"] is True
 
     admin_item = item_by_title(response, "Tarefa do admin")
     assert admin_item["assignee_role"] == "admin"

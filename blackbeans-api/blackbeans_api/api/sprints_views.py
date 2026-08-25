@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from django.db import transaction
+from django.db.models import Q
 from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -135,6 +136,7 @@ def item_to_representation(item: SprintItem, catalog: dict[str, dict[str, str]] 
         "effort_points": item.effort_points,
         "hours_logged": str(item.hours_logged),
         "is_recurring": bool(item.is_recurring),
+        "always_in_sprint": bool(item.always_in_sprint),
         "project_name": project_name,
         "client_name": client_name,
         "updated_at": _iso(item.updated_at),
@@ -170,7 +172,10 @@ def generate_snapshot(week: SprintWeek) -> int:
             span_start=Coalesce("start_date", "end_date"),
             span_end=Coalesce("end_date", "start_date"),
         )
-        .filter(span_start__lte=end_dt, span_end__gte=start_dt)
+        .filter(
+            Q(always_in_sprint=True)
+            | Q(span_start__lte=end_dt, span_end__gte=start_dt),
+        )
         .select_related("assignee", "board__project__client")
     )
     SprintItem.objects.filter(sprint=week).delete()
@@ -191,6 +196,7 @@ def generate_snapshot(week: SprintWeek) -> int:
             client_name=client_name,
             priority=task.priority or "",
             is_recurring=bool(task.is_recurring),
+            always_in_sprint=bool(task.always_in_sprint),
         )
         created += 1
     return created
@@ -374,7 +380,12 @@ class SprintItemDateView(APIView):
                 task.start_date = start_date
                 task.end_date = end_date
                 task.save(update_fields=["start_date", "end_date", "updated_at"])
-            if not task_overlaps_week(start_date, end_date, item.sprint.week_start, item.sprint.week_end):
+            pinned = bool(item.always_in_sprint) or bool(
+                item.task_id and getattr(item.task, "always_in_sprint", False),
+            )
+            if not pinned and not task_overlaps_week(
+                start_date, end_date, item.sprint.week_start, item.sprint.week_end
+            ):
                 item.delete()
                 return success_response(
                     correlation_id=correlation_id,

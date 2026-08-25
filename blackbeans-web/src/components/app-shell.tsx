@@ -441,6 +441,7 @@ type TaskItem = {
   subtasks_count?: number;
   client_name?: string | null;
   is_recurring?: boolean;
+  always_in_sprint?: boolean;
   recurrence_frequency?: string;
   created_at?: string | null;
   updated_at?: string | null;
@@ -1220,6 +1221,7 @@ const TASK_FIELD_LABEL_PT: Record<string, string> = {
   "prazo final": "Prazo final",
   is_recurring: "Recorrencia",
   recorrencia: "Recorrencia",
+  always_in_sprint: "Sempre na sprint",
   recurrence_frequency: "Frequencia de recorrencia",
   board_id: "Quadro",
   quadro: "Quadro",
@@ -5230,6 +5232,7 @@ export function AppShell() {
       start_date: toDateInputValue(task.start_date) || undefined,
       end_date: toDateInputValue(task.end_date) || undefined,
       is_recurring: Boolean(task.is_recurring),
+      always_in_sprint: Boolean(task.always_in_sprint),
       recurrence_frequency: task.recurrence_frequency || undefined,
     });
     void hydrateTaskAssigneePickList();
@@ -5355,6 +5358,7 @@ export function AppShell() {
       assignee_id: parent.assignee_id ?? undefined,
       start_date: toDateInputValue(parent.start_date) || undefined,
       end_date: toDateInputValue(parent.end_date) || undefined,
+      always_in_sprint: false,
     });
     void hydrateTaskAssigneePickList();
     setCreateSubtaskOpen(true);
@@ -5369,6 +5373,7 @@ export function AppShell() {
     assignee_id?: number | null;
     start_date?: string | Date | null;
     end_date?: string | Date | null;
+    always_in_sprint?: boolean;
   }) {
     if (!createSubtaskParent) return;
     const startIso = fromDateInputValue(values.start_date);
@@ -5392,6 +5397,7 @@ export function AppShell() {
           assignee_id: values.assignee_id ?? null,
           start_date: startIso,
           end_date: endIso,
+          always_in_sprint: Boolean(values.always_in_sprint),
         },
       });
       if (!response.ok) {
@@ -5633,6 +5639,7 @@ export function AppShell() {
         start_date: toDateInputValue(nextTask.start_date) || undefined,
         end_date: toDateInputValue(nextTask.end_date) || undefined,
         is_recurring: Boolean(nextTask.is_recurring),
+        always_in_sprint: Boolean(nextTask.always_in_sprint),
         recurrence_frequency: nextTask.recurrence_frequency || undefined,
       });
     }
@@ -5900,6 +5907,7 @@ export function AppShell() {
       start_date: startIso,
       end_date: endIso,
       is_recurring: Boolean(values.is_recurring),
+      always_in_sprint: Boolean(values.always_in_sprint),
       recurrence_frequency: values.is_recurring ? String(values.recurrence_frequency ?? "") : "",
     });
     if (nextStatus && nextStatus !== selectedTask.status) {
@@ -14267,6 +14275,16 @@ export function AppShell() {
                 <Input type="date" />
               </Form.Item>
             </Col>
+            <Col xs={24}>
+              <Form.Item
+                name="always_in_sprint"
+                label="Sempre na sprint"
+                valuePropName="checked"
+                extra="Entra na pasta da semana do responsável, mesmo sem prazo."
+              >
+                <Switch />
+              </Form.Item>
+            </Col>
           </Row>
         </Form>
       </Modal>
@@ -14468,6 +14486,7 @@ export function AppShell() {
                     start_date: toDateInputValue(selectedTask.start_date) || undefined,
                     end_date: toDateInputValue(selectedTask.end_date) || undefined,
                     is_recurring: Boolean(selectedTask.is_recurring),
+                    always_in_sprint: Boolean(selectedTask.always_in_sprint),
                     recurrence_frequency: selectedTask.recurrence_frequency || undefined,
                   }}
                   onFinish={(values) => void saveTaskDrawerFields(values)}
@@ -14543,6 +14562,16 @@ export function AppShell() {
                     <Col xs={24} sm={12}>
                       <Form.Item label="Esforço previsto (horas)" name="effort_points">
                         <EffortHoursInput />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item
+                        label="Sempre na sprint"
+                        name="always_in_sprint"
+                        valuePropName="checked"
+                        extra="Entra na pasta da semana de quem está responsável, mesmo sem prazo."
+                      >
+                        <Switch />
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={12}>

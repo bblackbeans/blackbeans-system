@@ -105,6 +105,7 @@ _TASK_FIELD_LABELS_PT = {
     "start_date": "Prazo de inicio",
     "end_date": "Prazo final",
     "is_recurring": "Recorrencia",
+    "always_in_sprint": "Sempre na sprint",
     "recurrence_frequency": "Frequencia de recorrencia",
     "board_id": "Quadro",
     "group_id": "Grupo",
@@ -350,6 +351,7 @@ def _spawn_next_recurrence(task: Task) -> Task | None:
         start_date=next_start,
         end_date=next_end,
         is_recurring=True,
+        always_in_sprint=bool(getattr(task, "always_in_sprint", False)),
         recurrence_frequency=freq,
         recurrence_anchor_task=anchor,
     )
