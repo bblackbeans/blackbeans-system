@@ -8,7 +8,6 @@ from uuid import UUID
 
 from django.db import transaction
 from django.db.models import Q
-from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -71,15 +70,31 @@ def assignee_role_fields(assignee) -> tuple[str, str]:
     return "collaborator", "Colaborador"
 
 
-def hours_for_task(task_id) -> Decimal:
-    total = (
-        TimeLog.objects.filter(task_id=task_id)
-        .exclude(status=TimeLog.Status.DELETED)
-        .aggregate(total=Sum("accumulated_seconds"))
-        .get("total")
-        or 0
-    )
-    return (Decimal(total) / Decimal(3600)).quantize(Decimal("0.01"))
+def hours_for_tasks(task_ids, *, start_dt=None, end_dt=None) -> dict[str, Decimal]:
+    """Horas apontadas nas tarefas. Com start/end, so logs que comecaram no periodo (igual ao dashboard admin)."""
+    ids = [task_id for task_id in task_ids if task_id]
+    if not ids:
+        return {}
+    queryset = TimeLog.objects.filter(task_id__in=ids).exclude(status=TimeLog.Status.DELETED)
+    if start_dt is not None:
+        queryset = queryset.filter(started_at__gte=start_dt)
+    if end_dt is not None:
+        queryset = queryset.filter(started_at__lte=end_dt)
+    now = timezone.now()
+    totals: dict[str, int] = {str(task_id): 0 for task_id in ids}
+    for log in queryset.only("task_id", "accumulated_seconds", "status", "current_started_at"):
+        seconds = int(log.accumulated_seconds or 0)
+        if log.status == TimeLog.Status.ACTIVE and log.current_started_at:
+            seconds += max(int((now - log.current_started_at).total_seconds()), 0)
+        key = str(log.task_id)
+        totals[key] = totals.get(key, 0) + seconds
+    return {
+        key: (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01")) for key, seconds in totals.items()
+    }
+
+
+def hours_for_task(task_id, *, start_dt=None, end_dt=None) -> Decimal:
+    return hours_for_tasks([task_id], start_dt=start_dt, end_dt=end_dt).get(str(task_id), Decimal("0.00"))
 
 
 def status_catalog() -> dict[str, dict[str, str]]:
@@ -102,7 +117,12 @@ def _task_project_client(task: Task | None) -> tuple[str, str]:
         return "", ""
 
 
-def item_to_representation(item: SprintItem, catalog: dict[str, dict[str, str]] | None = None) -> dict:
+def item_to_representation(
+    item: SprintItem,
+    catalog: dict[str, dict[str, str]] | None = None,
+    *,
+    hours_logged=None,
+) -> dict:
     assignee = item.assignee
     project_name = item.project_name
     client_name = item.client_name
@@ -134,7 +154,7 @@ def item_to_representation(item: SprintItem, catalog: dict[str, dict[str, str]] 
         "start_date": _iso(item.start_date),
         "end_date": _iso(item.end_date),
         "effort_points": item.effort_points,
-        "hours_logged": str(item.hours_logged),
+        "hours_logged": str(item.hours_logged if hours_logged is None else hours_logged),
         "is_recurring": bool(item.is_recurring),
         "always_in_sprint": bool(item.always_in_sprint),
         "project_name": project_name,
@@ -159,7 +179,20 @@ def week_to_representation(week: SprintWeek, *, include_items: bool = False) -> 
     if include_items:
         catalog = status_catalog()
         items = list(week.items.select_related("assignee", "task__board__project__client").all())
-        payload["items"] = [item_to_representation(item, catalog) for item in items]
+        start_dt, end_dt = week_bounds_dt(week.week_start, week.week_end)
+        live_hours = hours_for_tasks(
+            [item.task_id for item in items],
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        payload["items"] = [
+            item_to_representation(
+                item,
+                catalog,
+                hours_logged=live_hours.get(str(item.task_id), Decimal("0.00")) if item.task_id else item.hours_logged,
+            )
+            for item in items
+        ]
         payload["items_count"] = len(items)
     return payload
 
@@ -180,7 +213,9 @@ def generate_snapshot(week: SprintWeek) -> int:
     )
     SprintItem.objects.filter(sprint=week).delete()
     created = 0
-    for task in qs:
+    tasks = list(qs)
+    hours_map = hours_for_tasks([task.pk for task in tasks], start_dt=start_dt, end_dt=end_dt)
+    for task in tasks:
         project_name, client_name = _task_project_client(task)
         SprintItem.objects.create(
             sprint=week,
@@ -191,7 +226,7 @@ def generate_snapshot(week: SprintWeek) -> int:
             start_date=task.start_date,
             end_date=task.end_date,
             effort_points=int(task.effort_points or 0),
-            hours_logged=hours_for_task(task.pk),
+            hours_logged=hours_map.get(str(task.pk), Decimal("0.00")),
             project_name=project_name,
             client_name=client_name,
             priority=task.priority or "",

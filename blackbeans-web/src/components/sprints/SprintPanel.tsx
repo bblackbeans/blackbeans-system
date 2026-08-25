@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   DatePicker,
   Empty,
   Row,
@@ -103,6 +104,14 @@ function personTitle(item: SprintItem): string {
   return `${name} (${roleLabelFor(item)})`;
 }
 
+function personKeysFromItems(items: SprintItem[] | undefined): string[] {
+  return Array.from(
+    new Set(
+      (items ?? []).map((item) => (item.assignee_id != null ? String(item.assignee_id) : "unassigned")),
+    ),
+  );
+}
+
 function sumHours(items: SprintItem[]): { planned: number; logged: number } {
   return items.reduce(
     (acc, item) => ({
@@ -116,7 +125,7 @@ function sumHours(items: SprintItem[]): { planned: number; logged: number } {
 function totalsLabel(items: SprintItem[]): string {
   const { planned, logged } = sumHours(items);
   const n = items.length;
-  return `${n} tarefa${n === 1 ? "" : "s"} · ${formatLoggedHours(planned)} previstas · ${formatLoggedHours(logged)} apontadas`;
+  return `${n} tarefa${n === 1 ? "" : "s"} · ${formatLoggedHours(planned)} previstas · ${formatLoggedHours(logged)} apontadas na semana`;
 }
 
 function renderPriorityTag(value?: string) {
@@ -141,6 +150,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
   );
   const [selected, setSelected] = useState<SprintWeek | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
+  const [openPersonKeys, setOpenPersonKeys] = useState<string[]>([]);
 
   const fetchWeeks = useCallback(async () => {
     setLoading(true);
@@ -169,6 +179,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     }
     setSelected(response.data.week);
     setAssigneeFilter([]);
+    setOpenPersonKeys(personKeysFromItems(response.data.week.items));
   };
 
   const generate = async (weekStart?: string) => {
@@ -187,6 +198,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     await fetchWeeks();
     setSelected(response.data.week);
     setAssigneeFilter([]);
+    setOpenPersonKeys(personKeysFromItems(response.data.week.items));
   };
 
   const lockWeek = async () => {
@@ -355,10 +367,10 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
       render: (_, item) => renderDateCell(item, "end_date"),
     },
     {
-      title: "Tempo",
+      title: "Tempo na semana",
       dataIndex: "hours_logged",
       key: "hours_logged",
-      width: 90,
+      width: 120,
       render: (value: string) => formatLoggedHours(value),
     },
   ];
@@ -456,7 +468,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
           {grouped.length > 0 ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
               {weekTotals.items} tarefa{weekTotals.items === 1 ? "" : "s"} ·{" "}
-              {formatLoggedHours(weekTotals.planned)} previstas · {formatLoggedHours(weekTotals.logged)} apontadas
+              {formatLoggedHours(weekTotals.planned)} previstas · {formatLoggedHours(weekTotals.logged)} apontadas na semana
               {weekTotals.people > 0
                 ? ` · média ${formatLoggedHours(weekTotals.avgPlanned)} previstas / pessoa`
                 : ""}
@@ -471,25 +483,37 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
               }
             />
           ) : (
-            grouped.map((group) => (
-              <Card
-                key={group.key}
-                size="small"
-                title={`${group.name} (${group.roleLabel})`}
-                extra={<Typography.Text type="secondary">{totalsLabel(group.items)}</Typography.Text>}
-                style={{ marginBottom: 12 }}
-              >
-                <Table
-                  rowKey="id"
-                  size="small"
-                  className="bb-compact-table"
-                  scroll={{ x: 1180 }}
-                  pagination={false}
-                  columns={columns}
-                  dataSource={group.items}
-                />
-              </Card>
-            ))
+            <Collapse
+              size="small"
+              accordion={false}
+              collapsible="header"
+              activeKey={openPersonKeys}
+              onChange={(keys) => setOpenPersonKeys(Array.isArray(keys) ? keys : [keys])}
+              items={grouped.map((group) => ({
+                key: group.key,
+                label: (
+                  <Typography.Text strong>
+                    {group.name} ({group.roleLabel})
+                  </Typography.Text>
+                ),
+                extra: (
+                  <Typography.Text type="secondary" onClick={(event) => event.stopPropagation()}>
+                    {totalsLabel(group.items)}
+                  </Typography.Text>
+                ),
+                children: (
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    className="bb-compact-table"
+                    scroll={{ x: 1180 }}
+                    pagination={false}
+                    columns={columns}
+                    dataSource={group.items}
+                  />
+                ),
+              }))}
+            />
           )}
         </Card>
       ) : null}

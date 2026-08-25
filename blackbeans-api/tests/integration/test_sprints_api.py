@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from blackbeans_api.governance.models import Board
 from blackbeans_api.governance.models import BoardGroup
 from blackbeans_api.governance.models import Task
+from blackbeans_api.governance.models import TimeLog
 from blackbeans_api.governance.tests.factories import ProjectFactory
 from blackbeans_api.users.tests.factories import UserFactory
 
@@ -254,3 +255,40 @@ def test_patch_keeps_item_when_interval_still_overlaps_week(admin_client, collab
     assert moved.status_code == status.HTTP_200_OK
     assert moved.data["data"]["moved_out"] is True
     assert moved.data["data"]["item"] is None
+
+
+def test_sprint_hours_count_only_logs_started_in_the_week(admin_client, collaborator):
+    board, group = make_board()
+    task = make_task(
+        board=board,
+        group=group,
+        assignee=collaborator,
+        title="CRM Lusha",
+        task_status="in_progress",
+        start=noon(WEEK_START),
+        end=noon(WEEK_END),
+    )
+    last_week = noon(WEEK_START - timedelta(days=7))
+    this_week = noon(WEEK_START + timedelta(days=1))
+    TimeLog.objects.create(
+        task=task,
+        user=collaborator,
+        status=TimeLog.Status.COMPLETED,
+        started_at=last_week,
+        ended_at=last_week + timedelta(hours=3),
+        accumulated_seconds=3 * 3600,
+    )
+    TimeLog.objects.create(
+        task=task,
+        user=collaborator,
+        status=TimeLog.Status.COMPLETED,
+        started_at=this_week,
+        ended_at=this_week + timedelta(hours=2),
+        accumulated_seconds=2 * 3600,
+    )
+
+    generated = admin_client.post("/api/v1/sprints/generate", {"week_start": WEEK_START.isoformat()}, format="json")
+    assert generated.status_code == status.HTTP_200_OK
+    item = item_by_title(generated, "CRM Lusha")
+    assert float(item["hours_logged"]) == 2.0
+
