@@ -1366,36 +1366,58 @@ function formatEffortHoursDisplay(value: number | null | undefined) {
 }
 
 /**
- * Esforço previsto: TimePicker HH:mm (igual "Terminar em"), gravado em horas decimais.
- * 01:30 → 1.5. Teto 23:59.
+ * Esforço previsto: TimePicker HH:mm, gravado em horas decimais (01:30 → 1.5).
+ * Relogio em data local fixa para o valor nao pular com fuso, timer ao vivo ou remount.
  */
+function decimalHoursFromClock(hours: number, minutes: number): number {
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return 0;
+  return Number((Math.max(0, hours) + Math.max(0, minutes) / 60).toFixed(2));
+}
+
+function coerceEffortHours(value: unknown): number {
+  if (value == null || value === "") return 0;
+  if (dayjs.isDayjs(value)) {
+    return decimalHoursFromClock(value.hour(), value.minute());
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return decimalHoursFromClock(value.getHours(), value.getMinutes());
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d{1,2}:\d{2}/.test(trimmed)) {
+      const [hoursPart, minutesPart] = trimmed.split(":");
+      return decimalHoursFromClock(Number(hoursPart), Number(minutesPart));
+    }
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Number(Math.min(parsed, 23 + 59 / 60).toFixed(2));
+}
+
+function effortHoursToDayjs(hours: number): Dayjs {
+  const capped = Math.min(Math.max(hours, 0), 23 + 59 / 60);
+  const totalMinutes = Math.round(capped * 60);
+  const h = Math.min(23, Math.floor(totalMinutes / 60));
+  const m = totalMinutes % 60;
+  return dayjs(new Date(2000, 0, 1, h, m, 0, 0));
+}
+
 function EffortHoursInput({
   value,
   onChange,
   disabled,
   id,
 }: {
-  value?: number | string | null;
+  value?: number | string | Dayjs | Date | null;
   onChange?: (value: number | null) => void;
   disabled?: boolean;
   id?: string;
 }) {
-  const hours = Number(value ?? 0);
-  const pickerValue = (() => {
-    if (!Number.isFinite(hours) || hours < 0) {
-      return dayjs().hour(1).minute(0).second(0);
-    }
-    const capped = Math.min(hours, 23 + 59 / 60);
-    const h = Math.floor(capped);
-    let m = Math.round((capped - h) * 60);
-    if (m >= 60) {
-      return dayjs()
-        .hour(Math.min(23, h + 1))
-        .minute(0)
-        .second(0);
-    }
-    return dayjs().hour(h).minute(m).second(0);
-  })();
+  const hours = coerceEffortHours(value);
+  const pickerValue = useMemo(() => effortHoursToDayjs(hours), [hours]);
+  const commit = (next: Dayjs | null) => {
+    onChange?.(next ? coerceEffortHours(next) : 0);
+  };
 
   return (
     <TimePicker
@@ -1408,15 +1430,22 @@ function EffortHoursInput({
       showNow={false}
       placeholder="Esforco"
       value={pickerValue}
-      onChange={(next: Dayjs | null) => {
-        if (!next) {
-          onChange?.(1);
-          return;
-        }
-        const decimal = next.hour() + next.minute() / 60;
-        onChange?.(Number(decimal.toFixed(2)));
-      }}
+      onChange={commit}
+      onSelect={commit}
     />
+  );
+}
+
+function EffortHoursFormItem() {
+  return (
+    <Form.Item
+      name="effort_points"
+      label="Esforço previsto (horas)"
+      normalize={coerceEffortHours}
+      getValueFromEvent={(value) => coerceEffortHours(value)}
+    >
+      <EffortHoursInput />
+    </Form.Item>
   );
 }
 
@@ -2242,6 +2271,7 @@ export function AppShell() {
   const [subtaskSaving, setSubtaskSaving] = useState(false);
   const [createSubtaskForm] = Form.useForm();
   const [taskDetailsForm] = Form.useForm();
+  const watchedEffortPoints = Form.useWatch("effort_points", taskDetailsForm);
   const [taskCommentDraft, setTaskCommentDraft] = useState("");
   const [taskCommentFiles, setTaskCommentFiles] = useState<UploadFile[]>([]);
   const [taskCommentEditFiles, setTaskCommentEditFiles] = useState<UploadFile[]>([]);
@@ -5227,7 +5257,7 @@ export function AppShell() {
       description: task.description ?? "",
       status: task.status,
       priority: task.priority,
-      effort_points: Math.max(0, Number(task.effort_points ?? 1)),
+      effort_points: coerceEffortHours(task.effort_points ?? 0),
       assignee_id: task.assignee_id ?? undefined,
       start_date: toDateInputValue(task.start_date) || undefined,
       end_date: toDateInputValue(task.end_date) || undefined,
@@ -5393,7 +5423,7 @@ export function AppShell() {
           description: values.description ?? "",
           status: values.status ?? "todo",
           priority: values.priority ?? createSubtaskParent.priority,
-          effort_points: Math.max(0, Number(values.effort_points ?? 1)),
+          effort_points: coerceEffortHours(values.effort_points ?? 1),
           assignee_id: values.assignee_id ?? null,
           start_date: startIso,
           end_date: endIso,
@@ -5612,7 +5642,12 @@ export function AppShell() {
     );
   }
 
-  async function taskAction(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
+  async function taskAction(
+    path: string,
+    method: "POST" | "PATCH",
+    body: Record<string, unknown>,
+    options?: { refreshDrawer?: boolean },
+  ) {
     if (!selectedTask) return;
     const response = await apiRequest<{ task?: TaskItem }>(path, { method, token, body });
     if (!response.ok) {
@@ -5629,19 +5664,21 @@ export function AppShell() {
     if (updatedFromApi) {
       applyUpdatedTaskLocally(nextTask);
       setSelectedTask(nextTask);
-      taskDetailsForm.setFieldsValue({
-        title: nextTask.title,
-        description: nextTask.description ?? "",
-        status: nextTask.status,
-        priority: nextTask.priority,
-        effort_points: Math.max(0, Number(nextTask.effort_points ?? 1)),
-        assignee_id: nextTask.assignee_id ?? undefined,
-        start_date: toDateInputValue(nextTask.start_date) || undefined,
-        end_date: toDateInputValue(nextTask.end_date) || undefined,
-        is_recurring: Boolean(nextTask.is_recurring),
-        always_in_sprint: Boolean(nextTask.always_in_sprint),
-        recurrence_frequency: nextTask.recurrence_frequency || undefined,
-      });
+      if (options?.refreshDrawer !== false) {
+        taskDetailsForm.setFieldsValue({
+          title: nextTask.title,
+          description: nextTask.description ?? "",
+          status: nextTask.status,
+          priority: nextTask.priority,
+          effort_points: coerceEffortHours(nextTask.effort_points ?? 0),
+          assignee_id: nextTask.assignee_id ?? undefined,
+          start_date: toDateInputValue(nextTask.start_date) || undefined,
+          end_date: toDateInputValue(nextTask.end_date) || undefined,
+          is_recurring: Boolean(nextTask.is_recurring),
+          always_in_sprint: Boolean(nextTask.always_in_sprint),
+          recurrence_frequency: nextTask.recurrence_frequency || undefined,
+        });
+      }
     }
     await fetchTasks();
     if (isAdmin) {
@@ -5652,7 +5689,9 @@ export function AppShell() {
       boards.find((board) => board.id === nextTask.board_id)?.project_id ??
       null;
     await refreshBoardViewsForProject(projectId);
-    await openTask(nextTask, taskDrawerTab);
+    if (options?.refreshDrawer !== false) {
+      await openTask(nextTask, taskDrawerTab);
+    }
   }
 
   async function refreshTaskTimeSummary(taskId: string) {
@@ -5892,24 +5931,30 @@ export function AppShell() {
       return;
     }
     const nextStatus = String(values.status ?? selectedTask.status);
-      await taskAction(`/tasks/${selectedTask.id}`, "PATCH", {
-      title: values.title,
-      description,
-      priority: values.priority,
-      effort_points:
-        values.effort_points === undefined || values.effort_points === null
-          ? selectedTask.effort_points
-          : Math.max(0, Number(values.effort_points)),
-      assignee_id:
-        values.assignee_id === undefined || values.assignee_id === null || values.assignee_id === ""
-          ? null
-          : Number(values.assignee_id),
-      start_date: startIso,
-      end_date: endIso,
-      is_recurring: Boolean(values.is_recurring),
-      always_in_sprint: Boolean(values.always_in_sprint),
-      recurrence_frequency: values.is_recurring ? String(values.recurrence_frequency ?? "") : "",
-    });
+    await taskAction(
+      `/tasks/${selectedTask.id}`,
+      "PATCH",
+      {
+        title: values.title,
+        description,
+        priority: values.priority,
+        effort_points: coerceEffortHours(
+          values.effort_points === undefined || values.effort_points === null
+            ? selectedTask.effort_points
+            : values.effort_points,
+        ),
+        assignee_id:
+          values.assignee_id === undefined || values.assignee_id === null || values.assignee_id === ""
+            ? null
+            : Number(values.assignee_id),
+        start_date: startIso,
+        end_date: endIso,
+        is_recurring: Boolean(values.is_recurring),
+        always_in_sprint: Boolean(values.always_in_sprint),
+        recurrence_frequency: values.is_recurring ? String(values.recurrence_frequency ?? "") : "",
+      },
+      { refreshDrawer: false },
+    );
     if (nextStatus && nextStatus !== selectedTask.status) {
       await taskAction(`/tasks/${selectedTask.id}/status`, "PATCH", { status: nextStatus });
     }
@@ -14041,7 +14086,7 @@ export function AppShell() {
             const ok = await createTask({
               ...values,
               group_id: groupId,
-              effort_points: Math.max(0, Number(values.effort_points ?? 1)),
+              effort_points: coerceEffortHours(values.effort_points ?? 1),
               start_date: startIso,
               end_date: endIso,
               project_id: targetBoard.project_id,
@@ -14124,9 +14169,7 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
-              <Form.Item name="effort_points" label="Esforço previsto (horas)">
-                <EffortHoursInput />
-              </Form.Item>
+              <EffortHoursFormItem />
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="assignee_id" label="Responsavel">
@@ -14231,9 +14274,7 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="effort_points" label="Esforço previsto (horas)">
-                <EffortHoursInput />
-              </Form.Item>
+              <EffortHoursFormItem />
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="assignee_id" label="Responsavel">
@@ -14360,7 +14401,7 @@ export function AppShell() {
                   <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
                     Esforço
                   </Typography.Text>
-                  <Tag color="purple">{formatEffortHoursDisplay(selectedTask.effort_points)}</Tag>
+                  <Tag color="purple">{formatEffortHoursDisplay(coerceEffortHours(watchedEffortPoints ?? selectedTask.effort_points))}</Tag>
                 </Col>
                 <Col xs={12} sm={8}>
                   <Typography.Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
@@ -14473,7 +14514,7 @@ export function AppShell() {
 
             <Card size="small" title="Editar tarefa">
                 <Form
-                  key={`task-edit-${selectedTask.id}-${selectedTask.updated_at ?? ""}`}
+                  key={`task-edit-${selectedTask.id}`}
                   form={taskDetailsForm}
                   layout="vertical"
                   initialValues={{
@@ -14481,7 +14522,7 @@ export function AppShell() {
                     description: selectedTask.description ?? "",
                     status: selectedTask.status,
                     priority: selectedTask.priority,
-                    effort_points: Math.max(0, Number(selectedTask.effort_points ?? 1)),
+                    effort_points: coerceEffortHours(selectedTask.effort_points ?? 0),
                     assignee_id: selectedTask.assignee_id ?? undefined,
                     start_date: toDateInputValue(selectedTask.start_date) || undefined,
                     end_date: toDateInputValue(selectedTask.end_date) || undefined,
@@ -14560,9 +14601,7 @@ export function AppShell() {
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={12}>
-                      <Form.Item label="Esforço previsto (horas)" name="effort_points">
-                        <EffortHoursInput />
-                      </Form.Item>
+                      <EffortHoursFormItem />
                     </Col>
                     <Col xs={24} sm={12}>
                       <Form.Item
@@ -15493,7 +15532,7 @@ export function AppShell() {
               group_id: values.group_id ? String(values.group_id) : undefined,
               priority: values.priority,
               status: values.status,
-              effort_points: Math.max(0, Number(values.effort_points ?? 1)),
+              effort_points: coerceEffortHours(values.effort_points ?? 1),
               assignee_id: values.assignee_id ?? null,
               start_date: fromDateInputValue(values.start_date),
               end_date: fromDateInputValue(values.end_date),
@@ -15636,9 +15675,7 @@ export function AppShell() {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="effort_points" label="Esforço previsto (horas)">
-                <EffortHoursInput />
-              </Form.Item>
+              <EffortHoursFormItem />
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="start_date" label="Prazo inicio">
