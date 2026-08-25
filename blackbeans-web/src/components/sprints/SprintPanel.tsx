@@ -38,6 +38,8 @@ type SprintItem = {
   task_id: string | null;
   assignee_id: number | null;
   assignee_name: string;
+  assignee_role?: "admin" | "collaborator";
+  assignee_role_label?: string;
   title: string;
   status: string;
   status_label?: string;
@@ -47,8 +49,16 @@ type SprintItem = {
   end_date?: string | null;
   effort_points: number;
   hours_logged: string;
+  is_recurring?: boolean;
   project_name: string;
   client_name?: string;
+};
+
+type PersonGroup = {
+  key: string;
+  name: string;
+  roleLabel: string;
+  items: SprintItem[];
 };
 
 type SprintPanelProps = {
@@ -70,9 +80,9 @@ const STATUS_COLOR_FALLBACK: Record<string, string> = {
   done: "green",
 };
 
-function formatLoggedHours(value: string): string {
+function formatLoggedHours(value: string | number): string {
   const n = Number(value);
-  if (!Number.isFinite(n)) return value || "—";
+  if (!Number.isFinite(n)) return String(value || "—");
   const totalMin = Math.round(n * 60);
   const hours = Math.floor(totalMin / 60);
   const minutes = totalMin % 60;
@@ -80,6 +90,32 @@ function formatLoggedHours(value: string): string {
   if (minutes === 0) return `${hours}h`;
   if (hours === 0) return `${minutes}m`;
   return `${hours}h ${minutes}m`;
+}
+
+function roleLabelFor(item: SprintItem): string {
+  if (item.assignee_role_label) return item.assignee_role_label;
+  return item.assignee_role === "admin" ? "Admin" : "Colaborador";
+}
+
+function personTitle(item: SprintItem): string {
+  const name = item.assignee_name || "Sem responsavel";
+  return `${name} (${roleLabelFor(item)})`;
+}
+
+function sumHours(items: SprintItem[]): { planned: number; logged: number } {
+  return items.reduce(
+    (acc, item) => ({
+      planned: acc.planned + Number(item.effort_points || 0),
+      logged: acc.logged + Number(item.hours_logged || 0),
+    }),
+    { planned: 0, logged: 0 },
+  );
+}
+
+function totalsLabel(items: SprintItem[]): string {
+  const { planned, logged } = sumHours(items);
+  const n = items.length;
+  return `${n} tarefa${n === 1 ? "" : "s"} · ${formatLoggedHours(planned)} previstas · ${formatLoggedHours(logged)} apontadas`;
 }
 
 function renderPriorityTag(value?: string) {
@@ -216,25 +252,40 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     for (const item of selected?.items ?? []) {
       const value = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
       if (seen.has(value)) continue;
-      seen.set(value, item.assignee_name || "Sem responsavel");
+      seen.set(value, personTitle(item));
     }
     return Array.from(seen.entries()).map(([value, label]) => ({ value, label }));
   }, [selected]);
 
-  const grouped = useMemo(() => {
+  const grouped = useMemo((): PersonGroup[] => {
     const items = selected?.items ?? [];
     const allowed = new Set(assigneeFilter);
-    const map = new Map<string, SprintItem[]>();
+    const map = new Map<string, PersonGroup>();
     items.forEach((item) => {
-      const assigneeKey = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
-      if (allowed.size > 0 && !allowed.has(assigneeKey)) return;
-      const key = item.assignee_name || "Sem responsavel";
-      const list = map.get(key) ?? [];
-      list.push(item);
-      map.set(key, list);
+      const key = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
+      if (allowed.size > 0 && !allowed.has(key)) return;
+      const existing = map.get(key);
+      if (existing) {
+        existing.items.push(item);
+        return;
+      }
+      map.set(key, {
+        key,
+        name: item.assignee_name || "Sem responsavel",
+        roleLabel: roleLabelFor(item),
+        items: [item],
+      });
     });
-    return Array.from(map.entries());
+    return Array.from(map.values());
   }, [assigneeFilter, selected]);
+
+  const weekTotals = useMemo(() => {
+    const items = grouped.flatMap((group) => group.items);
+    const { planned, logged } = sumHours(items);
+    const people = grouped.length;
+    const avgPlanned = people > 0 ? planned / people : 0;
+    return { items: items.length, planned, logged, people, avgPlanned };
+  }, [grouped]);
 
   const canEditDates = Boolean(isAdmin && selected && !selected.is_locked);
 
@@ -253,7 +304,19 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
   };
 
   const columns: ColumnsType<SprintItem> = [
-    { title: "Tarefa", dataIndex: "title", key: "title", ellipsis: true, width: 260 },
+    {
+      title: "Tarefa",
+      dataIndex: "title",
+      key: "title",
+      ellipsis: true,
+      width: 280,
+      render: (title: string, item) => (
+        <Space size={6} wrap={false}>
+          <Typography.Text ellipsis={{ tooltip: title }}>{title}</Typography.Text>
+          {item.is_recurring ? <Tag color="purple">Recorrente</Tag> : null}
+        </Space>
+      ),
+    },
     { title: "Projeto", dataIndex: "project_name", key: "project_name", ellipsis: true, width: 160 },
     {
       title: "Cliente",
@@ -388,6 +451,15 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
               style={{ minWidth: 240, maxWidth: 420, marginBottom: 12 }}
             />
           ) : null}
+          {grouped.length > 0 ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+              {weekTotals.items} tarefa{weekTotals.items === 1 ? "" : "s"} ·{" "}
+              {formatLoggedHours(weekTotals.planned)} previstas · {formatLoggedHours(weekTotals.logged)} apontadas
+              {weekTotals.people > 0
+                ? ` · média ${formatLoggedHours(weekTotals.avgPlanned)} previstas / pessoa`
+                : ""}
+            </Typography.Paragraph>
+          ) : null}
           {grouped.length === 0 ? (
             <Empty
               description={
@@ -397,8 +469,14 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
               }
             />
           ) : (
-            grouped.map(([name, items]) => (
-              <Card key={name} size="small" title={name} style={{ marginBottom: 12 }}>
+            grouped.map((group) => (
+              <Card
+                key={group.key}
+                size="small"
+                title={`${group.name} (${group.roleLabel})`}
+                extra={<Typography.Text type="secondary">{totalsLabel(group.items)}</Typography.Text>}
+                style={{ marginBottom: 12 }}
+              >
                 <Table
                   rowKey="id"
                   size="small"
@@ -406,7 +484,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
                   scroll={{ x: 1180 }}
                   pagination={false}
                   columns={columns}
-                  dataSource={items}
+                  dataSource={group.items}
                 />
               </Card>
             ))

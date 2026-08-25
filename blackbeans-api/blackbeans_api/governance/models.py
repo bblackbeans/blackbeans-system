@@ -1017,6 +1017,7 @@ class SprintItem(models.Model):
     project_name = CharField(max_length=255, blank=True, default="")
     client_name = CharField(max_length=255, blank=True, default="")
     priority = CharField(max_length=24, blank=True, default="")
+    is_recurring = models.BooleanField(default=False)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
