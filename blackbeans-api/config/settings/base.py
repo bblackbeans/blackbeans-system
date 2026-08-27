@@ -90,6 +90,7 @@ LOCAL_APPS = [
     "blackbeans_api.clients",
     "blackbeans_api.feedback",
     "blackbeans_api.leads",
+    "blackbeans_api.integrations.apps.IntegrationsConfig",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -363,6 +364,18 @@ OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
 OPENAI_API_BASE = env("OPENAI_API_BASE", default="https://api.openai.com/v1")
 AGENT_LLM_ENABLED = env.bool("AGENT_LLM_ENABLED", default=True)
 AGENT_STALE_DAYS = env.int("AGENT_STALE_DAYS", default=7)
+
+# RD Station CRM (OAuth no backend; nunca expor client_secret no Next)
+RDSTATION_CRM_CLIENT_ID = env("RDSTATION_CRM_CLIENT_ID", default="")
+RDSTATION_CRM_CLIENT_SECRET = env("RDSTATION_CRM_CLIENT_SECRET", default="")
+RDSTATION_CRM_REDIRECT_URI = env("RDSTATION_CRM_REDIRECT_URI", default="")
+RDSTATION_CRM_WEBHOOK_URL = env("RDSTATION_CRM_WEBHOOK_URL", default="")
+RDSTATION_CRM_APP_BASE_URL = env(
+    "RDSTATION_CRM_APP_BASE_URL",
+    default="https://crm.rdstation.com",
+)
+API_PUBLIC_BASE_URL = env("API_PUBLIC_BASE_URL", default="")
+INTEGRATIONS_FERNET_KEY = env("INTEGRATIONS_FERNET_KEY", default="")
 
 # Relatar problema (feedback com screenshot/gravacao)
 PROBLEM_REPORTS_FEEDBACK_ENABLED = env.bool("PROBLEM_REPORTS_FEEDBACK_ENABLED", default=True)

@@ -42,6 +42,18 @@ from blackbeans_api.api.leads_views import LeadImportPreviewView
 from blackbeans_api.api.leads_views import LeadImportsListCreateView
 from blackbeans_api.api.leads_views import LeadOrigensView
 from blackbeans_api.api.leads_views import LeadsListView
+from blackbeans_api.api.rdstation_views import RdCompanySyncView
+from blackbeans_api.api.rdstation_views import RdHistoryView
+from blackbeans_api.api.rdstation_views import RdOAuthCallbackView
+from blackbeans_api.api.rdstation_views import RdOAuthDisconnectView
+from blackbeans_api.api.rdstation_views import RdOAuthStartView
+from blackbeans_api.api.rdstation_views import RdOptionsView
+from blackbeans_api.api.rdstation_views import RdSettingsView
+from blackbeans_api.api.rdstation_views import RdStatusView
+from blackbeans_api.api.rdstation_views import RdSyncCreateView
+from blackbeans_api.api.rdstation_views import RdSyncJobDetailView
+from blackbeans_api.api.rdstation_views import RdSyncPreviewView
+from blackbeans_api.api.rdstation_views import RdWebhookView
 from blackbeans_api.api.feedback_views import ProblemReportDetailView
 from blackbeans_api.api.feedback_views import ProblemReportFeedbackCreateView
 from blackbeans_api.api.feedback_views import ProblemReportsListView
@@ -299,6 +311,34 @@ urlpatterns = [
     path("problem-reports/summary", ProblemReportsSummaryView.as_view(), name="problem-reports-summary"),
     path("problem-reports/<uuid:report_id>", ProblemReportDetailView.as_view(), name="problem-reports-detail"),
     path("problem-reports", ProblemReportsListView.as_view(), name="problem-reports-list"),
+    path("integrations/rdstation/status", RdStatusView.as_view(), name="rdstation-status"),
+    path("integrations/rdstation/oauth/start", RdOAuthStartView.as_view(), name="rdstation-oauth-start"),
+    path(
+        "integrations/rdstation/oauth/callback",
+        RdOAuthCallbackView.as_view(),
+        name="rdstation-oauth-callback",
+    ),
+    path(
+        "integrations/rdstation/oauth/disconnect",
+        RdOAuthDisconnectView.as_view(),
+        name="rdstation-oauth-disconnect",
+    ),
+    path("integrations/rdstation/settings", RdSettingsView.as_view(), name="rdstation-settings"),
+    path("integrations/rdstation/options", RdOptionsView.as_view(), name="rdstation-options"),
+    path("integrations/rdstation/sync/preview", RdSyncPreviewView.as_view(), name="rdstation-sync-preview"),
+    path("integrations/rdstation/sync", RdSyncCreateView.as_view(), name="rdstation-sync-create"),
+    path(
+        "integrations/rdstation/sync/<uuid:job_id>",
+        RdSyncJobDetailView.as_view(),
+        name="rdstation-sync-job",
+    ),
+    path(
+        "integrations/rdstation/companies/<uuid:company_id>/sync",
+        RdCompanySyncView.as_view(),
+        name="rdstation-company-sync",
+    ),
+    path("integrations/rdstation/history", RdHistoryView.as_view(), name="rdstation-history"),
+    path("integrations/rdstation/webhook", RdWebhookView.as_view(), name="rdstation-webhook"),
     path("leads/origens", LeadOrigensView.as_view(), name="leads-origens"),
     path("leads/imports/preview", LeadImportPreviewView.as_view(), name="leads-imports-preview"),
     path("leads/imports/<uuid:import_id>", LeadImportDetailView.as_view(), name="leads-imports-detail"),

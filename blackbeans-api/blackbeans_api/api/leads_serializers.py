@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from blackbeans_api.integrations.presenters import rd_info_for_company
 from blackbeans_api.leads.models import Lead
 from blackbeans_api.leads.models import LeadCompany
 from blackbeans_api.leads.models import LeadImport
-from blackbeans_api.leads.services import QUALITY_BEST_THRESHOLD
+from blackbeans_api.leads.scoring import QUALITY_BEST_THRESHOLD
+from blackbeans_api.leads.scoring import prospect_quality_from_lead
 from blackbeans_api.leads.services import normalize_cnpj
 
 
@@ -31,6 +33,7 @@ def lead_company_to_representation(
     company: LeadCompany,
     *,
     include_contacts: bool = False,
+    rd_info: dict | None = None,
 ) -> dict:
     data = {
         "id": str(company.pk),
@@ -42,6 +45,12 @@ def lead_company_to_representation(
         "has_phone": company.has_phone,
         "has_email": company.has_email,
         "completeness_score": company.completeness_score,
+        "email_is_generic": company.email_is_generic,
+        "email_is_shared": company.email_is_shared,
+        "phone_is_shared": company.phone_is_shared,
+        "contact_is_person": company.contact_is_person,
+        "contact_is_decision_maker": company.contact_is_decision_maker,
+        "website_domain": company.website_domain or "",
         "contacts_count": company.contacts_count,
         "notes": company.notes,
         "quality_best_threshold": QUALITY_BEST_THRESHOLD,
@@ -50,24 +59,55 @@ def lead_company_to_representation(
     }
     if include_contacts:
         contacts = list(company.contacts.all())[:200]
-        data["contacts"] = [lead_to_representation(c, include_payload=False) for c in contacts]
+        data["contacts"] = [
+            lead_to_representation(
+                c,
+                include_payload=False,
+                include_score_breakdown=False,
+            )
+            for c in contacts
+        ]
+        if contacts:
+            best = max(contacts, key=lambda row: row.completeness_score)
+            data["score_breakdown"] = prospect_quality_from_lead(
+                best,
+                email_is_shared=best.email_is_shared,
+                phone_is_shared=best.phone_is_shared,
+            )["score_breakdown"]
+        else:
+            data["score_breakdown"] = []
+    if rd_info is None:
+        rd_info = rd_info_for_company(company.pk)
+    data.update(rd_info)
     return data
 
 
-def lead_to_representation(lead: Lead, *, include_payload: bool = True) -> dict:
+def lead_to_representation(
+    lead: Lead,
+    *,
+    include_payload: bool = True,
+    include_score_breakdown: bool | None = None,
+) -> dict:
     batch = lead.import_batch
     company = lead.company
+    if include_score_breakdown is None:
+        include_score_breakdown = include_payload
     data = {
         "id": str(lead.pk),
         "import_id": str(batch.pk) if batch else None,
         "company_id": str(company.pk) if company else None,
         "company_name": company.name if company else None,
-        "origem": (batch.origem if batch else None) or (company.origem if company else "") or "",
+        "origem": (
+            (batch.origem if batch else None)
+            or str((lead.payload or {}).get("origem") or "")
+            or (company.origem if company else "")
+            or ""
+        ),
         "freshness": (batch.freshness if batch else None)
         or (company.freshness if company else "")
         or "",
         "filename": batch.filename if batch else "",
-        "column_keys": list(batch.column_keys or []) if batch else list((lead.payload or {}).keys()),
+        "column_keys": list(batch.column_keys or []) if batch else [],
         "display_name": lead.display_name,
         "email": lead.email,
         "phone": lead.phone,
@@ -76,6 +116,22 @@ def lead_to_representation(lead: Lead, *, include_payload: bool = True) -> dict:
         "has_phone": lead.has_phone,
         "has_email": lead.has_email,
         "completeness_score": lead.completeness_score,
+        "email_is_generic": lead.email_is_generic,
+        "email_is_shared": lead.email_is_shared,
+        "phone_is_shared": lead.phone_is_shared,
+        "contact_is_person": lead.contact_is_person,
+        "contact_is_decision_maker": lead.contact_is_decision_maker,
+        "job_title": lead.job_title or "",
+        "linkedin_url": lead.linkedin_url or "",
+        "score_breakdown": (
+            prospect_quality_from_lead(
+                lead,
+                email_is_shared=lead.email_is_shared,
+                phone_is_shared=lead.phone_is_shared,
+            )["score_breakdown"]
+            if include_score_breakdown
+            else []
+        ),
         "contact_status": lead.contact_status,
         "notes": lead.notes,
         "created_at": _iso(lead.created_at),
@@ -83,14 +139,6 @@ def lead_to_representation(lead: Lead, *, include_payload: bool = True) -> dict:
     }
     if include_payload:
         data["payload"] = dict(lead.payload or {})
-    else:
-        payload = dict(lead.payload or {})
-        preview: dict[str, str | None] = {}
-        keys = list(batch.column_keys or []) if batch else list(payload.keys())
-        for key in keys[:8]:
-            value = payload.get(key)
-            preview[key] = None if value is None else str(value)
-        data["payload_preview"] = preview
     return data
 
 
@@ -162,6 +210,7 @@ class LeadCreateSerializer(serializers.Serializer):
         default=Lead.ContactStatus.NAO_CONTATADO,
     )
     notes = serializers.CharField(required=False, allow_blank=True)
+    job_title = serializers.CharField(required=False, allow_blank=True, max_length=120)
     origem = serializers.CharField(required=False, allow_blank=True, max_length=200)
     freshness = serializers.ChoiceField(
         choices=LeadCompany.Freshness.choices,

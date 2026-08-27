@@ -6,6 +6,13 @@ import re
 import unicodedata
 from typing import Any
 
+from blackbeans_api.leads.scoring import LEAD_QUALITY_FIELDS
+from blackbeans_api.leads.scoring import apply_prospect_quality
+from blackbeans_api.leads.scoring import compute_prospect_score
+from blackbeans_api.leads.scoring import extract_job_title
+from blackbeans_api.leads.scoring import is_valid_cnpj
+from blackbeans_api.leads.scoring import prospect_quality_from_lead
+
 DISPLAY_NAME_KEYS = (
     "nome",
     "nome da empresa",
@@ -50,9 +57,15 @@ CNPJ_KEY_HINTS = ("cnpj",)
 EMAIL_KEY_HINTS = ("email", "e-mail", "mail")
 PHONE_KEY_HINTS = ("telefone", "phone", "celular", "whatsapp", "tel", "fone")
 SITE_KEY_HINTS = ("site", "website", "url", "web")
-ADDRESS_KEY_HINTS = ("endereco", "endereço", "logradouro", "rua", "bairro", "cidade", "cep")
-
-QUALITY_BEST_THRESHOLD = 60
+ADDRESS_KEY_HINTS = (
+    "endereco",
+    "endereço",
+    "logradouro",
+    "rua",
+    "bairro",
+    "cidade",
+    "cep",
+)
 
 _EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _CNPJ_DIGITS_RE = re.compile(r"\D+")
@@ -189,7 +202,9 @@ def derive_contact_name(payload: dict[str, Any], *, fallback: str | None = None)
 
 
 def extract_structured_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    cnpj_raw = _first_by_hint(payload, CNPJ_KEY_HINTS) or _first_by_keys(payload, ("cnpj",))
+    cnpj_raw = _first_by_hint(payload, CNPJ_KEY_HINTS) or _first_by_keys(
+        payload, ("cnpj",)
+    )
     email_raw = _first_by_hint(payload, EMAIL_KEY_HINTS)
     phone_raw = _first_by_hint(payload, PHONE_KEY_HINTS)
     return {
@@ -198,32 +213,13 @@ def extract_structured_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "phone": normalize_phone(phone_raw),
         "has_site": bool(_first_by_hint(payload, SITE_KEY_HINTS)),
         "has_address": bool(_first_by_hint(payload, ADDRESS_KEY_HINTS)),
+        "job_title": extract_job_title(payload),
     }
 
 
-def compute_completeness_score(
-    *,
-    has_cnpj: bool,
-    has_phone: bool,
-    has_email: bool,
-    has_site: bool = False,
-    has_address: bool = False,
-) -> int:
-    score = 0
-    if has_cnpj:
-        score += 35
-    if has_phone:
-        score += 25
-    if has_email:
-        score += 25
-    if has_site:
-        score += 10
-    if has_address:
-        score += 5
-    return min(score, 100)
-
-
-def enrich_lead_fields(payload: dict[str, Any], column_keys: list[str]) -> dict[str, Any]:
+def enrich_lead_fields(
+    payload: dict[str, Any], column_keys: list[str]
+) -> dict[str, Any]:
     display_name = derive_display_name(payload, column_keys)
     contact_name = derive_contact_name(payload, fallback=display_name)
     company_name = derive_company_name(payload, fallback=display_name)
@@ -231,17 +227,13 @@ def enrich_lead_fields(payload: dict[str, Any], column_keys: list[str]) -> dict[
     cnpj = structured["cnpj"] if isinstance(structured["cnpj"], str) else None
     email = structured["email"] if isinstance(structured["email"], str) else None
     phone = structured["phone"] if isinstance(structured["phone"], str) else None
-    has_cnpj = bool(cnpj)
-    has_email = bool(email)
-    has_phone = bool(phone)
-    has_site = bool(structured.get("has_site"))
-    has_address = bool(structured.get("has_address"))
-    score = compute_completeness_score(
-        has_cnpj=has_cnpj,
-        has_phone=has_phone,
-        has_email=has_email,
-        has_site=has_site,
-        has_address=has_address,
+    quality = compute_prospect_score(
+        cnpj=cnpj,
+        email=email,
+        phone=phone,
+        contact_name=contact_name,
+        company_name=company_name,
+        job_title=str(structured.get("job_title") or ""),
     )
     return {
         "display_name": contact_name,
@@ -250,16 +242,25 @@ def enrich_lead_fields(payload: dict[str, Any], column_keys: list[str]) -> dict[
         "cnpj": cnpj or "",
         "email": email or "",
         "phone": phone or "",
-        "has_cnpj": has_cnpj,
-        "has_email": has_email,
-        "has_phone": has_phone,
-        "has_site": has_site,
-        "has_address": has_address,
-        "completeness_score": score,
+        "job_title": structured.get("job_title") or "",
+        "has_cnpj": quality["has_cnpj"],
+        "has_email": quality["has_email"],
+        "has_phone": quality["has_phone"],
+        "has_site": bool(structured.get("has_site")),
+        "has_address": bool(structured.get("has_address")),
+        "completeness_score": quality["completeness_score"],
+        "email_is_generic": quality["email_is_generic"],
+        "email_is_shared": quality["email_is_shared"],
+        "phone_is_shared": quality["phone_is_shared"],
+        "contact_is_person": quality["contact_is_person"],
+        "contact_is_decision_maker": quality["contact_is_decision_maker"],
+        "score_breakdown": quality["score_breakdown"],
     }
 
 
-def build_search_text(*, payload: dict[str, Any], origem: str, display_name: str) -> str:
+def build_search_text(
+    *, payload: dict[str, Any], origem: str, display_name: str
+) -> str:
     parts: list[str] = [origem or "", display_name or ""]
     for value in payload.values():
         text = _cell_to_str(value)
@@ -268,31 +269,37 @@ def build_search_text(*, payload: dict[str, Any], origem: str, display_name: str
     return " ".join(parts).lower()
 
 
-def build_company_search_text(*, name: str, cnpj: str | None, origem: str, extra: str = "") -> str:
+def build_company_search_text(
+    *, name: str, cnpj: str | None, origem: str, extra: str = ""
+) -> str:
     return " ".join(part for part in [name, cnpj or "", origem, extra] if part).lower()
 
 
 def recompute_company_quality(company) -> None:
-    """Atualiza flags/score/contagem da empresa a partir dos contatos."""
+    """Atualiza flags/score/contagem da empresa a partir da qualidade dos contatos."""
     contacts = list(company.contacts.all())
-    has_cnpj = bool(company.cnpj) or any(c.has_cnpj for c in contacts)
-    has_phone = any(c.has_phone for c in contacts)
-    has_email = any(c.has_email for c in contacts)
-    has_site = False
-    has_address = False
-    for contact in contacts:
-        structured = extract_structured_fields(dict(contact.payload or {}))
-        has_site = has_site or bool(structured.get("has_site"))
-        has_address = has_address or bool(structured.get("has_address"))
-    company.has_cnpj = has_cnpj
-    company.has_phone = has_phone
-    company.has_email = has_email
-    company.completeness_score = compute_completeness_score(
-        has_cnpj=has_cnpj,
-        has_phone=has_phone,
-        has_email=has_email,
-        has_site=has_site,
-        has_address=has_address,
+    emails = [row for row in contacts if row.email]
+    phones = [row for row in contacts if row.phone]
+    company.has_cnpj = is_valid_cnpj(company.cnpj) or any(
+        row.has_cnpj for row in contacts
+    )
+    company.has_phone = any(row.has_phone for row in contacts)
+    company.has_email = any(row.has_email for row in contacts)
+    company.completeness_score = max(
+        (row.completeness_score for row in contacts), default=0
+    )
+    company.email_is_generic = bool(emails) and all(
+        row.email_is_generic for row in emails
+    )
+    company.email_is_shared = bool(emails) and all(
+        row.email_is_shared for row in emails
+    )
+    company.phone_is_shared = bool(phones) and all(
+        row.phone_is_shared for row in phones
+    )
+    company.contact_is_person = any(row.contact_is_person for row in contacts)
+    company.contact_is_decision_maker = any(
+        row.contact_is_decision_maker for row in contacts
     )
     company.contacts_count = len(contacts)
     company.search_text = build_company_search_text(
@@ -307,11 +314,120 @@ def recompute_company_quality(company) -> None:
             "has_phone",
             "has_email",
             "completeness_score",
+            "email_is_generic",
+            "email_is_shared",
+            "phone_is_shared",
+            "contact_is_person",
+            "contact_is_decision_maker",
             "contacts_count",
             "search_text",
             "updated_at",
         ],
     )
+
+
+def _shared_values(field: str, values: list[str] | None = None) -> set[str]:
+    from django.db.models import Count
+
+    from blackbeans_api.leads.models import Lead
+
+    queryset = Lead.objects.exclude(**{field: ""})
+    if values is not None:
+        cleaned = [item for item in values if item]
+        if not cleaned:
+            return set()
+        queryset = queryset.filter(**{f"{field}__in": cleaned})
+    return set(
+        queryset.values(field)
+        .annotate(n=Count("id"))
+        .filter(n__gte=2)
+        .values_list(field, flat=True),
+    )
+
+
+def _leads_affected_by_contacts(
+    *,
+    emails: list[str] | None,
+    phones: list[str] | None,
+):
+    from django.db.models import Q
+
+    from blackbeans_api.leads.models import Lead
+
+    cleaned_emails = [item for item in (emails or []) if item]
+    cleaned_phones = [item for item in (phones or []) if item]
+    clause = Q()
+    if cleaned_emails:
+        clause |= Q(email__in=cleaned_emails)
+    if cleaned_phones:
+        clause |= Q(phone__in=cleaned_phones)
+    if not clause:
+        return Lead.objects.none()
+    seed = Lead.objects.filter(clause)
+    related_emails = set(seed.exclude(email="").values_list("email", flat=True))
+    related_phones = set(seed.exclude(phone="").values_list("phone", flat=True))
+    related_emails.update(cleaned_emails)
+    related_phones.update(cleaned_phones)
+    expand = Q()
+    if related_emails:
+        expand |= Q(email__in=related_emails)
+    if related_phones:
+        expand |= Q(phone__in=related_phones)
+    return Lead.objects.select_related("company").filter(expand)
+
+
+def refresh_shared_quality(
+    *,
+    emails: list[str] | None = None,
+    phones: list[str] | None = None,
+    batch_size: int = 500,
+) -> dict[str, int]:
+    """Recalcula flags de duplicata e o score dos leads afetados (e das empresas)."""
+    from django.utils import timezone
+
+    from blackbeans_api.leads.models import Lead
+    from blackbeans_api.leads.models import LeadCompany
+
+    if emails is not None or phones is not None:
+        queryset = _leads_affected_by_contacts(emails=emails, phones=phones)
+    else:
+        queryset = Lead.objects.select_related("company").all()
+
+    leads = list(queryset)
+    if not leads:
+        return {"leads": 0, "companies": 0}
+
+    shared_emails = _shared_values("email", [row.email for row in leads if row.email])
+    shared_phones = _shared_values("phone", [row.phone for row in leads if row.phone])
+    now = timezone.now()
+    company_ids: set[str] = set()
+    for lead in leads:
+        quality = prospect_quality_from_lead(
+            lead,
+            email_is_shared=bool(lead.email) and lead.email in shared_emails,
+            phone_is_shared=bool(lead.phone) and lead.phone in shared_phones,
+        )
+        apply_prospect_quality(lead, quality)
+        lead.updated_at = now
+        if lead.company_id:
+            company_ids.add(str(lead.company_id))
+
+    Lead.objects.bulk_update(
+        leads,
+        list(LEAD_QUALITY_FIELDS) + ["updated_at"],
+        batch_size=batch_size,
+    )
+    if company_ids:
+        for company in LeadCompany.objects.filter(pk__in=company_ids).prefetch_related(
+            "contacts",
+        ):
+            recompute_company_quality(company)
+    return {"leads": len(leads), "companies": len(company_ids)}
+
+
+def recompute_all_lead_scores(*, batch_size: int = 500) -> dict[str, int]:
+    """Recalcula o score de prospecção de todos os leads e empresas."""
+    return refresh_shared_quality(batch_size=batch_size)
 
 
 def get_or_create_company_for_payload(
@@ -346,18 +462,25 @@ def get_or_create_company_for_payload(
                 cnpj=cnpj,
                 origem=origem or "",
                 freshness=freshness,
-                has_cnpj=bool(cnpj),
+                has_cnpj=bool(cnpj) and is_valid_cnpj(cnpj),
                 has_phone=enriched["has_phone"],
                 has_email=enriched["has_email"],
                 completeness_score=enriched["completeness_score"],
+                email_is_generic=enriched["email_is_generic"],
+                email_is_shared=enriched["email_is_shared"],
+                phone_is_shared=enriched["phone_is_shared"],
+                contact_is_person=enriched["contact_is_person"],
+                contact_is_decision_maker=enriched["contact_is_decision_maker"],
                 contacts_count=0,
-                search_text=build_company_search_text(name=name, cnpj=cnpj, origem=origem),
+                search_text=build_company_search_text(
+                    name=name, cnpj=cnpj, origem=origem
+                ),
             )
         else:
             changed = False
             if cnpj and not company.cnpj:
                 company.cnpj = cnpj
-                company.has_cnpj = True
+                company.has_cnpj = is_valid_cnpj(cnpj)
                 changed = True
             if origem and not company.origem:
                 company.origem = origem
@@ -382,13 +505,22 @@ _LEAD_BACKFILL_FIELDS = (
     "has_phone",
     "has_email",
     "completeness_score",
+    "email_is_generic",
+    "email_is_shared",
+    "phone_is_shared",
+    "contact_is_person",
+    "contact_is_decision_maker",
     "search_text",
     "updated_at",
 )
 
 
-def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200) -> dict[str, int]:
-    """Associa leads a LeadCompany e recalcula qualidade. Corrige imports anteriores ao modelo de empresa."""
+def backfill_lead_companies(  # noqa: C901
+    *,
+    only_missing: bool = True,
+    batch_size: int = 200,
+) -> dict[str, int]:
+    """Associa leads a LeadCompany e recalcula qualidade."""
     from django.db import transaction
     from django.db.models import Count
     from django.utils import timezone
@@ -415,7 +547,9 @@ def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200)
         now = timezone.now()
         with transaction.atomic():
             for lead in batch:
-                column_keys = list((lead.import_batch.column_keys if lead.import_batch else None) or [])
+                column_keys = list(
+                    (lead.import_batch.column_keys if lead.import_batch else None) or []
+                )
                 if not column_keys:
                     column_keys = list((lead.payload or {}).keys())
                 origem = ""
@@ -439,6 +573,11 @@ def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200)
                 lead.has_phone = enriched["has_phone"]
                 lead.has_email = enriched["has_email"]
                 lead.completeness_score = enriched["completeness_score"]
+                lead.email_is_generic = enriched["email_is_generic"]
+                lead.email_is_shared = enriched["email_is_shared"]
+                lead.phone_is_shared = enriched["phone_is_shared"]
+                lead.contact_is_person = enriched["contact_is_person"]
+                lead.contact_is_decision_maker = enriched["contact_is_decision_maker"]
                 lead.search_text = build_search_text(
                     payload=dict(lead.payload or {}),
                     origem=origem,
@@ -447,13 +586,19 @@ def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200)
                 lead.updated_at = now
                 touched[str(company.pk)] = company
                 processed += 1
-            Lead.objects.bulk_update(batch, list(_LEAD_BACKFILL_FIELDS), batch_size=batch_size)
+            Lead.objects.bulk_update(
+                batch, list(_LEAD_BACKFILL_FIELDS), batch_size=batch_size
+            )
 
     company_ids = list(touched.keys())
     if company_ids:
-        companies = LeadCompany.objects.filter(pk__in=company_ids).prefetch_related("contacts")
+        companies = LeadCompany.objects.filter(pk__in=company_ids).prefetch_related(
+            "contacts"
+        )
         for company in companies:
             recompute_company_quality(company)
+
+    refresh_shared_quality()
 
     orphan_companies = LeadCompany.objects.annotate(n=Count("contacts")).filter(n=0)
     orphan_count = 0
@@ -469,7 +614,7 @@ def backfill_lead_companies(*, only_missing: bool = True, batch_size: int = 200)
 
 
 def ensure_orphan_leads_have_companies() -> dict[str, int] | None:
-    """Roda o backfill uma vez se ainda existirem leads sem empresa (lista vazia com origens preenchidas)."""
+    """Roda o backfill se ainda existirem leads sem empresa."""
     from django.core.cache import cache
 
     from blackbeans_api.leads.models import Lead
@@ -484,7 +629,9 @@ def ensure_orphan_leads_have_companies() -> dict[str, int] | None:
         cache.delete(_LEAD_COMPANY_BACKFILL_LOCK)
 
 
-def _rows_from_matrix(matrix: list[list[Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+def _rows_from_matrix(
+    matrix: list[list[Any]],
+) -> tuple[list[str], list[dict[str, Any]]]:
     if not matrix:
         raise LeadParseError("Planilha vazia.")
     header_row = matrix[0]
@@ -548,7 +695,9 @@ def parse_xlsx_bytes(content: bytes) -> tuple[list[str], list[dict[str, Any]]]:
         raise LeadParseError("Suporte a XLSX indisponivel (openpyxl).") from exc
 
     try:
-        workbook = load_workbook(filename=io.BytesIO(content), read_only=True, data_only=True)
+        workbook = load_workbook(
+            filename=io.BytesIO(content), read_only=True, data_only=True
+        )
     except Exception as exc:
         raise LeadParseError("Arquivo XLSX invalido.") from exc
 
@@ -563,7 +712,9 @@ def parse_xlsx_bytes(content: bytes) -> tuple[list[str], list[dict[str, Any]]]:
     return _rows_from_matrix(matrix)
 
 
-def parse_spreadsheet(*, filename: str, content: bytes) -> tuple[list[str], list[dict[str, Any]]]:
+def parse_spreadsheet(
+    *, filename: str, content: bytes
+) -> tuple[list[str], list[dict[str, Any]]]:
     name = (filename or "").lower().strip()
     if name.endswith(".csv") or name.endswith(".txt"):
         return parse_csv_bytes(content)

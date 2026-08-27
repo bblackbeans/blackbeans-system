@@ -69,6 +69,12 @@ class LeadCompany(models.Model):
     has_phone = models.BooleanField(default=False, db_index=True)
     has_email = models.BooleanField(default=False, db_index=True)
     completeness_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    email_is_generic = models.BooleanField(default=False, db_index=True)
+    email_is_shared = models.BooleanField(default=False, db_index=True)
+    phone_is_shared = models.BooleanField(default=False, db_index=True)
+    contact_is_person = models.BooleanField(default=False, db_index=True)
+    contact_is_decision_maker = models.BooleanField(default=False, db_index=True)
+    website_domain = models.CharField(max_length=255, blank=True, default="")
     contacts_count = models.PositiveIntegerField(default=0)
     notes = models.TextField(blank=True, default="")
     search_text = models.TextField(blank=True, default="")
@@ -83,6 +89,10 @@ class LeadCompany(models.Model):
             models.Index(fields=["has_cnpj", "has_phone", "has_email"]),
             models.Index(fields=["origem", "freshness"]),
             models.Index(fields=["completeness_score"]),
+            models.Index(
+                fields=["contact_is_decision_maker", "email_is_generic", "phone_is_shared"],
+                name="leads_leadc_prospect_idx",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -120,6 +130,11 @@ class Lead(models.Model):
     has_phone = models.BooleanField(default=False, db_index=True)
     has_email = models.BooleanField(default=False, db_index=True)
     completeness_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+    email_is_generic = models.BooleanField(default=False, db_index=True)
+    email_is_shared = models.BooleanField(default=False, db_index=True)
+    phone_is_shared = models.BooleanField(default=False, db_index=True)
+    contact_is_person = models.BooleanField(default=False, db_index=True)
+    contact_is_decision_maker = models.BooleanField(default=False, db_index=True)
     search_text = models.TextField(blank=True, default="")
     contact_status = models.CharField(
         max_length=32,
@@ -128,6 +143,8 @@ class Lead(models.Model):
         db_index=True,
     )
     notes = models.TextField(blank=True, default="")
+    job_title = models.CharField(max_length=120, blank=True, default="")
+    linkedin_url = models.URLField(max_length=512, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -141,6 +158,8 @@ class Lead(models.Model):
             models.Index(fields=["import_batch", "contact_status"]),
             models.Index(fields=["company", "contact_status"]),
             models.Index(fields=["has_cnpj", "has_phone", "has_email"]),
+            models.Index(fields=["contact_is_decision_maker"], name="leads_lead_contact_dm_idx"),
+            models.Index(fields=["email_is_generic", "phone_is_shared"], name="leads_lead_email_ph_idx"),
         ]
 
     def __str__(self) -> str:

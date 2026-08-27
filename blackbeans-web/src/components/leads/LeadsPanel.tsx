@@ -5,11 +5,17 @@ import {
   CloseCircleOutlined,
   DeleteOutlined,
   EyeOutlined,
+  HistoryOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SendOutlined,
+  SettingOutlined,
+  SyncOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import {
+  Alert,
+  App,
   AutoComplete,
   Button,
   Card,
@@ -30,9 +36,28 @@ import {
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import type { Key } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  RD_STATUS_OPTIONS,
+  RdConfigModal,
+  RdHistoryDrawer,
+  RdPreviewModal,
+  rdStatusTag,
+  type RdCustomField,
+  type RdJob,
+  type RdOption,
+  type RdPreview,
+  type RdSettings,
+  type RdStatusPayload,
+} from "@/components/leads/RdStationModals";
 import { apiRequest } from "@/lib/api";
+
+type ScoreBreakdownItem = {
+  label: string;
+  points: number;
+};
 
 type LeadListItem = {
   id: string;
@@ -51,6 +76,14 @@ type LeadListItem = {
   has_phone?: boolean;
   has_email?: boolean;
   completeness_score?: number;
+  email_is_generic?: boolean;
+  email_is_shared?: boolean;
+  phone_is_shared?: boolean;
+  contact_is_person?: boolean;
+  contact_is_decision_maker?: boolean;
+  job_title?: string;
+  linkedin_url?: string;
+  score_breakdown?: ScoreBreakdownItem[];
   contact_status: string;
   notes?: string;
   payload_preview?: Record<string, string | null>;
@@ -73,9 +106,29 @@ type CompanyListItem = {
   has_phone: boolean;
   has_email: boolean;
   completeness_score: number;
+  email_is_generic?: boolean;
+  email_is_shared?: boolean;
+  phone_is_shared?: boolean;
+  contact_is_person?: boolean;
+  contact_is_decision_maker?: boolean;
+  score_breakdown?: ScoreBreakdownItem[];
   contacts_count: number;
   contacts?: LeadListItem[];
   notes?: string;
+  website_domain?: string;
+  rd_status?: string;
+  rd_remote_id?: string;
+  rd_url?: string;
+  rd_last_synced_at?: string | null;
+  rd_last_error?: string;
+  rd_deal?: {
+    remote_id?: string;
+    url?: string;
+    pipeline_name?: string;
+    stage_name?: string;
+    owner_name?: string;
+    deal_status?: string;
+  } | null;
   created_at?: string | null;
 };
 
@@ -119,16 +172,8 @@ const FRESHNESS_OPTIONS = [
   { value: "antigo", label: "Antigo" },
 ];
 
-/** Espelhamento da regra em leads/services.py — só para exibir na UI. */
-const SCORE_BREAKDOWN = [
-  { label: "CNPJ", points: 35 },
-  { label: "Telefone", points: 25 },
-  { label: "E-mail", points: 25 },
-  { label: "Site", points: 10 },
-  { label: "Endereço", points: 5 },
-] as const;
-
 const BEST_LEADS_THRESHOLD = 60;
+const RD_POLL_MS = 4000;
 
 function qualityLabel(score: number | undefined | null) {
   const value = Number(score ?? 0);
@@ -137,36 +182,70 @@ function qualityLabel(score: number | undefined | null) {
   return { text: "Baixa", color: "default" as const };
 }
 
+function formatScorePoints(points: number) {
+  if (points > 0) return `+${points}`;
+  return String(points);
+}
+
 function ScoreQualityInfo({
   score,
   hasCnpj,
   hasPhone,
   hasEmail,
+  breakdown,
+  flags,
 }: {
   score?: number | null;
   hasCnpj?: boolean;
   hasPhone?: boolean;
   hasEmail?: boolean;
+  breakdown?: ScoreBreakdownItem[];
+  flags?: {
+    email_is_generic?: boolean;
+    email_is_shared?: boolean;
+    phone_is_shared?: boolean;
+    contact_is_decision_maker?: boolean;
+    contact_is_person?: boolean;
+  };
 }) {
   const value = Number(score ?? 0);
   const quality = qualityLabel(value);
   return (
-    <Card size="small" title="Score e qualidade (BlackBeans)">
+    <Card size="small" title="Score de prospecção">
       <Space orientation="vertical" size={10} style={{ width: "100%" }}>
         <Space wrap>
           <Tag color={value >= BEST_LEADS_THRESHOLD ? "green" : "default"}>Score {value}/100</Tag>
           <Tag color={quality.color}>{quality.text}</Tag>
           <Space size={8}>
-            <FlagIcon ok={Boolean(hasCnpj)} label="CNPJ" />
-            <FlagIcon ok={Boolean(hasPhone)} label="Telefone" />
-            <FlagIcon ok={Boolean(hasEmail)} label="E-mail" />
+            <FlagIcon ok={Boolean(hasCnpj)} label="CNPJ válido" />
+            <FlagIcon ok={Boolean(hasPhone)} label="Telefone útil" />
+            <FlagIcon ok={Boolean(hasEmail)} label="E-mail útil" />
           </Space>
         </Space>
+        <Space wrap size={4}>
+          {flags?.contact_is_decision_maker ? <Tag color="blue">Decisor</Tag> : null}
+          {flags?.contact_is_person && !flags.contact_is_decision_maker ? <Tag>Pessoa</Tag> : null}
+          {flags?.email_is_generic ? <Tag color="orange">E-mail genérico</Tag> : null}
+          {flags?.email_is_shared ? <Tag color="volcano">E-mail compartilhado</Tag> : null}
+          {flags?.phone_is_shared ? <Tag color="volcano">Telefone repetido</Tag> : null}
+        </Space>
+        {breakdown && breakdown.length > 0 ? (
+          <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+            {breakdown.map((item) => (
+              <Typography.Text
+                key={`${item.label}-${item.points}`}
+                type={item.points < 0 ? "danger" : "secondary"}
+                style={{ fontSize: 12 }}
+              >
+                {formatScorePoints(item.points)} · {item.label}
+              </Typography.Text>
+            ))}
+          </Space>
+        ) : null}
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          Nota calculada só com os dados da planilha/cadastro (sem APIs externas). Pontos:{" "}
-          {SCORE_BREAKDOWN.map((item) => `${item.label} +${item.points}`).join(" · ")}. O filtro{" "}
-          <strong>Melhores leads</strong> usa score ≥ {BEST_LEADS_THRESHOLD}. Campos como
-          &quot;Classificação&quot; na planilha são da origem importada, não desta nota.
+          Prioriza contato direto (e-mail nominativo, celular único, decisor) e rebaixa caixa genérica
+          (contato@) e telefone/e-mail repetidos. O filtro <strong>Melhores leads</strong> usa score ≥{" "}
+          {BEST_LEADS_THRESHOLD}. O envio ao RD Station usa empresa, contatos e, se ligado, um deal.
         </Typography.Paragraph>
       </Space>
     </Card>
@@ -185,6 +264,10 @@ function formatCnpj(value: string | null | undefined) {
   const digits = (value || "").replace(/\D/g, "");
   if (digits.length !== 14) return value || "—";
   return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+}
+
+function nowrapHeader(label: string) {
+  return <span style={{ whiteSpace: "nowrap" }}>{label}</span>;
 }
 
 function freshnessTag(value: string | null | undefined) {
@@ -220,6 +303,7 @@ type LeadsPanelProps = {
 };
 
 export function LeadsPanel({ token }: LeadsPanelProps) {
+  const { modal } = App.useApp();
   const [msg, msgHolder] = message.useMessage();
   const [loading, setLoading] = useState(true);
   const fetchSeqRef = useRef(0);
@@ -237,14 +321,47 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   const [hasPhone, setHasPhone] = useState(false);
   const [hasEmail, setHasEmail] = useState(false);
   const [bestOnly, setBestOnly] = useState(false);
+  const [decisionMakersOnly, setDecisionMakersOnly] = useState(false);
+  const [hideGenericEmail, setHideGenericEmail] = useState(false);
+  const [hideSharedPhone, setHideSharedPhone] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [contactsByCompany, setContactsByCompany] = useState<Record<string, LeadListItem[]>>({});
+  const [contactsLoading, setContactsLoading] = useState<Record<string, boolean>>({});
+  const [expandedRowKeys, setExpandedRowKeys] = useState<Key[]>([]);
+  const contactsByCompanyRef = useRef<Record<string, LeadListItem[]>>({});
+  const contactsLoadingRef = useRef<Record<string, boolean>>({});
+  const expandedRowKeysRef = useRef<Key[]>([]);
 
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyDetail, setCompanyDetail] = useState<CompanyDetail | null>(null);
   const [companyLoading, setCompanyLoading] = useState(false);
   const [companyNotesDraft, setCompanyNotesDraft] = useState("");
   const [savingCompany, setSavingCompany] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [rdStatusFilter, setRdStatusFilter] = useState<string>("all");
+  const [rdStatus, setRdStatus] = useState<RdStatusPayload | null>(null);
+  const [rdSettings, setRdSettings] = useState<RdSettings | null>(null);
+  const [rdConfigOpen, setRdConfigOpen] = useState(false);
+  const [rdSaving, setRdSaving] = useState(false);
+  const [rdConnecting, setRdConnecting] = useState(false);
+  const [rdPreviewOpen, setRdPreviewOpen] = useState(false);
+  const [rdPreview, setRdPreview] = useState<RdPreview | null>(null);
+  const [rdPreviewLoading, setRdPreviewLoading] = useState(false);
+  const [rdSending, setRdSending] = useState(false);
+  const [rdJob, setRdJob] = useState<RdJob | null>(null);
+  const [rdPipelines, setRdPipelines] = useState<RdOption[]>([]);
+  const [rdStages, setRdStages] = useState<RdOption[]>([]);
+  const [rdOwners, setRdOwners] = useState<RdOption[]>([]);
+  const [rdSources, setRdSources] = useState<RdOption[]>([]);
+  const [rdCustomFields, setRdCustomFields] = useState<RdCustomField[]>([]);
+  const [rdOptionsError, setRdOptionsError] = useState<string | null>(null);
+  const [rdHistoryOpen, setRdHistoryOpen] = useState(false);
+  const [rdHistoryLoading, setRdHistoryLoading] = useState(false);
+  const [rdHistory, setRdHistory] = useState<
+    Array<{ id: string; action: string; success: boolean; message: string; created_at?: string | null }>
+  >([]);
 
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [leadDetail, setLeadDetail] = useState<LeadDetail | null>(null);
@@ -286,16 +403,44 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
     }
   }, [token]);
 
-  const fetchCompanies = useCallback(async () => {
-    const seq = ++fetchSeqRef.current;
-    setLoading(true);
-    try {
+  const loadCompanyContacts = useCallback(
+    async (companyId: string, force = false) => {
+      if (
+        !force &&
+        (companyId in contactsByCompanyRef.current || contactsLoadingRef.current[companyId])
+      ) {
+        return;
+      }
+      contactsLoadingRef.current = { ...contactsLoadingRef.current, [companyId]: true };
+      setContactsLoading((prev) => ({ ...prev, [companyId]: true }));
+      try {
+        const response = await apiRequest<{ company: CompanyDetail }>(`/leads/companies/${companyId}`, {
+          token,
+        });
+        if (!response.ok) {
+          msg.error(response.error?.message ?? "Falha ao carregar contatos.");
+          return;
+        }
+        const contacts = response.data?.company?.contacts ?? [];
+        contactsByCompanyRef.current = { ...contactsByCompanyRef.current, [companyId]: contacts };
+        setContactsByCompany((prev) => ({ ...prev, [companyId]: contacts }));
+      } finally {
+        contactsLoadingRef.current = { ...contactsLoadingRef.current, [companyId]: false };
+        setContactsLoading((prev) => ({ ...prev, [companyId]: false }));
+      }
+    },
+    [msg, token],
+  );
+
+  const buildLeadQuery = useCallback(
+    (withPagination: boolean) => {
       const params = new URLSearchParams({
-        page: String(page),
-        page_size: "20",
         ordering: "-completeness_score",
-        include_contacts: "true",
       });
+      if (withPagination) {
+        params.set("page", String(page));
+        params.set("page_size", "20");
+      }
       if (search.trim()) params.set("q", search.trim());
       if (origemFilter !== "all") params.set("origem", origemFilter);
       if (freshnessFilter !== "all") params.set("freshness", freshnessFilter);
@@ -304,7 +449,35 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
       if (hasPhone) params.set("has_phone", "true");
       if (hasEmail) params.set("has_email", "true");
       if (bestOnly) params.set("quality", "best");
+      if (decisionMakersOnly) params.set("decision_makers", "true");
+      if (hideGenericEmail) params.set("hide_generic_email", "true");
+      if (hideSharedPhone) params.set("hide_shared_phone", "true");
+      if (rdStatusFilter !== "all") params.set("rd_status", rdStatusFilter);
+      return params;
+    },
+    [
+      bestOnly,
+      contactStatusFilter,
+      decisionMakersOnly,
+      freshnessFilter,
+      hasCnpj,
+      hasEmail,
+      hasPhone,
+      hideGenericEmail,
+      hideSharedPhone,
+      origemFilter,
+      page,
+      rdStatusFilter,
+      search,
+    ],
+  );
 
+  const fetchCompanies = useCallback(async (options?: { silent?: boolean }) => {
+    const seq = ++fetchSeqRef.current;
+    const silent = Boolean(options?.silent);
+    if (!silent) setLoading(true);
+    try {
+      const params = buildLeadQuery(true);
       const response = await apiRequest<{ companies: CompanyListItem[] }>(
         `/leads/companies?${params.toString()}`,
         { token },
@@ -315,24 +488,26 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         msg.error(response.error?.message ?? "Falha ao carregar empresas.");
         return;
       }
-      setCompanies(response.data?.companies ?? []);
+      const rows = response.data?.companies ?? [];
+      setCompanies(rows);
       setTotal(Number(response.meta?.total ?? 0));
+      const ids = new Set(rows.map((row) => row.id));
+      setContactsByCompany((prev) => {
+        const next: Record<string, LeadListItem[]> = {};
+        for (const [id, contacts] of Object.entries(prev)) {
+          if (ids.has(id)) next[id] = contacts;
+        }
+        contactsByCompanyRef.current = next;
+        return next;
+      });
+      for (const key of expandedRowKeysRef.current) {
+        const id = String(key);
+        if (ids.has(id)) void loadCompanyContacts(id, true);
+      }
     } finally {
-      if (seq === fetchSeqRef.current) setLoading(false);
+      if (!silent && seq === fetchSeqRef.current) setLoading(false);
     }
-  }, [
-    bestOnly,
-    contactStatusFilter,
-    freshnessFilter,
-    hasCnpj,
-    hasEmail,
-    hasPhone,
-    msg,
-    origemFilter,
-    page,
-    search,
-    token,
-  ]);
+  }, [buildLeadQuery, loadCompanyContacts, msg, token]);
 
   const fetchCompanyDetail = useCallback(
     async (companyId: string) => {
@@ -348,6 +523,10 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         const row = response.data?.company ?? null;
         setCompanyDetail(row);
         setCompanyNotesDraft(row?.notes ?? "");
+        if (row?.contacts) {
+          contactsByCompanyRef.current = { ...contactsByCompanyRef.current, [companyId]: row.contacts };
+          setContactsByCompany((prev) => ({ ...prev, [companyId]: row.contacts ?? [] }));
+        }
       } finally {
         setCompanyLoading(false);
       }
@@ -401,6 +580,80 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
     }
     void fetchLeadDetail(selectedLeadId);
   }, [fetchLeadDetail, selectedLeadId]);
+
+  useEffect(() => {
+    if (!rdJob || rdJob.status === "done" || rdJob.status === "failed") return;
+    let cancelled = false;
+    const poll = async () => {
+      const response = await apiRequest<{ job: RdJob }>(`/integrations/rdstation/sync/${rdJob.id}`, {
+        token,
+      });
+      if (cancelled || !response.ok || !response.data?.job) return;
+      setRdJob(response.data.job);
+      await fetchCompanies({ silent: true });
+      if (selectedCompanyId) await fetchCompanyDetail(selectedCompanyId);
+      if (response.data.job.status === "done" || response.data.job.status === "failed") {
+        msg.success(
+          `Envio RD: ${response.data.job.success} ok, ${response.data.job.error} erro(s), ${response.data.job.skipped} ignorada(s).`,
+        );
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, RD_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [fetchCompanies, fetchCompanyDetail, msg, rdJob, selectedCompanyId, token]);
+
+  const fetchRdStatus = useCallback(async () => {
+    const response = await apiRequest<RdStatusPayload>("/integrations/rdstation/status", { token });
+    if (!response.ok) return;
+    setRdStatus(response.data ?? null);
+    if (response.data?.settings) setRdSettings(response.data.settings);
+  }, [token]);
+
+  const fetchRdOptions = useCallback(async () => {
+    const response = await apiRequest<{
+      pipelines: RdOption[];
+      stages: RdOption[];
+      owners: RdOption[];
+      sources: RdOption[];
+      custom_fields?: RdCustomField[];
+      errors?: Record<string, string>;
+    }>("/integrations/rdstation/options", { token });
+    if (!response.ok) {
+      setRdOptionsError(response.error?.message ?? "Falha ao carregar funis e responsáveis.");
+      return;
+    }
+    setRdPipelines(response.data?.pipelines ?? []);
+    setRdStages(response.data?.stages ?? []);
+    setRdOwners(response.data?.owners ?? []);
+    setRdSources(response.data?.sources ?? []);
+    setRdCustomFields(response.data?.custom_fields ?? []);
+    const errors = Object.values(response.data?.errors ?? {});
+    setRdOptionsError(errors[0] ?? null);
+  }, [token]);
+
+  useEffect(() => {
+    void fetchRdStatus();
+    const params = new URLSearchParams(window.location.search);
+    const rd = params.get("rd");
+    if (rd === "connected") {
+      msg.success("RD Station CRM conectado.");
+    }
+    if (rd === "oauth_error") {
+      msg.error("Falha ao conectar o RD Station CRM.");
+    }
+    if (rd === "connected" || rd === "oauth_error") {
+      params.delete("rd");
+      const query = params.toString();
+      const next = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+      window.history.replaceState({}, "", next);
+    }
+  }, [fetchRdStatus, msg]);
 
   const resetImportWizard = () => {
     setImportStep(1);
@@ -490,6 +743,145 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
     }
   };
 
+  const openRdConfig = async () => {
+    setRdConfigOpen(true);
+    await fetchRdStatus();
+    await fetchRdOptions();
+  };
+
+  const handleRdConnect = async () => {
+    setRdConnecting(true);
+    try {
+      const response = await apiRequest<{ authorization_url: string }>(
+        "/integrations/rdstation/oauth/start",
+        { method: "POST", token, body: {} },
+      );
+      if (!response.ok || !response.data?.authorization_url) {
+        msg.error(response.error?.message ?? "Não foi possível iniciar o OAuth.");
+        return;
+      }
+      window.location.href = response.data.authorization_url;
+    } finally {
+      setRdConnecting(false);
+    }
+  };
+
+  const handleRdDisconnect = async () => {
+    const response = await apiRequest("/integrations/rdstation/oauth/disconnect", {
+      method: "POST",
+      token,
+      body: {},
+    });
+    if (!response.ok) {
+      msg.error(response.error?.message ?? "Falha ao desconectar.");
+      return;
+    }
+    msg.success("RD Station desconectado.");
+    await fetchRdStatus();
+  };
+
+  const handleRdSaveSettings = async (values: Partial<RdSettings>) => {
+    setRdSaving(true);
+    try {
+      const response = await apiRequest<{ settings: RdSettings }>("/integrations/rdstation/settings", {
+        method: "PATCH",
+        token,
+        body: values,
+      });
+      if (!response.ok) {
+        msg.error(response.error?.message ?? "Falha ao salvar configuração.");
+        return;
+      }
+      setRdSettings(response.data?.settings ?? null);
+      msg.success("Configuração salva.");
+      setRdConfigOpen(false);
+    } finally {
+      setRdSaving(false);
+    }
+  };
+
+  const openRdPreview = async () => {
+    if (!selectAllMatching && selectedRowKeys.length < 1) {
+      msg.warning("Selecione empresas ou marque todos os filtrados.");
+      return;
+    }
+    setRdPreviewOpen(true);
+    setRdPreviewLoading(true);
+    try {
+      const filters = buildLeadQuery(false);
+      if (!selectAllMatching) {
+        filters.set("company_ids", selectedRowKeys.map(String).join(","));
+      }
+      const response = await apiRequest<RdPreview>(
+        `/integrations/rdstation/sync/preview?${filters.toString()}`,
+        { token },
+      );
+      if (!response.ok) {
+        msg.error(response.error?.message ?? "Falha ao calcular o lote.");
+        setRdPreviewOpen(false);
+        return;
+      }
+      setRdPreview(response.data ?? null);
+    } finally {
+      setRdPreviewLoading(false);
+    }
+  };
+
+  const handleRdSend = async (options?: { companyId?: string; force?: boolean }) => {
+    setRdSending(true);
+    try {
+      const filters = buildLeadQuery(false);
+      const body: Record<string, unknown> = {
+        force_resync: Boolean(options?.force),
+      };
+      if (options?.companyId) {
+        body.company_ids = [options.companyId];
+        body.select_all_matching = false;
+      } else if (selectAllMatching) {
+        body.select_all_matching = true;
+      } else {
+        body.company_ids = selectedRowKeys.map(String);
+      }
+      const response = await apiRequest<{ job: RdJob }>(
+        `/integrations/rdstation/sync?${filters.toString()}`,
+        { method: "POST", token, body },
+      );
+      if (!response.ok) {
+        msg.error(response.error?.message ?? "Falha ao enfileirar o envio.");
+        return;
+      }
+      const job = response.data?.job ?? null;
+      setRdJob(job);
+      setRdPreviewOpen(false);
+      if (!job || job.total < 1) {
+        msg.info("Nenhuma empresa elegível para enviar.");
+        return;
+      }
+      msg.success(`Envio em fila: ${job.total} empresa(s).`);
+    } finally {
+      setRdSending(false);
+    }
+  };
+
+  const openRdHistory = async (companyId: string) => {
+    setRdHistoryOpen(true);
+    setRdHistoryLoading(true);
+    try {
+      const response = await apiRequest<{
+        logs: Array<{
+          id: string;
+          action: string;
+          success: boolean;
+          message: string;
+          created_at?: string | null;
+        }>;
+      }>(`/integrations/rdstation/history?company_id=${companyId}`, { token });
+      setRdHistory(response.data?.logs ?? []);
+    } finally {
+      setRdHistoryLoading(false);
+    }
+  };
+
   const handleSaveLead = async () => {
     if (!selectedLeadId) return;
     setSavingLead(true);
@@ -516,7 +908,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   };
 
   const handleDeleteImport = (batch: LeadImportItem) => {
-    Modal.confirm({
+    modal.confirm({
       title: "Excluir esta importação?",
       content: `Removerá ${batch.row_count} contato(s) de "${batch.origem}" (${batch.filename || "arquivo"}).`,
       okText: "Excluir",
@@ -538,7 +930,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   };
 
   const handleDeleteCompany = (company: { id: string; name: string; contacts_count?: number }) => {
-    Modal.confirm({
+    modal.confirm({
       title: "Excluir esta empresa?",
       content: `"${company.name}" e ${company.contacts_count ?? 0} contato(s) serão removidos.`,
       okText: "Excluir",
@@ -561,7 +953,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   };
 
   const handleDeleteLead = (lead: { id: string; display_name: string }) => {
-    Modal.confirm({
+    modal.confirm({
       title: "Excluir este contato?",
       content: `"${lead.display_name}" será removido permanentemente.`,
       okText: "Excluir",
@@ -657,38 +1049,38 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   const companyColumns: ColumnsType<CompanyListItem> = useMemo(
     () => [
       {
-        title: "Empresa",
+        title: nowrapHeader("Empresa"),
         dataIndex: "name",
         ellipsis: true,
       },
       {
-        title: "CNPJ",
+        title: nowrapHeader("CNPJ"),
         dataIndex: "cnpj",
         width: 160,
         render: (value: string) => formatCnpj(value),
       },
       {
-        title: "Novo/Antigo",
+        title: nowrapHeader("Novo/Antigo"),
         dataIndex: "freshness",
-        width: 110,
+        width: 132,
         render: (value: string) => freshnessTag(value),
       },
       {
-        title: "Origem",
+        title: nowrapHeader("Origem"),
         dataIndex: "origem",
         width: 140,
         ellipsis: true,
         render: (value: string) => (value ? <Tag>{value}</Tag> : "—"),
       },
       {
-        title: "Contatos",
+        title: nowrapHeader("Contatos"),
         dataIndex: "contacts_count",
-        width: 90,
+        width: 108,
       },
       {
-        title: "Score",
+        title: nowrapHeader("Prospecção"),
         dataIndex: "completeness_score",
-        width: 120,
+        width: 128,
         render: (value: number) => {
           const quality = qualityLabel(value);
           return (
@@ -704,21 +1096,36 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         },
       },
       {
-        title: "Qualidade",
-        key: "quality",
-        width: 110,
+        title: nowrapHeader("RD CRM"),
+        key: "rd",
+        width: 140,
         render: (_: unknown, record: CompanyListItem) => (
-          <Space size={8}>
-            <FlagIcon ok={record.has_cnpj} label="CNPJ" />
-            <FlagIcon ok={record.has_phone} label="Telefone" />
-            <FlagIcon ok={record.has_email} label="E-mail" />
+          <Space size={4} wrap>
+            {rdStatusTag(record.rd_status)}
+            {record.rd_deal?.stage_name ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {record.rd_deal.stage_name}
+              </Typography.Text>
+            ) : null}
           </Space>
         ),
       },
       {
-        title: "Ações",
+        title: nowrapHeader("Qualidade"),
+        key: "quality",
+        width: 110,
+        render: (_: unknown, record: CompanyListItem) => (
+          <Space size={8}>
+            <FlagIcon ok={record.has_cnpj} label="CNPJ válido" />
+            <FlagIcon ok={record.has_phone} label="Telefone útil" />
+            <FlagIcon ok={record.has_email} label="E-mail útil" />
+          </Space>
+        ),
+      },
+      {
+        title: nowrapHeader("Ações"),
         key: "actions",
-        width: 100,
+        width: 168,
         render: (_: unknown, record: CompanyListItem) => (
           <Space size={4} onClick={(event) => event.stopPropagation()}>
             <Button
@@ -726,6 +1133,35 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               icon={<EyeOutlined />}
               title="Abrir"
               onClick={() => setSelectedCompanyId(record.id)}
+            />
+            <Button
+              size="small"
+              icon={<SendOutlined />}
+              title="Enviar ao RD"
+              onClick={() => void handleRdSend({ companyId: record.id })}
+            />
+            {record.rd_url ? (
+              <Button
+                size="small"
+                title="Ver no RD"
+                onClick={() => window.open(record.rd_url, "_blank", "noreferrer")}
+              >
+                RD
+              </Button>
+            ) : null}
+            {record.rd_status && record.rd_status !== "not_sent" ? (
+              <Button
+                size="small"
+                icon={<SyncOutlined />}
+                title="Ressincronizar"
+                onClick={() => void handleRdSend({ companyId: record.id, force: true })}
+              />
+            ) : null}
+            <Button
+              size="small"
+              icon={<HistoryOutlined />}
+              title="Histórico RD"
+              onClick={() => void openRdHistory(record.id)}
             />
             <Button
               size="small"
@@ -738,24 +1174,33 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         ),
       },
     ],
-    [],
+    [handleDeleteCompany, handleRdSend, openRdHistory],
   );
 
   const contactColumns: ColumnsType<LeadListItem> = useMemo(
     () => [
       {
-        title: "Contato",
+        title: nowrapHeader("Contato"),
         dataIndex: "display_name",
         ellipsis: true,
+        render: (value: string, record: LeadListItem) => (
+          <Space size={4} wrap>
+            <span>{value}</span>
+            {record.contact_is_decision_maker ? <Tag color="blue">Decisor</Tag> : null}
+            {record.email_is_generic ? <Tag color="orange">Genérico</Tag> : null}
+            {record.email_is_shared ? <Tag color="volcano">E-mail compartilhado</Tag> : null}
+            {record.phone_is_shared ? <Tag color="volcano">Tel. repetido</Tag> : null}
+          </Space>
+        ),
       },
       {
-        title: "Novo/Antigo",
+        title: nowrapHeader("Novo/Antigo"),
         dataIndex: "freshness",
-        width: 110,
+        width: 132,
         render: (value: string) => freshnessTag(value),
       },
       {
-        title: "Status",
+        title: nowrapHeader("Status"),
         dataIndex: "contact_status",
         width: 130,
         render: (value: string) => (
@@ -765,19 +1210,26 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         ),
       },
       {
-        title: "E-mail",
+        title: nowrapHeader("Cargo"),
+        dataIndex: "job_title",
+        ellipsis: true,
+        width: 140,
+        render: (value: string) => value || "—",
+      },
+      {
+        title: nowrapHeader("E-mail"),
         dataIndex: "email",
         ellipsis: true,
         render: (value: string) => value || "—",
       },
       {
-        title: "Telefone",
+        title: nowrapHeader("Telefone"),
         dataIndex: "phone",
         width: 120,
         render: (value: string) => value || "—",
       },
       {
-        title: "Score",
+        title: nowrapHeader("Score"),
         dataIndex: "completeness_score",
         width: 70,
       },
@@ -835,6 +1287,17 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
           <Space wrap>
             <Button icon={<ReloadOutlined />} onClick={() => void fetchCompanies()} loading={loading}>
               Atualizar
+            </Button>
+            <Button icon={<SettingOutlined />} onClick={() => void openRdConfig()}>
+              RD Station
+            </Button>
+            <Button
+              icon={<SendOutlined />}
+              disabled={total < 1 || (!selectAllMatching && selectedRowKeys.length < 1)}
+              loading={rdSending}
+              onClick={() => void openRdPreview()}
+            >
+              Enviar ao RD
             </Button>
             <Button
               icon={<PlusOutlined />}
@@ -952,21 +1415,108 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
             >
               Melhores leads
             </Checkbox>
+            <Checkbox
+              checked={decisionMakersOnly}
+              onChange={(e) => {
+                setPage(1);
+                setDecisionMakersOnly(e.target.checked);
+              }}
+            >
+              Só decisores
+            </Checkbox>
+            <Checkbox
+              checked={hideGenericEmail}
+              onChange={(e) => {
+                setPage(1);
+                setHideGenericEmail(e.target.checked);
+              }}
+            >
+              Esconder e-mail genérico
+            </Checkbox>
+            <Checkbox
+              checked={hideSharedPhone}
+              onChange={(e) => {
+                setPage(1);
+                setHideSharedPhone(e.target.checked);
+              }}
+            >
+              Esconder telefone repetido
+            </Checkbox>
+            <Select
+              style={{ minWidth: 160 }}
+              value={rdStatusFilter}
+              options={RD_STATUS_OPTIONS}
+              onChange={(value) => {
+                setPage(1);
+                setRdStatusFilter(value);
+              }}
+            />
+            <Checkbox
+              checked={selectAllMatching}
+              onChange={(e) => {
+                setSelectAllMatching(e.target.checked);
+                if (e.target.checked) {
+                  setSelectedRowKeys(companies.map((row) => row.id));
+                } else {
+                  setSelectedRowKeys([]);
+                }
+              }}
+            >
+              Todos os filtrados ({total})
+            </Checkbox>
           </Space>
 
           <Typography.Text type="secondary">
-            Cada linha é uma empresa. Use a seta à esquerda para ver as pessoas (leads) agrupadas dentro.
+            Cada linha é uma empresa. Score de prospecção prioriza contato nominativo e
+            decisor; e-mail genérico e telefone repetido perdem pontos. Use a seta à
+            esquerda para ver as pessoas. Enviar ao RD usa a lista filtrada (todas as
+            páginas) quando “Todos os filtrados” está marcado.
           </Typography.Text>
+
+          {rdJob && rdJob.status !== "done" && rdJob.status !== "failed" ? (
+            <Alert
+              showIcon
+              type="info"
+              title="Enviando para o RD Station CRM"
+              description={`${rdJob.done} de ${rdJob.total} empresa(s). ${rdJob.success} ok, ${rdJob.error} erro(s). Pode sair desta página; o worker continua.`}
+            />
+          ) : null}
+
+          {rdJob && (rdJob.status === "done" || rdJob.status === "failed") ? (
+            <Alert
+              showIcon
+              closable
+              onClose={() => setRdJob(null)}
+              type={rdJob.error > 0 ? "warning" : "success"}
+              title="Envio RD concluído"
+              description={`${rdJob.success} enviada(s), ${rdJob.error} com erro, ${rdJob.skipped} ignorada(s).`}
+            />
+          ) : null}
 
           <Table<CompanyListItem>
             rowKey="id"
             loading={loading}
             dataSource={companies}
             columns={companyColumns}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1380 }}
+            rowSelection={{
+              selectedRowKeys: selectAllMatching ? companies.map((row) => row.id) : selectedRowKeys,
+              onChange: (keys) => {
+                setSelectAllMatching(false);
+                setSelectedRowKeys(keys);
+              },
+            }}
             expandable={{
               columnWidth: 40,
-              rowExpandable: (record) => (record.contacts_count ?? record.contacts?.length ?? 0) > 0,
+              expandedRowKeys,
+              onExpandedRowsChange: (keys) => {
+                expandedRowKeysRef.current = [...keys];
+                setExpandedRowKeys([...keys]);
+              },
+              rowExpandable: (record) => (record.contacts_count ?? 0) > 0,
+              onExpand: (expanded, record) => {
+                if (expanded) void loadCompanyContacts(record.id);
+              },
               expandedRowRender: (record) => (
                 <div onClick={(event) => event.stopPropagation()} style={{ margin: "4px 0 4px 24px" }}>
                   <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
@@ -976,7 +1526,8 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
                     size="small"
                     rowKey="id"
                     pagination={false}
-                    dataSource={record.contacts ?? []}
+                    loading={Boolean(contactsLoading[record.id]) && !contactsByCompany[record.id]}
+                    dataSource={contactsByCompany[record.id] ?? []}
                     columns={contactColumns}
                     onRow={(contact) => ({
                       onClick: () => setSelectedLeadId(contact.id),
@@ -1026,6 +1577,40 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         extra={
           <Space>
             <Button
+              icon={<SendOutlined />}
+              loading={rdSending}
+              onClick={() => {
+                if (!selectedCompanyId) return;
+                void handleRdSend({ companyId: selectedCompanyId });
+              }}
+            >
+              Enviar ao RD
+            </Button>
+            {companyDetail?.rd_url ? (
+              <Button onClick={() => window.open(companyDetail.rd_url, "_blank", "noreferrer")}>
+                Ver no RD
+              </Button>
+            ) : null}
+            {companyDetail?.rd_status && companyDetail.rd_status !== "not_sent" ? (
+              <Button
+                icon={<SyncOutlined />}
+                onClick={() => {
+                  if (!selectedCompanyId) return;
+                  void handleRdSend({ companyId: selectedCompanyId, force: true });
+                }}
+              >
+                Ressincronizar
+              </Button>
+            ) : null}
+            <Button
+              onClick={() => {
+                if (!selectedCompanyId) return;
+                void openRdHistory(selectedCompanyId);
+              }}
+            >
+              Histórico RD
+            </Button>
+            <Button
               danger
               icon={<DeleteOutlined />}
               onClick={() => {
@@ -1055,11 +1640,31 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               hasCnpj={companyDetail.has_cnpj}
               hasPhone={companyDetail.has_phone}
               hasEmail={companyDetail.has_email}
+              breakdown={companyDetail.score_breakdown}
+              flags={{
+                email_is_generic: companyDetail.email_is_generic,
+                email_is_shared: companyDetail.email_is_shared,
+                phone_is_shared: companyDetail.phone_is_shared,
+                contact_is_decision_maker: companyDetail.contact_is_decision_maker,
+                contact_is_person: companyDetail.contact_is_person,
+              }}
             />
 
             <Descriptions size="small" column={{ xs: 1, sm: 2 }} bordered>
               <Descriptions.Item label="CNPJ">{formatCnpj(companyDetail.cnpj)}</Descriptions.Item>
               <Descriptions.Item label="Contatos">{companyDetail.contacts_count}</Descriptions.Item>
+              <Descriptions.Item label="Domínio">{companyDetail.website_domain || "—"}</Descriptions.Item>
+              <Descriptions.Item label="RD CRM">
+                <Space wrap>
+                  {rdStatusTag(companyDetail.rd_status)}
+                  {companyDetail.rd_deal?.stage_name ? (
+                    <Typography.Text type="secondary">{companyDetail.rd_deal.stage_name}</Typography.Text>
+                  ) : null}
+                  {companyDetail.rd_last_error ? (
+                    <Typography.Text type="danger">{companyDetail.rd_last_error}</Typography.Text>
+                  ) : null}
+                </Space>
+              </Descriptions.Item>
             </Descriptions>
 
             <div>
@@ -1154,6 +1759,14 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               hasCnpj={leadDetail.has_cnpj}
               hasPhone={leadDetail.has_phone}
               hasEmail={leadDetail.has_email}
+              breakdown={leadDetail.score_breakdown}
+              flags={{
+                email_is_generic: leadDetail.email_is_generic,
+                email_is_shared: leadDetail.email_is_shared,
+                phone_is_shared: leadDetail.phone_is_shared,
+                contact_is_decision_maker: leadDetail.contact_is_decision_maker,
+                contact_is_person: leadDetail.contact_is_person,
+              }}
             />
 
             <Card size="small" title="Contato">
@@ -1521,6 +2134,40 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
           locale={{ emptyText: "Nenhuma importação." }}
         />
       </Modal>
+
+      <RdConfigModal
+        open={rdConfigOpen}
+        saving={rdSaving}
+        connecting={rdConnecting}
+        status={rdStatus}
+        settings={rdSettings}
+        pipelines={rdPipelines}
+        stages={rdStages}
+        owners={rdOwners}
+        sources={rdSources}
+        customFields={rdCustomFields}
+        optionsError={rdOptionsError}
+        onClose={() => setRdConfigOpen(false)}
+        onConnect={() => void handleRdConnect()}
+        onDisconnect={() => void handleRdDisconnect()}
+        onSave={(values) => void handleRdSaveSettings(values)}
+      />
+      <RdPreviewModal
+        open={rdPreviewOpen}
+        loading={rdPreviewLoading}
+        sending={rdSending}
+        preview={rdPreview}
+        selectAll={selectAllMatching}
+        selectedCount={selectedRowKeys.length}
+        onClose={() => setRdPreviewOpen(false)}
+        onConfirm={() => void handleRdSend()}
+      />
+      <RdHistoryDrawer
+        open={rdHistoryOpen}
+        loading={rdHistoryLoading}
+        logs={rdHistory}
+        onClose={() => setRdHistoryOpen(false)}
+      />
     </>
   );
 }
