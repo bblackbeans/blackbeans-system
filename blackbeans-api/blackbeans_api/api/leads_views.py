@@ -25,21 +25,25 @@ from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
+from blackbeans_api.integrations.presenters import rd_info_by_company_ids
 from blackbeans_api.leads.models import Lead
 from blackbeans_api.leads.models import LeadCompany
 from blackbeans_api.leads.models import LeadImport
-from blackbeans_api.leads.services import QUALITY_BEST_THRESHOLD
+from blackbeans_api.leads.querysets import apply_quality_filters
+from blackbeans_api.leads.querysets import company_list_queryset
+from blackbeans_api.leads.scoring import QUALITY_BEST_THRESHOLD
+from blackbeans_api.leads.scoring import compute_prospect_score
+from blackbeans_api.leads.scoring import is_valid_cnpj
 from blackbeans_api.leads.services import LeadParseError
 from blackbeans_api.leads.services import build_company_search_text
 from blackbeans_api.leads.services import build_search_text
-from blackbeans_api.leads.services import compute_completeness_score
-from blackbeans_api.leads.services import ensure_orphan_leads_have_companies
 from blackbeans_api.leads.services import get_or_create_company_for_payload
 from blackbeans_api.leads.services import normalize_company_name
 from blackbeans_api.leads.services import normalize_email
 from blackbeans_api.leads.services import normalize_phone
 from blackbeans_api.leads.services import parse_spreadsheet
 from blackbeans_api.leads.services import recompute_company_quality
+from blackbeans_api.leads.services import refresh_shared_quality
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 PREVIEW_ROWS = 5
@@ -55,33 +59,23 @@ def _parse_positive_int(raw_value: str | None, default: int) -> int:
     return parsed
 
 
-def _parse_bool_flag(raw: str | None) -> bool | None:
-    if raw is None or raw == "":
-        return None
-    value = raw.strip().lower()
-    if value in {"1", "true", "yes", "sim"}:
-        return True
-    if value in {"0", "false", "no", "nao", "não"}:
-        return False
-    raise ValueError
-
-
 def _apply_quality_filters(queryset, request: Request):
-    has_cnpj = _parse_bool_flag(request.query_params.get("has_cnpj"))
-    has_phone = _parse_bool_flag(request.query_params.get("has_phone"))
-    has_email = _parse_bool_flag(request.query_params.get("has_email"))
-    if has_cnpj is True:
-        queryset = queryset.filter(has_cnpj=True)
-    if has_phone is True:
-        queryset = queryset.filter(has_phone=True)
-    if has_email is True:
-        queryset = queryset.filter(has_email=True)
-    quality = (request.query_params.get("quality") or "").strip().lower()
-    if quality == "best":
-        queryset = queryset.filter(completeness_score__gte=QUALITY_BEST_THRESHOLD)
-    elif quality and quality != "all":
-        raise ValueError("quality")
+    return apply_quality_filters(queryset, request.query_params)
+
+
+def _lead_contacts_prefetch_qs(*, contact_status: str = ""):
+    queryset = (
+        Lead.objects.select_related("import_batch", "company")
+        .defer("payload", "search_text")
+        .order_by("-completeness_score", "display_name")
+    )
+    if contact_status:
+        queryset = queryset.filter(contact_status=contact_status)
     return queryset
+
+
+def _company_list_queryset(request: Request):
+    return company_list_queryset(request.query_params)
 
 
 def _read_upload(request: Request, correlation_id: str):
@@ -142,15 +136,24 @@ class LeadCompaniesListCreateView(APIView):
 
         try:
             page = _parse_positive_int(request.query_params.get("page"), default=1)
-            page_size = _parse_positive_int(request.query_params.get("page_size"), default=20)
-            queryset = LeadCompany.objects.all()
-            queryset = _apply_quality_filters(queryset, request)
+            page_size = _parse_positive_int(
+                request.query_params.get("page_size"),
+                default=20,
+            )
+            queryset = _company_list_queryset(request)
         except ValueError as exc:
             if str(exc) == "quality":
                 return error_response(
                     correlation_id=correlation_id,
                     code="validation_error",
                     message="Filtro quality invalido. Use best.",
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            if str(exc) == "rd_status":
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Filtro rd_status invalido.",
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
             return error_response(
@@ -160,38 +163,7 @@ class LeadCompaniesListCreateView(APIView):
                 http_status=status.HTTP_400_BAD_REQUEST,
             )
 
-        ensure_orphan_leads_have_companies()
-        queryset = LeadCompany.objects.all()
-        queryset = _apply_quality_filters(queryset, request)
-
         page_size = min(page_size, 100)
-        origem = (request.query_params.get("origem") or "").strip()
-        q = (request.query_params.get("q") or request.query_params.get("search") or "").strip()
-        if freshness:
-            queryset = queryset.filter(freshness=freshness)
-        if origem:
-            queryset = queryset.filter(origem__iexact=origem)
-        if contact_status:
-            queryset = queryset.filter(contacts__contact_status=contact_status).distinct()
-        if q:
-            queryset = queryset.filter(
-                Q(search_text__icontains=q) | Q(name__icontains=q) | Q(cnpj__icontains=q) | Q(notes__icontains=q),
-            )
-
-        ordering = (request.query_params.get("ordering") or "-completeness_score").strip()
-        allowed = {
-            "completeness_score",
-            "-completeness_score",
-            "name",
-            "-name",
-            "contacts_count",
-            "-contacts_count",
-            "created_at",
-            "-created_at",
-        }
-        if ordering in allowed:
-            queryset = queryset.order_by(ordering, "name")
-
         total = queryset.count()
         pages = max(1, math.ceil(total / page_size)) if total else 1
         offset = (page - 1) * page_size
@@ -202,19 +174,26 @@ class LeadCompaniesListCreateView(APIView):
         }
         page_qs = queryset[offset : offset + page_size]
         if include_contacts:
-            contacts_qs = Lead.objects.select_related("import_batch", "company").order_by("display_name")
-            if contact_status:
-                contacts_qs = contacts_qs.filter(contact_status=contact_status)
-            page_qs = page_qs.prefetch_related(Prefetch("contacts", queryset=contacts_qs))
+            page_qs = page_qs.prefetch_related(
+                Prefetch(
+                    "contacts",
+                    queryset=_lead_contacts_prefetch_qs(contact_status=contact_status),
+                ),
+            )
         items = list(page_qs)
+        rd_map = rd_info_by_company_ids([item.pk for item in items])
 
         return success_response(
             correlation_id=correlation_id,
             data={
                 "companies": [
-                    lead_company_to_representation(item, include_contacts=include_contacts)
+                    lead_company_to_representation(
+                        item,
+                        include_contacts=include_contacts,
+                        rd_info=rd_map.get(item.pk),
+                    )
                     for item in items
-                ]
+                ],
             },
             meta={
                 "total": total,
@@ -254,9 +233,9 @@ class LeadCompaniesListCreateView(APIView):
             cnpj=cnpj,
             origem=(data.get("origem") or "").strip(),
             freshness=data.get("freshness") or LeadCompany.Freshness.NOVO,
-            has_cnpj=bool(cnpj),
+            has_cnpj=bool(cnpj) and is_valid_cnpj(cnpj),
             notes=(data.get("notes") or "").strip(),
-            completeness_score=compute_completeness_score(has_cnpj=bool(cnpj), has_phone=False, has_email=False),
+            completeness_score=0,
             search_text=build_company_search_text(
                 name=name,
                 cnpj=cnpj,
@@ -277,7 +256,9 @@ class LeadCompanyDetailView(APIView):
     def get(self, request: Request, company_id: UUID):
         correlation_id = get_correlation_id(request)
         try:
-            company = LeadCompany.objects.get(pk=company_id)
+            company = LeadCompany.objects.prefetch_related(
+                Prefetch("contacts", queryset=_lead_contacts_prefetch_qs()),
+            ).get(pk=company_id)
         except LeadCompany.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -326,7 +307,7 @@ class LeadCompanyDetailView(APIView):
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
             company.cnpj = cnpj
-            company.has_cnpj = bool(cnpj)
+            company.has_cnpj = bool(cnpj) and is_valid_cnpj(cnpj)
             update_fields.extend(["cnpj", "has_cnpj"])
         if "origem" in data:
             company.origem = (data["origem"] or "").strip()
@@ -530,7 +511,7 @@ class LeadsListView(APIView):
                     cnpj=cnpj or None,
                     origem=(data.get("origem") or "").strip(),
                     freshness=data.get("freshness") or LeadCompany.Freshness.NOVO,
-                    has_cnpj=bool(cnpj),
+                    has_cnpj=bool(cnpj) and is_valid_cnpj(cnpj),
                     search_text=build_company_search_text(
                         name=name,
                         cnpj=cnpj,
@@ -541,18 +522,24 @@ class LeadsListView(APIView):
         email = normalize_email(data.get("email") or "") or ""
         phone = normalize_phone(data.get("phone") or "") or ""
         cnpj = data.get("cnpj") or company.cnpj or ""
-        has_cnpj = bool(cnpj)
-        has_email = bool(email)
-        has_phone = bool(phone)
         display_name = data["display_name"].strip()
+        job_title = (data.get("job_title") or "").strip()
         payload = {
             "nome": display_name,
             "email": email,
             "telefone": phone,
             "cnpj": cnpj,
             "empresa": company.name,
+            "cargo": job_title,
         }
-        score = compute_completeness_score(has_cnpj=has_cnpj, has_phone=has_phone, has_email=has_email)
+        quality = compute_prospect_score(
+            cnpj=cnpj,
+            email=email,
+            phone=phone,
+            contact_name=display_name,
+            company_name=company.name,
+            job_title=job_title,
+        )
         lead = Lead.objects.create(
             company=company,
             payload=payload,
@@ -560,10 +547,16 @@ class LeadsListView(APIView):
             email=email,
             phone=phone,
             cnpj=cnpj,
-            has_cnpj=has_cnpj,
-            has_email=has_email,
-            has_phone=has_phone,
-            completeness_score=score,
+            job_title=job_title,
+            has_cnpj=quality["has_cnpj"],
+            has_email=quality["has_email"],
+            has_phone=quality["has_phone"],
+            completeness_score=quality["completeness_score"],
+            email_is_generic=quality["email_is_generic"],
+            email_is_shared=quality["email_is_shared"],
+            phone_is_shared=quality["phone_is_shared"],
+            contact_is_person=quality["contact_is_person"],
+            contact_is_decision_maker=quality["contact_is_decision_maker"],
             contact_status=data.get("contact_status") or Lead.ContactStatus.NAO_CONTATADO,
             notes=(data.get("notes") or "").strip(),
             search_text=build_search_text(
@@ -572,7 +565,7 @@ class LeadsListView(APIView):
                 display_name=display_name,
             ),
         )
-        recompute_company_quality(company)
+        refresh_shared_quality(emails=[email], phones=[phone])
         lead.refresh_from_db()
         return success_response(
             correlation_id=correlation_id,
@@ -649,6 +642,8 @@ class LeadDetailView(APIView):
             )
         batch = lead.import_batch
         company = lead.company
+        email = lead.email
+        phone = lead.phone
         lead.delete()
         if batch is not None:
             remaining = batch.leads.count()
@@ -657,6 +652,7 @@ class LeadDetailView(APIView):
                 batch.save(update_fields=["row_count", "updated_at"])
         if company is not None:
             recompute_company_quality(company)
+        refresh_shared_quality(emails=[email], phones=[phone])
         return success_response(
             correlation_id=correlation_id,
             data={"deleted": True, "id": str(lead_id)},
@@ -827,6 +823,12 @@ class LeadImportsListCreateView(APIView):
                         has_phone=enriched["has_phone"],
                         has_email=enriched["has_email"],
                         completeness_score=enriched["completeness_score"],
+                        email_is_generic=enriched["email_is_generic"],
+                        email_is_shared=enriched["email_is_shared"],
+                        phone_is_shared=enriched["phone_is_shared"],
+                        contact_is_person=enriched["contact_is_person"],
+                        contact_is_decision_maker=enriched["contact_is_decision_maker"],
+                        job_title=enriched.get("job_title") or "",
                         search_text=build_search_text(
                             payload=payload,
                             origem=origem,
@@ -835,8 +837,10 @@ class LeadImportsListCreateView(APIView):
                     ),
                 )
             Lead.objects.bulk_create(lead_objs, batch_size=500)
-            for company in touched_companies.values():
-                recompute_company_quality(company)
+        refresh_shared_quality(
+            emails=[row.email for row in lead_objs],
+            phones=[row.phone for row in lead_objs],
+        )
 
         return success_response(
             correlation_id=correlation_id,
@@ -866,10 +870,13 @@ class LeadImportDetailView(APIView):
         company_ids = list(
             batch.leads.exclude(company_id=None).values_list("company_id", flat=True).distinct(),
         )
+        shared_emails = list(batch.leads.exclude(email="").values_list("email", flat=True))
+        shared_phones = list(batch.leads.exclude(phone="").values_list("phone", flat=True))
         deleted_leads, _ = batch.leads.all().delete()
         batch.delete()
         for company in LeadCompany.objects.filter(pk__in=company_ids):
             recompute_company_quality(company)
+        refresh_shared_quality(emails=shared_emails, phones=shared_phones)
         return success_response(
             correlation_id=correlation_id,
             data={"deleted": True, "deleted_leads": deleted_leads},
