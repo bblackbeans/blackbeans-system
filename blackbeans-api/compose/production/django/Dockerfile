@@ -84,6 +84,9 @@ RUN chown django:django ${APP_HOME}
 
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
+# Gunicorn control server must not use the system user's /nonexistent home.
+ENV HOME="/tmp"
+ENV XDG_CACHE_HOME="/tmp/.cache"
 
 USER django
 
