@@ -91,6 +91,7 @@ LOCAL_APPS = [
     "blackbeans_api.feedback",
     "blackbeans_api.leads",
     "blackbeans_api.integrations.apps.IntegrationsConfig",
+    "blackbeans_api.paid_media.apps.PaidMediaConfig",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
