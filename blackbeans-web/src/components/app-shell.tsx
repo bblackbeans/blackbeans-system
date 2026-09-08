@@ -8303,6 +8303,7 @@ export function AppShell() {
                                                     birth_date: record.birth_date,
                                                     workspace_ids: [] as string[],
                                                     is_active: true,
+                                                    password: undefined,
                                                   });
                                                   const wsResp = await apiRequest<{
                                                     is_staff?: boolean;
@@ -8478,6 +8479,7 @@ export function AppShell() {
                                   form={manageUserProfileForm}
                                   layout="vertical"
                                   onFinish={async (values) => {
+                                    const nextPassword = String(values.password ?? "").trim();
                                     const response = await apiRequest(`/users/${values.user_id}`, {
                                       method: "PATCH",
                                       token,
@@ -8486,15 +8488,19 @@ export function AppShell() {
                                         email: values.email || undefined,
                                         is_staff: values.is_staff,
                                         is_active: values.is_active,
-                                        ...(String(values.password ?? "").trim()
-                                          ? { password: String(values.password).trim() }
-                                          : {}),
+                                        ...(nextPassword ? { password: nextPassword } : {}),
                                       },
                                     });
                                     if (!response.ok) {
-                                      apiMessage.error(response.error?.message ?? "Falha ao atualizar usuario.");
+                                      apiMessage.error(
+                                        extractApiErrorMessage(
+                                          response.error,
+                                          "Falha ao atualizar usuario.",
+                                        ),
+                                      );
                                       return;
                                     }
+                                    manageUserProfileForm.setFieldValue("password", undefined);
                                     if (!values.is_staff) {
                                       const wsIds = Array.isArray(values.workspace_ids) ? values.workspace_ids.map(String) : [];
                                       const putResp = await apiRequest(`/users/${values.user_id}/workspace-access`, {
@@ -8587,7 +8593,27 @@ export function AppShell() {
                                     label="Nova senha (opcional)"
                                     extra="Deixe em branco para manter. Minimo 12 caracteres com maiuscula, minuscula, numero e especial."
                                     rules={[
-                                      { min: 12, message: "A senha precisa ter no minimo 12 caracteres." },
+                                      {
+                                        validator: async (_, value) => {
+                                          const password = String(value ?? "").trim();
+                                          if (!password) return;
+                                          if (password.length < 12) {
+                                            throw new Error("A senha precisa ter no minimo 12 caracteres.");
+                                          }
+                                          if (!/[A-Z]/.test(password)) {
+                                            throw new Error("Inclua ao menos uma letra maiuscula.");
+                                          }
+                                          if (!/[a-z]/.test(password)) {
+                                            throw new Error("Inclua ao menos uma letra minuscula.");
+                                          }
+                                          if (!/\d/.test(password)) {
+                                            throw new Error("Inclua ao menos um numero.");
+                                          }
+                                          if (!/[^\w\s]/.test(password)) {
+                                            throw new Error("Inclua ao menos um caractere especial.");
+                                          }
+                                        },
+                                      },
                                     ]}
                                   >
                                     <Input.Password autoComplete="new-password" />
@@ -10879,7 +10905,29 @@ export function AppShell() {
                 ) : null}
 
                 {activeKey === "sprint" && token ? (
-                  <SprintPanel token={token} isAdmin={isAdmin} />
+                  <SprintPanel
+                    token={token}
+                    isAdmin={isAdmin}
+                    statusOptions={statusOptions}
+                    onOpenTask={async (taskId) => {
+                      const cached =
+                        tasks.find((task) => task.id === taskId) ??
+                        allTasks.find((task) => task.id === taskId) ??
+                        null;
+                      if (cached) {
+                        await openTask(cached);
+                        return;
+                      }
+                      const response = await apiRequest<{ task: TaskItem }>(`/tasks/${taskId}`, { token });
+                      if (response.ok && response.data?.task) {
+                        await openTask(response.data.task);
+                        return;
+                      }
+                      apiMessage.error(
+                        extractApiErrorMessage(response.error, "Nao foi possivel abrir a tarefa."),
+                      );
+                    }}
+                  />
                 ) : null}
 
                 {activeKey === "client-requests" && isAdmin && (

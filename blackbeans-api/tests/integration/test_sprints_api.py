@@ -257,6 +257,35 @@ def test_patch_keeps_item_when_interval_still_overlaps_week(admin_client, collab
     assert moved.data["data"]["item"] is None
 
 
+def test_patch_sprint_item_status_and_priority_updates_task(admin_client, collaborator):
+    board, group = make_board()
+    task = make_task(
+        board=board,
+        group=group,
+        assignee=collaborator,
+        title="Atualizar status na sprint",
+        task_status="todo",
+        start=noon(WEEK_START),
+        end=noon(WEEK_END),
+    )
+    generated = admin_client.post("/api/v1/sprints/generate", {"week_start": WEEK_START.isoformat()}, format="json")
+    assert generated.status_code == status.HTTP_200_OK
+    sprint_id = generated.data["data"]["week"]["id"]
+    item = item_by_title(generated, "Atualizar status na sprint")
+
+    patched = admin_client.patch(
+        f"/api/v1/sprints/{sprint_id}/items/{item['id']}",
+        {"status": "blocked", "priority": "high"},
+        format="json",
+    )
+    assert patched.status_code == status.HTTP_200_OK
+    assert patched.data["data"]["item"]["status"] == "blocked"
+    assert patched.data["data"]["item"]["priority"] == "high"
+    task.refresh_from_db()
+    assert task.status == "blocked"
+    assert task.priority == "high"
+
+
 def test_sprint_hours_count_only_logs_started_in_the_week(admin_client, collaborator):
     board, group = make_board()
     task = make_task(

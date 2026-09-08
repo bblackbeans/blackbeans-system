@@ -91,7 +91,12 @@ class AdminUserUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     is_active = serializers.BooleanField(required=False)
     is_staff = serializers.BooleanField(required=False)
-    password = serializers.CharField(write_only=True, required=False, min_length=12)
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        min_length=12,
+    )
 
     def __init__(self, *args, instance=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -107,16 +112,21 @@ class AdminUserUpdateSerializer(serializers.Serializer):
 
     def validate_password(self, value: str | None) -> str | None:
         if value is None:
-            return value
-        if not re.search(r"[A-Z]", value):
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if len(cleaned) < 12:
+            raise serializers.ValidationError("Senha deve ter no minimo 12 caracteres.")
+        if not re.search(r"[A-Z]", cleaned):
             raise serializers.ValidationError("Senha deve conter letra maiuscula.")
-        if not re.search(r"[a-z]", value):
+        if not re.search(r"[a-z]", cleaned):
             raise serializers.ValidationError("Senha deve conter letra minuscula.")
-        if not re.search(r"\d", value):
+        if not re.search(r"\d", cleaned):
             raise serializers.ValidationError("Senha deve conter digito.")
-        if not re.search(r"[^\w\s]", value):
+        if not re.search(r"[^\w\s]", cleaned):
             raise serializers.ValidationError("Senha deve conter caractere especial.")
-        return value
+        return cleaned
 
     def update(self, instance, validated_data):
         if "email" in validated_data:
@@ -127,8 +137,9 @@ class AdminUserUpdateSerializer(serializers.Serializer):
             instance.is_active = validated_data["is_active"]
         if "is_staff" in validated_data:
             instance.is_staff = validated_data["is_staff"]
-        if validated_data.get("password"):
-            instance.set_password(validated_data["password"])
+        password = validated_data.get("password")
+        if password:
+            instance.set_password(password)
         instance.save()
         return instance
 

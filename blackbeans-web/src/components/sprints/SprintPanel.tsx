@@ -8,6 +8,7 @@ import {
   Collapse,
   DatePicker,
   Empty,
+  Input,
   Row,
   Select,
   Space,
@@ -63,9 +64,13 @@ type PersonGroup = {
   items: SprintItem[];
 };
 
+type StatusOption = { value: string; label: string };
+
 type SprintPanelProps = {
   token: string;
   isAdmin: boolean;
+  statusOptions?: StatusOption[];
+  onOpenTask?: (taskId: string) => void | Promise<void>;
 };
 
 const PRIORITY_META: Record<string, { label: "Baixa" | "Média" | "Alta" | "Crítica"; color: string }> = {
@@ -75,12 +80,24 @@ const PRIORITY_META: Record<string, { label: "Baixa" | "Média" | "Alta" | "Crí
   critical: { label: "Crítica", color: "red" },
 };
 
+const PRIORITY_OPTIONS = Object.entries(PRIORITY_META).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}));
+
 const STATUS_COLOR_FALLBACK: Record<string, string> = {
   todo: "geekblue",
   in_progress: "blue",
   blocked: "volcano",
   done: "green",
 };
+
+const DEFAULT_STATUS_OPTIONS: StatusOption[] = [
+  { value: "todo", label: "A fazer" },
+  { value: "in_progress", label: "Em andamento" },
+  { value: "blocked", label: "Bloqueada" },
+  { value: "done", label: "Concluida" },
+];
 
 function formatLoggedHours(value: string | number): string {
   const n = Number(value);
@@ -140,7 +157,7 @@ function renderStatusTag(item: SprintItem) {
   return <Tag color={color}>{label}</Tag>;
 }
 
-export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
+export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: SprintPanelProps) {
   const [msg, msgHolder] = message.useMessage();
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -150,7 +167,13 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
   );
   const [selected, setSelected] = useState<SprintWeek | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
+  const [projectFilter, setProjectFilter] = useState<string[]>([]);
+  const [searchFilter, setSearchFilter] = useState("");
   const [openPersonKeys, setOpenPersonKeys] = useState<string[]>([]);
+
+  const resolvedStatusOptions = statusOptions?.length ? statusOptions : DEFAULT_STATUS_OPTIONS;
 
   const fetchWeeks = useCallback(async () => {
     setLoading(true);
@@ -171,6 +194,14 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     void fetchWeeks();
   }, [fetchWeeks]);
 
+  const clearFilters = () => {
+    setAssigneeFilter([]);
+    setStatusFilter([]);
+    setPriorityFilter([]);
+    setProjectFilter([]);
+    setSearchFilter("");
+  };
+
   const openWeek = async (weekId: string) => {
     const response = await apiRequest<{ week: SprintWeek }>(`/sprints/${weekId}`, { token });
     if (!response.ok || !response.data?.week) {
@@ -178,7 +209,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
       return;
     }
     setSelected(response.data.week);
-    setAssigneeFilter([]);
+    clearFilters();
     setOpenPersonKeys(personKeysFromItems(response.data.week.items));
   };
 
@@ -197,8 +228,21 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     msg.success(`${response.data.generated} tarefa(s) na lista da semana.`);
     await fetchWeeks();
     setSelected(response.data.week);
-    setAssigneeFilter([]);
+    clearFilters();
     setOpenPersonKeys(personKeysFromItems(response.data.week.items));
+  };
+
+  const refreshSelectedList = async () => {
+    if (!selected) {
+      await fetchWeeks();
+      return;
+    }
+    if (selected.is_locked) {
+      await openWeek(selected.id);
+      msg.success("Lista da sprint atualizada (snapshot travado).");
+      return;
+    }
+    await generate(selected.week_start);
   };
 
   const lockWeek = async () => {
@@ -233,14 +277,17 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     await fetchWeeks();
   };
 
-  const changeItemDate = async (item: SprintItem, field: "start_date" | "end_date", value: string | null) => {
+  const patchItem = async (
+    item: SprintItem,
+    body: Partial<{ start_date: string | null; end_date: string | null; status: string; priority: string }>,
+  ) => {
     if (!selected) return;
     const response = await apiRequest<{ moved_out?: boolean; item: SprintItem | null }>(
       `/sprints/${selected.id}/items/${item.id}`,
-      { method: "PATCH", token, body: { [field]: value } },
+      { method: "PATCH", token, body },
     );
     if (!response.ok) {
-      msg.error(response.error?.message ?? "Falha ao alterar a data.");
+      msg.error(response.error?.message ?? "Falha ao atualizar a tarefa na sprint.");
       return;
     }
     if (response.data?.moved_out) {
@@ -260,6 +307,10 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     }
   };
 
+  const changeItemDate = async (item: SprintItem, field: "start_date" | "end_date", value: string | null) => {
+    await patchItem(item, { [field]: value });
+  };
+
   const assigneeOptions = useMemo(() => {
     const seen = new Map<string, string>();
     for (const item of selected?.items ?? []) {
@@ -270,13 +321,56 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
     return Array.from(seen.entries()).map(([value, label]) => ({ value, label }));
   }, [selected]);
 
+  const projectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const item of selected?.items ?? []) {
+      const name = (item.project_name || "").trim();
+      if (name) seen.add(name);
+    }
+    return Array.from(seen)
+      .sort((a, b) => a.localeCompare(b, "pt-BR"))
+      .map((value) => ({ value, label: value }));
+  }, [selected]);
+
+  const statusFilterOptions = useMemo(() => {
+    const byValue = new Map(resolvedStatusOptions.map((opt) => [opt.value, opt.label]));
+    for (const item of selected?.items ?? []) {
+      if (!item.status) continue;
+      if (!byValue.has(item.status)) {
+        byValue.set(item.status, item.status_label || item.status);
+      }
+    }
+    return Array.from(byValue.entries()).map(([value, label]) => ({ value, label }));
+  }, [resolvedStatusOptions, selected]);
+
   const grouped = useMemo((): PersonGroup[] => {
     const items = selected?.items ?? [];
-    const allowed = new Set(assigneeFilter);
+    const allowedAssignees = new Set(assigneeFilter);
+    const allowedStatuses = new Set(statusFilter);
+    const allowedPriorities = new Set(priorityFilter);
+    const allowedProjects = new Set(projectFilter);
+    const query = searchFilter.trim().toLowerCase();
     const map = new Map<string, PersonGroup>();
     items.forEach((item) => {
       const key = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
-      if (allowed.size > 0 && !allowed.has(key)) return;
+      if (allowedAssignees.size > 0 && !allowedAssignees.has(key)) return;
+      if (allowedStatuses.size > 0 && !allowedStatuses.has(item.status)) return;
+      if (allowedPriorities.size > 0 && !allowedPriorities.has(item.priority || "")) return;
+      if (allowedProjects.size > 0 && !allowedProjects.has(item.project_name || "")) return;
+      if (query) {
+        const haystack = [
+          item.title,
+          item.project_name,
+          item.client_name,
+          item.assignee_name,
+          item.status_label,
+          item.status,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(query)) return;
+      }
       const existing = map.get(key);
       if (existing) {
         existing.items.push(item);
@@ -290,7 +384,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
       });
     });
     return Array.from(map.values());
-  }, [assigneeFilter, selected]);
+  }, [assigneeFilter, priorityFilter, projectFilter, searchFilter, selected, statusFilter]);
 
   const weekTotals = useMemo(() => {
     const items = grouped.flatMap((group) => group.items);
@@ -301,6 +395,12 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
   }, [grouped]);
 
   const canEditDates = Boolean(isAdmin && selected && !selected.is_locked);
+  const hasActiveFilters =
+    assigneeFilter.length > 0 ||
+    statusFilter.length > 0 ||
+    priorityFilter.length > 0 ||
+    projectFilter.length > 0 ||
+    Boolean(searchFilter.trim());
 
   const renderDateCell = (item: SprintItem, field: "start_date" | "end_date") => {
     const raw = item[field];
@@ -325,7 +425,20 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
       width: 280,
       render: (title: string, item) => (
         <Space size={6} wrap={false}>
-          <Typography.Text ellipsis={{ tooltip: title }}>{title}</Typography.Text>
+          {item.task_id && onOpenTask ? (
+            <Typography.Link
+              onClick={(event) => {
+                event.stopPropagation();
+                void onOpenTask(item.task_id as string);
+              }}
+              ellipsis
+              style={{ maxWidth: 200 }}
+            >
+              {title}
+            </Typography.Link>
+          ) : (
+            <Typography.Text ellipsis={{ tooltip: title }}>{title}</Typography.Text>
+          )}
           {item.is_recurring ? <Tag color="purple">Recorrente</Tag> : null}
           {item.always_in_sprint ? <Tag color="cyan">Na sprint</Tag> : null}
         </Space>
@@ -344,15 +457,41 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
       title: "Prioridade",
       dataIndex: "priority",
       key: "priority",
-      width: 110,
-      render: (value: string | undefined) => renderPriorityTag(value),
+      width: 130,
+      render: (value: string | undefined, item) =>
+        canEditDates ? (
+          <Select
+            size="small"
+            value={value || undefined}
+            placeholder="Prioridade"
+            style={{ width: 118 }}
+            options={PRIORITY_OPTIONS}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(next) => void patchItem(item, { priority: next })}
+          />
+        ) : (
+          renderPriorityTag(value)
+        ),
     },
     {
       title: "Status",
       dataIndex: "status",
       key: "status",
-      width: 140,
-      render: (_: string, item) => renderStatusTag(item),
+      width: 160,
+      render: (_: string, item) =>
+        canEditDates ? (
+          <Select
+            size="small"
+            value={item.status || undefined}
+            placeholder="Status"
+            style={{ width: 148 }}
+            options={resolvedStatusOptions}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(next) => void patchItem(item, { status: next })}
+          />
+        ) : (
+          renderStatusTag(item)
+        ),
     },
     {
       title: "Inicio",
@@ -393,7 +532,7 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
               </Button>
             ) : null}
             <Button icon={<ReloadOutlined />} onClick={() => void fetchWeeks()}>
-              Atualizar
+              Atualizar pastas
             </Button>
           </Space>
         }
@@ -432,8 +571,21 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
         <Card
           title={`Sprint ${selected.label}`}
           extra={
-            <Space>
+            <Space wrap>
               {selected.is_locked ? <Tag color="red">Travada</Tag> : <Tag color="blue">Aberta</Tag>}
+              {isAdmin ? (
+                <Tooltip
+                  title={
+                    selected.is_locked
+                      ? "Recarrega o snapshot travado sem alterar tarefas ao vivo."
+                      : "Regenera a pasta com o estado atual das tarefas (status, datas, responsavel)."
+                  }
+                >
+                  <Button icon={<ReloadOutlined />} loading={generating} onClick={() => void refreshSelectedList()}>
+                    Atualizar tarefas
+                  </Button>
+                </Tooltip>
+              ) : null}
               {isAdmin && !selected.is_locked ? (
                 <Tooltip title="Congela a lista desta semana. Ajustes feitos depois no projeto nao entram mais nesta pasta.">
                   <Button icon={<LockOutlined />} onClick={() => void lockWeek()}>
@@ -452,18 +604,66 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
           }
         >
           {(selected.items?.length ?? 0) > 0 ? (
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              maxTagCount="responsive"
-              placeholder="Filtrar colaboradores"
-              value={assigneeFilter}
-              onChange={setAssigneeFilter}
-              options={assigneeOptions}
-              style={{ minWidth: 240, maxWidth: 420, marginBottom: 12 }}
-            />
+            <Space wrap style={{ marginBottom: 12, width: "100%" }}>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                placeholder="Colaboradores"
+                value={assigneeFilter}
+                onChange={setAssigneeFilter}
+                options={assigneeOptions}
+                style={{ minWidth: 200, maxWidth: 320 }}
+              />
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                placeholder="Status"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={statusFilterOptions}
+                style={{ minWidth: 160, maxWidth: 260 }}
+              />
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                placeholder="Prioridade"
+                value={priorityFilter}
+                onChange={setPriorityFilter}
+                options={PRIORITY_OPTIONS}
+                style={{ minWidth: 150, maxWidth: 240 }}
+              />
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                placeholder="Projeto"
+                value={projectFilter}
+                onChange={setProjectFilter}
+                options={projectOptions}
+                style={{ minWidth: 180, maxWidth: 280 }}
+              />
+              <Input.Search
+                allowClear
+                placeholder="Buscar tarefa, cliente..."
+                value={searchFilter}
+                onChange={(event) => setSearchFilter(event.target.value)}
+                style={{ width: 240 }}
+              />
+              {hasActiveFilters ? (
+                <Button onClick={clearFilters}>Limpar filtros</Button>
+              ) : null}
+            </Space>
           ) : null}
           {grouped.length > 0 ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
@@ -477,8 +677,8 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
           {grouped.length === 0 ? (
             <Empty
               description={
-                assigneeFilter.length > 0
-                  ? "Nenhuma tarefa para os colaboradores selecionados."
+                hasActiveFilters
+                  ? "Nenhuma tarefa para os filtros selecionados."
                   : "Nenhuma tarefa nesta pasta."
               }
             />
@@ -506,10 +706,15 @@ export function SprintPanel({ token, isAdmin }: SprintPanelProps) {
                     rowKey="id"
                     size="small"
                     className="bb-compact-table"
-                    scroll={{ x: 1180 }}
+                    scroll={{ x: 1280 }}
                     pagination={false}
                     columns={columns}
                     dataSource={group.items}
+                    onRow={(record) => ({
+                      onDoubleClick: () => {
+                        if (record.task_id && onOpenTask) void onOpenTask(record.task_id);
+                      },
+                    })}
                   />
                 ),
               }))}
