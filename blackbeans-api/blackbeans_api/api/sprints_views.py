@@ -377,7 +377,7 @@ class SprintWeekUnlockView(APIView):
 class SprintItemDateView(APIView):
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
 
-    def patch(self, request: Request, sprint_id: UUID, item_id: UUID):
+    def patch(self, request: Request, sprint_id: UUID, item_id: UUID):  # noqa: C901, PLR0912
         correlation_id = get_correlation_id(request)
         try:
             item = SprintItem.objects.select_related("sprint", "task__board__project__client").get(
@@ -407,14 +407,49 @@ class SprintItemDateView(APIView):
             start_date = _parse_dt(start_raw)
         if "end_date" in request.data:
             end_date = _parse_dt(end_raw)
+
+        next_status = item.status
+        if "status" in request.data:
+            next_status = str(request.data.get("status") or "").strip()
+            catalog = status_catalog()
+            if next_status and next_status not in catalog and next_status not in STATUS_LABEL_PT:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Status invalido.",
+                    details={"status": ["Status nao encontrado no catalogo."]},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        next_priority = item.priority
+        if "priority" in request.data:
+            next_priority = str(request.data.get("priority") or "").strip()
+            if next_priority and next_priority not in {"low", "medium", "high", "critical"}:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Prioridade invalida.",
+                    details={"priority": ["Use low, medium, high ou critical."]},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+
         with transaction.atomic():
             item.start_date = start_date
             item.end_date = end_date
+            item.status = next_status
+            item.priority = next_priority
             if item.task_id:
                 task = item.task
                 task.start_date = start_date
                 task.end_date = end_date
-                task.save(update_fields=["start_date", "end_date", "updated_at"])
+                task_fields = ["start_date", "end_date", "updated_at"]
+                if "status" in request.data:
+                    task.status = next_status
+                    task_fields.append("status")
+                if "priority" in request.data:
+                    task.priority = next_priority
+                    task_fields.append("priority")
+                task.save(update_fields=task_fields)
             pinned = bool(item.always_in_sprint) or bool(
                 item.task_id and getattr(item.task, "always_in_sprint", False),
             )
@@ -426,7 +461,9 @@ class SprintItemDateView(APIView):
                     correlation_id=correlation_id,
                     data={"moved_out": True, "item": None},
                 )
-            item.save(update_fields=["start_date", "end_date", "updated_at"])
+            item.save(
+                update_fields=["start_date", "end_date", "status", "priority", "updated_at"],
+            )
         return success_response(
             correlation_id=correlation_id,
             data={"moved_out": False, "item": item_to_representation(item, status_catalog())},

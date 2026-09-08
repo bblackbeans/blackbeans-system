@@ -8,7 +8,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from blackbeans_api.users.tests.factories import CollaboratorFactory
 from blackbeans_api.users.tests.factories import UserFactory
-from tests.integration.auth_helpers import obtain_admin_access_token
 
 pytestmark = pytest.mark.django_db
 
@@ -20,8 +19,7 @@ def admin_client():
     password = STRONG_PASSWORD
     admin = UserFactory.create(password=password, is_staff=True, is_active=True, is_superuser=True)
     client = APIClient()
-    token = obtain_admin_access_token(client, username=admin.username, password=password)
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+    client.force_authenticate(user=admin)
     return client, admin
 
 
@@ -56,6 +54,48 @@ def test_patch_user_returns_200(admin_client):
     assert response.status_code == 200
     assert response.data["data"]["user"]["name"] == "Nome Novo"
     assert response.data["data"]["user"]["email"] == "renomeado@example.com"
+
+
+def test_patch_user_password_blank_keeps_current(admin_client):
+    client, _admin = admin_client
+    target = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
+    response = client.patch(
+        f"/api/v1/users/{target.pk}",
+        {"name": "Sem troca de senha", "password": ""},
+        format="json",
+    )
+    assert response.status_code == 200
+    target.refresh_from_db()
+    assert target.check_password(STRONG_PASSWORD)
+    assert target.name == "Sem troca de senha"
+
+
+def test_patch_user_password_updates_when_valid(admin_client):
+    client, _admin = admin_client
+    target = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
+    new_password = "N3w!PassWord#99"
+    response = client.patch(
+        f"/api/v1/users/{target.pk}",
+        {"password": new_password},
+        format="json",
+    )
+    assert response.status_code == 200
+    target.refresh_from_db()
+    assert target.check_password(new_password)
+
+
+def test_patch_user_password_rejects_weak(admin_client):
+    client, _admin = admin_client
+    target = UserFactory.create(password=STRONG_PASSWORD, is_staff=False, is_active=True)
+    response = client.patch(
+        f"/api/v1/users/{target.pk}",
+        {"password": "senhafraca"},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert response.data["error"]["code"] == "validation_error"
+    target.refresh_from_db()
+    assert target.check_password(STRONG_PASSWORD)
 
 
 def test_deactivated_user_cannot_start_admin_login(admin_client):
