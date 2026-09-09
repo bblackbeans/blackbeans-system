@@ -17,7 +17,7 @@ from rest_framework.request import Request
 from rest_framework.views import APIView
 
 from blackbeans_api.api.operations_serializers import task_to_representation
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -278,7 +278,7 @@ class ClientRequestPublicCreateView(APIView):
 
 
 class ClientRequestListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("client-requests")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -295,7 +295,7 @@ class ClientRequestListView(APIView):
 
 
 class ClientRequestConvertView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("client-requests")]
 
     def post(self, request: Request, request_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -425,7 +425,7 @@ class ClientRequestConvertView(APIView):
 class AdminHoursDashboardView(APIView):
     """Horas consumidas (TimeLog) vs contratadas (soma effort das linhas ou effort_points)."""
 
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("stats")]
 
     @staticmethod
     def _parse_period_bounds(request: Request):

@@ -133,6 +133,41 @@ class UserWorkspaceAccess(models.Model):
         return f"{self.user_id} -> {self.workspace_id}"
 
 
+# Keys do submenu Administracao liberaveis para colaborador (espelha MenuKey do front).
+ADMIN_AREA_KEYS = frozenset(
+    {
+        "clients",
+        "client-requests",
+        "services",
+        "sales",
+        "users",
+        "status-config",
+        "stats",
+        "problems",
+        "agents",
+        "leads",
+    },
+)
+
+
+class UserAdminAreaAccess(models.Model):
+    """Areas da Administracao explicitamente liberadas para um colaborador."""
+
+    user = ForeignKey(User, on_delete=CASCADE, related_name="admin_area_access_entries")
+    area_key = CharField(max_length=64)
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("User admin area access")
+        verbose_name_plural = _("User admin area accesses")
+        constraints = [
+            UniqueConstraint(fields=["user", "area_key"], name="uniq_user_admin_area_access"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} -> {self.area_key}"
+
+
 class UserCollaboratorLink(models.Model):
     """Vinculo ativo/inativo entre usuario Django e colaborador (1:1 ativo por lado)."""
 

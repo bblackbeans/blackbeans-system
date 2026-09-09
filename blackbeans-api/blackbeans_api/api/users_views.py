@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
@@ -17,9 +18,11 @@ from blackbeans_api.api.users_serializers import AdminUserCreateSerializer
 from blackbeans_api.api.users_serializers import AdminUserUpdateSerializer
 from blackbeans_api.api.users_serializers import CollaboratorLinkCreateSerializer
 from blackbeans_api.api.users_serializers import MePasswordChangeSerializer
+from blackbeans_api.api.users_serializers import UserAdminAreaAccessWriteSerializer
 from blackbeans_api.api.users_serializers import UserWorkspaceAccessWriteSerializer
 from blackbeans_api.api.users_serializers import user_to_representation
 from blackbeans_api.api.utils import get_correlation_id
+from blackbeans_api.users.models import UserAdminAreaAccess
 from blackbeans_api.users.models import UserCollaboratorLink
 from blackbeans_api.users.models import UserWorkspaceAccess
 
@@ -221,7 +224,7 @@ class MeEmailTestView(APIView):
 
 
 class AdminUserListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -291,7 +294,7 @@ class AdminUserListCreateView(APIView):
 
 
 class AdminUserDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def patch(self, request: Request, user_id: int):
         correlation_id = get_correlation_id(request)
@@ -312,11 +315,22 @@ class AdminUserDetailView(APIView):
             instance=user,
         )
         serializer.is_valid(raise_exception=True)
-        serializer.update(user, serializer.validated_data)
         vd = serializer.validated_data
+
+        if vd.get("is_staff") is True and not (request.user.is_staff or request.user.is_superuser):
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Somente administradores podem conceder permissao admin.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer.update(user, vd)
 
         if vd.get("is_staff") is True:
             UserWorkspaceAccess.objects.filter(user=user).delete()
+            UserAdminAreaAccess.objects.filter(user=user).delete()
 
         if vd.get("is_active") is False:
             logger.warning(
@@ -359,7 +373,7 @@ class MeWorkspaceAccessView(APIView):
 
 
 class AdminUserWorkspaceAccessView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def get(self, request: Request, user_id: int):
         correlation_id = get_correlation_id(request)
@@ -438,8 +452,114 @@ class AdminUserWorkspaceAccessView(APIView):
         )
 
 
-class AdminUserCollaboratorLinkView(APIView):
+class MeAdminAreaAccessView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        user = request.user
+        if user.is_staff or user.is_superuser:
+            return success_response(
+                correlation_id=correlation_id,
+                data={"all": True, "area_keys": []},
+            )
+        keys = list(
+            UserAdminAreaAccess.objects.filter(user=user)
+            .order_by("area_key")
+            .values_list("area_key", flat=True),
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"all": False, "area_keys": keys},
+        )
+
+
+class AdminUserAdminAreaAccessView(APIView):
+    """Somente admin real libera areas (nao colaborador com grant users)."""
+
     permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+
+    def get(self, request: Request, user_id: int):
+        correlation_id = get_correlation_id(request)
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="user_not_found",
+                message="Usuario nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if user.is_staff or user.is_superuser:
+            return success_response(
+                correlation_id=correlation_id,
+                data={
+                    "user_id": user.pk,
+                    "is_staff": True,
+                    "area_keys": [],
+                },
+            )
+        keys = list(
+            UserAdminAreaAccess.objects.filter(user=user)
+            .order_by("area_key")
+            .values_list("area_key", flat=True),
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "user_id": user.pk,
+                "is_staff": False,
+                "area_keys": keys,
+            },
+        )
+
+    def put(self, request: Request, user_id: int):
+        correlation_id = get_correlation_id(request)
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="user_not_found",
+                message="Usuario nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if user.is_staff or user.is_superuser:
+            return error_response(
+                correlation_id=correlation_id,
+                code="admin_area_access_forbidden",
+                message="Usuarios administradores ja tem acesso a todas as areas da administracao.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = UserAdminAreaAccessWriteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        area_keys = list(ser.validated_data["area_keys"])
+        with transaction.atomic():
+            UserAdminAreaAccess.objects.filter(user=user).delete()
+            UserAdminAreaAccess.objects.bulk_create(
+                [UserAdminAreaAccess(user=user, area_key=key) for key in area_keys],
+            )
+        logger.info(
+            "iam.user_admin_area_access.updated actor_id=%s correlation_id=%s target_user_id=%s count=%s",
+            _actor_id(request),
+            correlation_id,
+            user.pk,
+            len(area_keys),
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "user_id": user.pk,
+                "area_keys": area_keys,
+            },
+        )
+
+
+class AdminUserCollaboratorLinkView(APIView):
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def post(self, request: Request, user_id: int):
         correlation_id = get_correlation_id(request)
@@ -514,7 +634,7 @@ class AdminUserCollaboratorLinkView(APIView):
 
 
 class AdminUserCollaboratorLinkDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def delete(self, request: Request, user_id: int, collaborator_id):
         correlation_id = get_correlation_id(request)

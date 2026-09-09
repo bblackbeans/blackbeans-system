@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from blackbeans_api.api.bpo_serializers import ClientContractSerializer
 from blackbeans_api.api.bpo_serializers import ServiceCatalogSerializer
-from blackbeans_api.api.permissions import IsAuthenticatedReadElseStaff
+from blackbeans_api.api.permissions import IsAuthenticatedReadElseStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -80,7 +80,7 @@ def _date_to_datetime(value):
 
 
 class ServiceCatalogListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("services")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -104,7 +104,7 @@ class ServiceCatalogListCreateView(APIView):
 
 
 class ServiceCatalogDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("services")]
 
     def patch(self, request: Request, service_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -148,7 +148,7 @@ class ServiceCatalogDetailView(APIView):
 
 
 class ContractListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("sales")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -177,7 +177,7 @@ class ContractListCreateView(APIView):
 
 
 class ContractDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("sales")]
 
     def get(self, request: Request, contract_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -243,7 +243,7 @@ class ContractDetailView(APIView):
 
 
 class ContractConfirmView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("sales")]
 
     def post(self, request: Request, contract_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -322,7 +322,7 @@ class ContractConfirmView(APIView):
 
 
 class ContractCancelView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("sales")]
 
     def post(self, request: Request, contract_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -342,7 +342,7 @@ class ContractCancelView(APIView):
 
 
 class ContractReactivateView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("sales")]
 
     def post(self, request: Request, contract_id: UUID):
         correlation_id = get_correlation_id(request)

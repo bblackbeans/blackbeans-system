@@ -66,6 +66,20 @@ type PersonGroup = {
 
 type StatusOption = { value: string; label: string };
 
+type FilterMatchMode = "include" | "exclude";
+
+const FILTER_MODE_OPTIONS = [
+  { value: "include" as const, label: "Incluir" },
+  { value: "exclude" as const, label: "Exceto" },
+];
+
+/** selected vazio = sem filtro (passa). */
+function matchesFilter(selected: string[], actual: string, mode: FilterMatchMode): boolean {
+  if (selected.length === 0) return true;
+  const hit = selected.includes(actual);
+  return mode === "include" ? hit : !hit;
+}
+
 type SprintPanelProps = {
   token: string;
   isAdmin: boolean;
@@ -167,9 +181,13 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
   );
   const [selected, setSelected] = useState<SprintWeek | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
+  const [assigneeFilterMode, setAssigneeFilterMode] = useState<FilterMatchMode>("include");
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [statusFilterMode, setStatusFilterMode] = useState<FilterMatchMode>("include");
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
+  const [priorityFilterMode, setPriorityFilterMode] = useState<FilterMatchMode>("include");
   const [projectFilter, setProjectFilter] = useState<string[]>([]);
+  const [projectFilterMode, setProjectFilterMode] = useState<FilterMatchMode>("include");
   const [searchFilter, setSearchFilter] = useState("");
   const [openPersonKeys, setOpenPersonKeys] = useState<string[]>([]);
 
@@ -196,9 +214,13 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
 
   const clearFilters = () => {
     setAssigneeFilter([]);
+    setAssigneeFilterMode("include");
     setStatusFilter([]);
+    setStatusFilterMode("include");
     setPriorityFilter([]);
+    setPriorityFilterMode("include");
     setProjectFilter([]);
+    setProjectFilterMode("include");
     setSearchFilter("");
   };
 
@@ -345,18 +367,14 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
 
   const grouped = useMemo((): PersonGroup[] => {
     const items = selected?.items ?? [];
-    const allowedAssignees = new Set(assigneeFilter);
-    const allowedStatuses = new Set(statusFilter);
-    const allowedPriorities = new Set(priorityFilter);
-    const allowedProjects = new Set(projectFilter);
     const query = searchFilter.trim().toLowerCase();
     const map = new Map<string, PersonGroup>();
     items.forEach((item) => {
       const key = item.assignee_id != null ? String(item.assignee_id) : "unassigned";
-      if (allowedAssignees.size > 0 && !allowedAssignees.has(key)) return;
-      if (allowedStatuses.size > 0 && !allowedStatuses.has(item.status)) return;
-      if (allowedPriorities.size > 0 && !allowedPriorities.has(item.priority || "")) return;
-      if (allowedProjects.size > 0 && !allowedProjects.has(item.project_name || "")) return;
+      if (!matchesFilter(assigneeFilter, key, assigneeFilterMode)) return;
+      if (!matchesFilter(statusFilter, item.status, statusFilterMode)) return;
+      if (!matchesFilter(priorityFilter, item.priority || "", priorityFilterMode)) return;
+      if (!matchesFilter(projectFilter, item.project_name || "", projectFilterMode)) return;
       if (query) {
         const haystack = [
           item.title,
@@ -384,7 +402,18 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
       });
     });
     return Array.from(map.values());
-  }, [assigneeFilter, priorityFilter, projectFilter, searchFilter, selected, statusFilter]);
+  }, [
+    assigneeFilter,
+    assigneeFilterMode,
+    priorityFilter,
+    priorityFilterMode,
+    projectFilter,
+    projectFilterMode,
+    searchFilter,
+    selected,
+    statusFilter,
+    statusFilterMode,
+  ]);
 
   const weekTotals = useMemo(() => {
     const items = grouped.flatMap((group) => group.items);
@@ -605,54 +634,90 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
         >
           {(selected.items?.length ?? 0) > 0 ? (
             <Space wrap style={{ marginBottom: 12, width: "100%" }}>
-              <Select
-                mode="multiple"
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                maxTagCount="responsive"
-                placeholder="Colaboradores"
-                value={assigneeFilter}
-                onChange={setAssigneeFilter}
-                options={assigneeOptions}
-                style={{ minWidth: 200, maxWidth: 320 }}
-              />
-              <Select
-                mode="multiple"
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                maxTagCount="responsive"
-                placeholder="Status"
-                value={statusFilter}
-                onChange={setStatusFilter}
-                options={statusFilterOptions}
-                style={{ minWidth: 160, maxWidth: 260 }}
-              />
-              <Select
-                mode="multiple"
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                maxTagCount="responsive"
-                placeholder="Prioridade"
-                value={priorityFilter}
-                onChange={setPriorityFilter}
-                options={PRIORITY_OPTIONS}
-                style={{ minWidth: 150, maxWidth: 240 }}
-              />
-              <Select
-                mode="multiple"
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                maxTagCount="responsive"
-                placeholder="Projeto"
-                value={projectFilter}
-                onChange={setProjectFilter}
-                options={projectOptions}
-                style={{ minWidth: 180, maxWidth: 280 }}
-              />
+              <Space.Compact>
+                <Select
+                  value={assigneeFilterMode}
+                  onChange={setAssigneeFilterMode}
+                  style={{ width: 100 }}
+                  options={FILTER_MODE_OPTIONS}
+                />
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  maxTagCount="responsive"
+                  placeholder={
+                    assigneeFilterMode === "exclude" ? "Colaboradores a excluir" : "Colaboradores"
+                  }
+                  value={assigneeFilter}
+                  onChange={setAssigneeFilter}
+                  options={assigneeOptions}
+                  style={{ minWidth: 200 }}
+                />
+              </Space.Compact>
+              <Space.Compact>
+                <Select
+                  value={statusFilterMode}
+                  onChange={setStatusFilterMode}
+                  style={{ width: 100 }}
+                  options={FILTER_MODE_OPTIONS}
+                />
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  maxTagCount="responsive"
+                  placeholder={statusFilterMode === "exclude" ? "Status a excluir" : "Status"}
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                  options={statusFilterOptions}
+                  style={{ minWidth: 160 }}
+                />
+              </Space.Compact>
+              <Space.Compact>
+                <Select
+                  value={priorityFilterMode}
+                  onChange={setPriorityFilterMode}
+                  style={{ width: 100 }}
+                  options={FILTER_MODE_OPTIONS}
+                />
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  maxTagCount="responsive"
+                  placeholder={
+                    priorityFilterMode === "exclude" ? "Prioridades a excluir" : "Prioridades"
+                  }
+                  value={priorityFilter}
+                  onChange={setPriorityFilter}
+                  options={PRIORITY_OPTIONS}
+                  style={{ minWidth: 150 }}
+                />
+              </Space.Compact>
+              <Space.Compact>
+                <Select
+                  value={projectFilterMode}
+                  onChange={setProjectFilterMode}
+                  style={{ width: 100 }}
+                  options={FILTER_MODE_OPTIONS}
+                />
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  maxTagCount="responsive"
+                  placeholder={projectFilterMode === "exclude" ? "Projetos a excluir" : "Projetos"}
+                  value={projectFilter}
+                  onChange={setProjectFilter}
+                  options={projectOptions}
+                  style={{ minWidth: 180 }}
+                />
+              </Space.Compact>
               <Input.Search
                 allowClear
                 placeholder="Buscar tarefa, cliente..."

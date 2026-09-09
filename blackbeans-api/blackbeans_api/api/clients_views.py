@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from blackbeans_api.api.clients_serializers import ClientCreateSerializer
 from blackbeans_api.api.clients_serializers import ClientUpdateSerializer
 from blackbeans_api.api.clients_serializers import client_to_representation
-from blackbeans_api.api.permissions import IsAuthenticatedReadElseStaff
+from blackbeans_api.api.permissions import IsAuthenticatedReadElseStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -40,7 +40,7 @@ def _parse_positive_int(raw_value: str | None, default: int) -> int:
 
 
 class ClientsListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("clients")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -121,7 +121,7 @@ class ClientsListCreateView(APIView):
 
 
 class ClientDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("clients")]
 
     def get(self, request: Request, client_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -243,7 +243,7 @@ class ClientDetailView(APIView):
 
 
 class ClientStatusToggleView(APIView):
-    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaffOrAdminArea("clients")]
 
     def post(self, request: Request, client_id: UUID):
         correlation_id = get_correlation_id(request)

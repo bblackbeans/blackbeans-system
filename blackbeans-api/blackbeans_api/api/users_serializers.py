@@ -179,6 +179,34 @@ class UserWorkspaceAccessWriteSerializer(serializers.Serializer):
         return value
 
 
+class UserAdminAreaAccessWriteSerializer(serializers.Serializer):
+    area_keys = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        allow_empty=True,
+        required=True,
+    )
+
+    def validate_area_keys(self, value: list) -> list:
+        from blackbeans_api.users.models import ADMIN_AREA_KEYS
+
+        cleaned: list[str] = []
+        invalid: list[str] = []
+        for raw in value:
+            key = str(raw or "").strip()
+            if not key:
+                continue
+            if key not in ADMIN_AREA_KEYS:
+                invalid.append(key)
+                continue
+            if key not in cleaned:
+                cleaned.append(key)
+        if invalid:
+            raise serializers.ValidationError(
+                f"Areas invalidas: {', '.join(invalid)}. Permitidas: {', '.join(sorted(ADMIN_AREA_KEYS))}.",
+            )
+        return cleaned
+
+
 class CollaboratorLinkCreateSerializer(serializers.Serializer):
     collaborator_id = serializers.UUIDField()
 

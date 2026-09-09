@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 
 from blackbeans_api.api.operations_serializers import task_status_definition_to_representation
 from blackbeans_api.api.operations_serializers import validate_active_task_status
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import user_has_admin_area
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -37,7 +37,7 @@ class TaskStatusCatalogView(APIView):
         )
 
     def put(self, request: Request):
-        if not (request.user.is_staff or request.user.is_superuser):
+        if not user_has_admin_area(request.user, "status-config"):
             return error_response(
                 correlation_id=get_correlation_id(request),
                 code="forbidden",

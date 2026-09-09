@@ -16,7 +16,7 @@ from blackbeans_api.api.feedback_serializers import ProblemReportFeedbackCreateS
 from blackbeans_api.api.feedback_serializers import ProblemReportUpdateSerializer
 from blackbeans_api.api.feedback_serializers import problem_report_to_representation
 from blackbeans_api.api.feedback_serializers import resolve_workspace_id
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -168,7 +168,7 @@ class ProblemReportFeedbackCreateView(APIView):
 
 
 class ProblemReportsListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("problems")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -256,7 +256,7 @@ class ProblemReportsListView(APIView):
 class ProblemReportsSummaryView(APIView):
     """Contadores leves para badge do menu Problemas."""
 
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("problems")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -282,7 +282,7 @@ class ProblemReportsSummaryView(APIView):
 
 
 class ProblemReportDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("problems")]
 
     def get(self, request: Request, report_id: UUID):
         correlation_id = get_correlation_id(request)

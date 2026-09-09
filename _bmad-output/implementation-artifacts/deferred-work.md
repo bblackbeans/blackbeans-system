@@ -18,3 +18,9 @@
 
 - N+1 consultas em `classify_items_for_preview` ao validar e calcular conflitos por item; considerar prefetch ou batch se o limite de itens for stress real em producao.
 - ~~Aplicacao de bulk preview por qualquer superuser~~ **Resolvido:** apply restrito ao `created_by` (2026-04-17).
+
+## Deferred from: code review (`spec-admin-area-access-colaborador.md`) (2026-09-09)
+
+- GET de `clients` / `services` / `sales` continua autenticado para qualquer usuario (padrao legado `IsAuthenticatedReadElseStaff`); grant so reforça escrita. Fechar leitura sem grant exigiria endpoints separados ou quebrar listagens operacionais do colaborador.
+- Fontes de verdade duplicadas: `ADMIN_AREA_KEYS` (API) vs `GRANTABLE_ADMIN_AREA_OPTIONS` (web) — unificar se o catalogo crescer.
+- Grant `leads` inclui mutacoes RD Station; grant `agents` inclui run-now — considerar grants mais granulares se o blast radius incomodar.

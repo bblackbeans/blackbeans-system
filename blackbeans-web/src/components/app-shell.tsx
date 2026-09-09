@@ -604,6 +604,23 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "client-requests",
 ];
 
+/** Areas do submenu Administracao liberaveis para colaborador. */
+const GRANTABLE_ADMIN_AREA_OPTIONS: { value: MenuKey; label: string }[] = [
+  { value: "clients", label: "Clientes" },
+  { value: "client-requests", label: "Pedidos de clientes" },
+  { value: "services", label: "Servicos" },
+  { value: "sales", label: "Venda" },
+  { value: "users", label: "Usuarios" },
+  { value: "status-config", label: "Status globais" },
+  { value: "stats", label: "Estatisticas" },
+  { value: "problems", label: "Problemas" },
+  { value: "agents", label: "Agentes" },
+  { value: "leads", label: "Banco de leads" },
+];
+const GRANTABLE_ADMIN_AREA_KEYS = new Set<MenuKey>(
+  GRANTABLE_ADMIN_AREA_OPTIONS.map((opt) => opt.value),
+);
+
 const DEFAULT_STATUS_META: Record<string, { label: string; color: string }> = {
   todo: { label: "A fazer", color: "geekblue" },
   in_progress: { label: "Em progresso", color: "blue" },
@@ -2467,6 +2484,7 @@ export function AppShell() {
   });
   const [profileAvatarDataUrl, setProfileAvatarDataUrl] = useState<string>("");
   const [meWorkspaceAccess, setMeWorkspaceAccess] = useState<{ all: boolean; workspace_ids: string[] } | null>(null);
+  const [meAdminAreaAccess, setMeAdminAreaAccess] = useState<{ all: boolean; area_keys: string[] } | null>(null);
   const [adminUsersCache, setAdminUsersCache] = useState<
     Array<{ id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string }>
   >([]);
@@ -2477,17 +2495,96 @@ export function AppShell() {
     const profileHint = `${String(profileResult?.professional_email ?? "")} ${String(profileResult?.display_name ?? "")} ${String(profileResult?.username ?? "")}`.toLowerCase();
     return profileHint.includes("admin");
   }, [profileResult, token]);
+  const canAccessAdminArea = useCallback(
+    (key: MenuKey) => {
+      if (isAdmin) return true;
+      if (!GRANTABLE_ADMIN_AREA_KEYS.has(key)) return false;
+      if (!meAdminAreaAccess) return false;
+      if (meAdminAreaAccess.all) return true;
+      return meAdminAreaAccess.area_keys.includes(key);
+    },
+    [isAdmin, meAdminAreaAccess],
+  );
   const isSuperuser = Boolean(profileResult?.is_superuser);
   const screens = Grid.useBreakpoint();
   const isCompactNav = screens.lg !== true;
   const menuItems = useMemo<NonNullable<MenuProps["items"]>>(
     () => {
+      const adminChildren: NonNullable<MenuProps["items"]> = [
+        canAccessAdminArea("clients")
+          ? { key: "clients", icon: <ShopOutlined />, label: menuLabel("Clientes", HELP_TIPS.menuClients) }
+          : null,
+        canAccessAdminArea("client-requests")
+          ? {
+              key: "client-requests",
+              icon: <CommentOutlined />,
+              label: menuLabel("Pedidos de clientes", HELP_TIPS.menuClientRequests),
+            }
+          : null,
+        canAccessAdminArea("services")
+          ? { key: "services", icon: <TagsOutlined />, label: menuLabel("Servicos", HELP_TIPS.menuServices) }
+          : null,
+        canAccessAdminArea("sales")
+          ? { key: "sales", icon: <ShoppingCartOutlined />, label: menuLabel("Venda", HELP_TIPS.menuSales) }
+          : null,
+        canAccessAdminArea("users")
+          ? { key: "users", icon: <TeamOutlined />, label: menuLabel("Usuarios", HELP_TIPS.menuUsers) }
+          : null,
+        canAccessAdminArea("status-config")
+          ? {
+              key: "status-config",
+              icon: <CheckCircleOutlined />,
+              label: menuLabel("Status globais", HELP_TIPS.menuStatus),
+            }
+          : null,
+        canAccessAdminArea("stats")
+          ? { key: "stats", icon: <StockOutlined />, label: menuLabel("Estatisticas", HELP_TIPS.menuStats) }
+          : null,
+        canAccessAdminArea("problems")
+          ? {
+              key: "problems",
+              icon: <BugOutlined />,
+              label: (
+                <Badge
+                  count={problemsOpenInfraCount}
+                  size="small"
+                  offset={[10, 0]}
+                  title={
+                    problemsOpenInfraCount > 0
+                      ? `${problemsOpenInfraCount} alerta(s) de infraestrutura abertos`
+                      : undefined
+                  }
+                >
+                  {menuLabel("Problemas", HELP_TIPS.menuProblems)}
+                </Badge>
+              ),
+            }
+          : null,
+        canAccessAdminArea("agents")
+          ? { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) }
+          : null,
+        canAccessAdminArea("leads")
+          ? { key: "leads", icon: <ContactsOutlined />, label: menuLabel("Banco de leads", HELP_TIPS.menuLeads) }
+          : null,
+      ].filter(Boolean) as NonNullable<MenuProps["items"]>;
+
       if (!isAdmin) {
-        return [
+        const collabBase: NonNullable<MenuProps["items"]> = [
           { key: "dashboard", icon: <AppstoreOutlined />, label: menuLabel("Dashboard", "Resumo rapido da sua operacao.") },
           { key: "my-work", icon: <UnorderedListOutlined />, label: menuLabel("Meu trabalho", HELP_TIPS.menuMyWork) },
           { key: "sprint", icon: <CalendarOutlined />, label: menuLabel("Sprint", HELP_TIPS.menuSprint) },
           { key: "projects", icon: <FolderOpenOutlined />, label: menuLabel("Projetos", HELP_TIPS.menuProjects) },
+        ];
+        if (adminChildren.length === 0) return collabBase;
+        return [
+          ...collabBase,
+          { type: "divider" },
+          {
+            key: "admin-root",
+            icon: <SettingOutlined />,
+            label: menuLabel("Administracao", "Cadastros e configuracoes liberados para voce."),
+            children: adminChildren,
+          },
         ];
       }
       const base: NonNullable<MenuProps["items"]> = [
@@ -2505,39 +2602,11 @@ export function AppShell() {
           key: "admin-root",
           icon: <SettingOutlined />,
           label: menuLabel("Administracao", "Cadastros e configuracoes do sistema."),
-          children: [
-            { key: "clients", icon: <ShopOutlined />, label: menuLabel("Clientes", HELP_TIPS.menuClients) },
-            { key: "client-requests", icon: <CommentOutlined />, label: menuLabel("Pedidos de clientes", HELP_TIPS.menuClientRequests) },
-            { key: "services", icon: <TagsOutlined />, label: menuLabel("Servicos", HELP_TIPS.menuServices) },
-            { key: "sales", icon: <ShoppingCartOutlined />, label: menuLabel("Venda", HELP_TIPS.menuSales) },
-            { key: "users", icon: <TeamOutlined />, label: menuLabel("Usuarios", HELP_TIPS.menuUsers) },
-            { key: "status-config", icon: <CheckCircleOutlined />, label: menuLabel("Status globais", HELP_TIPS.menuStatus) },
-            { key: "stats", icon: <StockOutlined />, label: menuLabel("Estatisticas", HELP_TIPS.menuStats) },
-            {
-              key: "problems",
-              icon: <BugOutlined />,
-              label: (
-                <Badge
-                  count={problemsOpenInfraCount}
-                  size="small"
-                  offset={[10, 0]}
-                  title={
-                    problemsOpenInfraCount > 0
-                      ? `${problemsOpenInfraCount} alerta(s) de infraestrutura abertos`
-                      : undefined
-                  }
-                >
-                  {menuLabel("Problemas", HELP_TIPS.menuProblems)}
-                </Badge>
-              ),
-            },
-            { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) },
-            { key: "leads", icon: <ContactsOutlined />, label: menuLabel("Banco de leads", HELP_TIPS.menuLeads) },
-          ],
+          children: adminChildren,
         },
       ];
     },
-    [isAdmin, problemsOpenInfraCount],
+    [canAccessAdminArea, isAdmin, problemsOpenInfraCount],
   );
   const selectedBoard = useMemo(
     () => boards.find((board) => board.id === selectedBoardId) ?? null,
@@ -2729,7 +2798,15 @@ export function AppShell() {
   const navigateTo = useCallback((nextKey: MenuKey, options?: { resetSelection?: boolean }) => {
     const defaultKey: MenuKey = "dashboard";
     const resetSelection = options?.resetSelection !== false;
-    if (!isAdmin && RESTRICTED_ADMIN_KEYS.includes(nextKey)) {
+    const grantsPending = !isAdmin && meAdminAreaAccess == null;
+    const blocked =
+      RESTRICTED_ADMIN_KEYS.includes(nextKey) &&
+      !(
+        GRANTABLE_ADMIN_AREA_KEYS.has(nextKey)
+          ? grantsPending || canAccessAdminArea(nextKey)
+          : isAdmin
+      );
+    if (blocked) {
       setActiveKey(defaultKey);
       if (typeof window !== "undefined") {
         window.history.replaceState(null, "", `#${defaultKey}`);
@@ -2747,7 +2824,7 @@ export function AppShell() {
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", `#${nextKey}`);
     }
-  }, [isAdmin]);
+  }, [canAccessAdminArea, isAdmin, meAdminAreaAccess]);
   const handleMainMenuClick = useCallback(
     (info: Parameters<NonNullable<MenuProps["onClick"]>>[0]) => {
       const key = String(info.key);
@@ -4023,6 +4100,19 @@ export function AppShell() {
     });
   }, [token]);
 
+  const fetchMeAdminAreaAccess = useCallback(async () => {
+    const response = await apiRequest<{ all?: boolean; area_keys?: string[] }>("/me/admin-area-access", { token });
+    if (!response.ok) {
+      setMeAdminAreaAccess({ all: false, area_keys: [] });
+      return;
+    }
+    const payload = response.data ?? {};
+    setMeAdminAreaAccess({
+      all: Boolean(payload.all),
+      area_keys: Array.isArray(payload.area_keys) ? payload.area_keys.map(String) : [],
+    });
+  }, [token]);
+
   const fetchCrudData = useCallback(async () => {
     const [clientsResp, servicesResp, contractsResp, workspacesResp, portfoliosResp, projectsResp] = await Promise.all([
       apiRequest<{ clients: Record<string, unknown>[] }>("/clients?page=1&page_size=50", { token }),
@@ -4359,6 +4449,7 @@ export function AppShell() {
       fetch2FASettings(),
       fetchProfile(),
       fetchMeWorkspaceAccess(),
+      fetchMeAdminAreaAccess(),
       fetchCrudData(),
       fetchBoards(),
       fetchStatusCatalog(),
@@ -4369,6 +4460,7 @@ export function AppShell() {
     fetchBoards,
     fetchCrudData,
     fetchHealth,
+    fetchMeAdminAreaAccess,
     fetchMeWorkspaceAccess,
     fetchNotificationPreferences,
     fetchNotificationSubscriptions,
@@ -4399,11 +4491,17 @@ export function AppShell() {
   }, [refreshToken]);
 
   useEffect(() => {
-    if (!token || !isAdmin) return;
+    if (!token) return;
+    const canCrud =
+      isAdmin ||
+      canAccessAdminArea("clients") ||
+      canAccessAdminArea("services") ||
+      canAccessAdminArea("sales");
+    if (!canCrud) return;
     if (activeKey === "clients" || activeKey === "services" || activeKey === "sales") {
       fetchCrudData().catch(() => undefined);
     }
-  }, [activeKey, fetchCrudData, isAdmin, token]);
+  }, [activeKey, canAccessAdminArea, fetchCrudData, isAdmin, token]);
 
   useEffect(() => {
     if (!token || activeKey !== "profile") return;
@@ -4580,7 +4678,15 @@ export function AppShell() {
       if (isAdmin && nextKey === "tasks") nextKey = "dashboard";
       const previousKey = getMenuKeyFromHash(previousHash, defaultKey);
       previousHash = window.location.hash;
-      if (!isAdmin && RESTRICTED_ADMIN_KEYS.includes(nextKey)) {
+      const grantsPending = !isAdmin && meAdminAreaAccess == null;
+      const blocked =
+        RESTRICTED_ADMIN_KEYS.includes(nextKey) &&
+        !(
+          GRANTABLE_ADMIN_AREA_KEYS.has(nextKey)
+            ? grantsPending || canAccessAdminArea(nextKey)
+            : isAdmin
+        );
+      if (blocked) {
         setActiveKey(defaultKey);
         window.history.replaceState(null, "", `#${defaultKey}`);
         previousHash = `#${defaultKey}`;
@@ -4609,7 +4715,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("hashchange", syncWithHash);
     };
-  }, [hydratedSession, isAdmin]);
+  }, [canAccessAdminArea, hydratedSession, isAdmin, meAdminAreaAccess]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const intervalId = window.setInterval(() => {
@@ -5009,7 +5115,7 @@ export function AppShell() {
     localStorage.setItem(ADMIN_USER_META_STORAGE_KEY, JSON.stringify(metaPayload));
   }, [adminUsersCache]);
   const fetchAdminUsers = useCallback(async () => {
-    if (!token || !isAdmin) return;
+    if (!token || !canAccessAdminArea("users")) return;
     setAdminUsersLoading(true);
     const response = await apiRequest<
       | Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>
@@ -5057,27 +5163,27 @@ export function AppShell() {
       })
       .filter((row): row is { id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string } => Boolean(row));
     setAdminUsersCache(normalized);
-  }, [apiMessage, isAdmin, token]);
+  }, [apiMessage, canAccessAdminArea, token]);
   useEffect(() => {
-    if (activeKey !== "users" || !token || !isAdmin) return;
+    if (activeKey !== "users" || !token || !canAccessAdminArea("users")) return;
     queueMicrotask(() => {
       fetchAdminUsers().catch(() => undefined);
     });
-  }, [activeKey, fetchAdminUsers, isAdmin, token]);
+  }, [activeKey, canAccessAdminArea, fetchAdminUsers, token]);
   useEffect(() => {
-    if (activeKey !== "status-config" || !token || !isAdmin) return;
+    if (activeKey !== "status-config" || !token || !canAccessAdminArea("status-config")) return;
     queueMicrotask(() => {
       fetchStatusCatalog().catch(() => undefined);
     });
-  }, [activeKey, fetchStatusCatalog, isAdmin, token]);
+  }, [activeKey, canAccessAdminArea, fetchStatusCatalog, token]);
   useEffect(() => {
-    if (activeKey !== "client-requests" || !token || !isAdmin) return;
+    if (activeKey !== "client-requests" || !token || !canAccessAdminArea("client-requests")) return;
     queueMicrotask(() => {
       void fetchClientRequestsList();
     });
-  }, [activeKey, isAdmin, token]);
+  }, [activeKey, canAccessAdminArea, token]);
   useEffect(() => {
-    if (!token || !isAdmin) {
+    if (!token || !canAccessAdminArea("problems")) {
       setProblemsOpenInfraCount(0);
       return;
     }
@@ -5095,7 +5201,7 @@ export function AppShell() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isAdmin, token, activeKey]);
+  }, [canAccessAdminArea, token, activeKey]);
   useEffect(() => {
     if ((activeKey !== "dashboard" && activeKey !== "tasks") || !token || !isAdmin) return;
     queueMicrotask(() => {
@@ -6371,6 +6477,7 @@ export function AppShell() {
     localStorage.removeItem(ADMIN_USERS_STORAGE_KEY);
     localStorage.removeItem(ADMIN_USER_META_STORAGE_KEY);
     setMeWorkspaceAccess(null);
+    setMeAdminAreaAccess(null);
     setSelectedTask(null);
     setTaskDrawerTab("summary");
     setNotifications([]);
@@ -6389,9 +6496,9 @@ export function AppShell() {
   }
 
   useEffect(() => {
-    if (!token || activeKey !== "stats" || !isAdmin) return;
+    if (!token || activeKey !== "stats" || !canAccessAdminArea("stats")) return;
     void fetchHoursDashboardData();
-  }, [activeKey, isAdmin, token]);
+  }, [activeKey, canAccessAdminArea, token]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -8253,7 +8360,7 @@ export function AppShell() {
                   </Card>
                   </Space>
                 )}
-                {activeKey === "users" && isAdmin && (
+                {activeKey === "users" && canAccessAdminArea("users") && (
                   <Row gutter={[16, 16]}>
                     <Col span={24}>
                       <Card title="Usuarios - CRUD administrativo">
@@ -8302,18 +8409,37 @@ export function AppShell() {
                                                     is_staff: record.type === "admin",
                                                     birth_date: record.birth_date,
                                                     workspace_ids: [] as string[],
+                                                    area_keys: [] as string[],
                                                     is_active: true,
                                                     password: undefined,
                                                   });
-                                                  const wsResp = await apiRequest<{
-                                                    is_staff?: boolean;
-                                                    workspace_ids?: string[];
-                                                  }>(`/users/${record.id}/workspace-access`, { token });
+                                                  const [wsResp, areaResp] = await Promise.all([
+                                                    apiRequest<{
+                                                      is_staff?: boolean;
+                                                      workspace_ids?: string[];
+                                                    }>(`/users/${record.id}/workspace-access`, { token }),
+                                                    apiRequest<{
+                                                      is_staff?: boolean;
+                                                      area_keys?: string[];
+                                                    }>(`/users/${record.id}/admin-area-access`, { token }),
+                                                  ]);
                                                   if (wsResp.ok && wsResp.data && !wsResp.data.is_staff) {
                                                     manageUserProfileForm.setFieldValue(
                                                       "workspace_ids",
                                                       (wsResp.data.workspace_ids ?? []).map(String),
                                                     );
+                                                  }
+                                                  if (areaResp.ok && areaResp.data && !areaResp.data.is_staff) {
+                                                    manageUserProfileForm.setFieldValue(
+                                                      "area_keys",
+                                                      (areaResp.data.area_keys ?? []).map(String),
+                                                    );
+                                                  } else if (!areaResp.ok) {
+                                                    apiMessage.error(
+                                                      areaResp.error?.message ??
+                                                        "Falha ao carregar areas da administracao.",
+                                                    );
+                                                    return;
                                                   }
                                                   setUsersTabKey("u-update-page");
                                                 })();
@@ -8405,6 +8531,25 @@ export function AppShell() {
                                               "Usuario criado, mas falhou ao salvar areas de trabalho.",
                                           );
                                         }
+                                        if (isAdmin) {
+                                          const areaKeys = Array.isArray(values.area_keys)
+                                            ? values.area_keys.map(String)
+                                            : [];
+                                          const areaResp = await apiRequest(
+                                            `/users/${created.id}/admin-area-access`,
+                                            {
+                                              method: "PUT",
+                                              token,
+                                              body: { area_keys: areaKeys },
+                                            },
+                                          );
+                                          if (!areaResp.ok) {
+                                            apiMessage.warning(
+                                              areaResp.error?.message ??
+                                                "Usuario criado, mas falhou ao salvar areas da administracao.",
+                                            );
+                                          }
+                                        }
                                       }
                                     }
                                     apiMessage.success("Usuario criado.");
@@ -8426,21 +8571,37 @@ export function AppShell() {
                                   <Form.Item shouldUpdate={(prev, curr) => prev.type !== curr.type} noStyle>
                                     {({ getFieldValue }) =>
                                       getFieldValue("type") === "collaborador" ? (
-                                        <Form.Item
-                                          name="workspace_ids"
-                                          label="Areas de trabalho"
-                                          extra="O colaborador passa a ver estas areas na estrutura de projetos (alem das areas onde ja tem tarefas)."
-                                        >
-                                          <Select
-                                            mode="multiple"
-                                            allowClear
-                                            placeholder="Selecione as areas"
-                                            options={workspaces.map((row) => ({
-                                              value: String(row.id),
-                                              label: String(row.name ?? row.id),
-                                            }))}
-                                          />
-                                        </Form.Item>
+                                        <>
+                                          <Form.Item
+                                            name="workspace_ids"
+                                            label="Areas de trabalho"
+                                            extra="O colaborador passa a ver estas areas na estrutura de projetos (alem das areas onde ja tem tarefas)."
+                                          >
+                                            <Select
+                                              mode="multiple"
+                                              allowClear
+                                              placeholder="Selecione as areas"
+                                              options={workspaces.map((row) => ({
+                                                value: String(row.id),
+                                                label: String(row.name ?? row.id),
+                                              }))}
+                                            />
+                                          </Form.Item>
+                                          {isAdmin ? (
+                                            <Form.Item
+                                              name="area_keys"
+                                              label="Areas da administracao liberadas"
+                                              extra="Somente as areas marcadas aparecem no menu do colaborador."
+                                            >
+                                              <Select
+                                                mode="multiple"
+                                                allowClear
+                                                placeholder="Selecione as areas"
+                                                options={GRANTABLE_ADMIN_AREA_OPTIONS}
+                                              />
+                                            </Form.Item>
+                                          ) : null}
+                                        </>
                                       ) : null}
                                   </Form.Item>
                                   <Form.Item
@@ -8512,6 +8673,26 @@ export function AppShell() {
                                         apiMessage.error(putResp.error?.message ?? "Falha ao salvar areas de trabalho.");
                                         return;
                                       }
+                                      if (isAdmin) {
+                                        const areaKeys = Array.isArray(values.area_keys)
+                                          ? values.area_keys.map(String)
+                                          : [];
+                                        const areaResp = await apiRequest(
+                                          `/users/${values.user_id}/admin-area-access`,
+                                          {
+                                            method: "PUT",
+                                            token,
+                                            body: { area_keys: areaKeys },
+                                          },
+                                        );
+                                        if (!areaResp.ok) {
+                                          apiMessage.error(
+                                            areaResp.error?.message ??
+                                              "Falha ao salvar areas da administracao.",
+                                          );
+                                          return;
+                                        }
+                                      }
                                     }
                                     const myNumericId =
                                       typeof profileResult?.id === "number"
@@ -8520,7 +8701,7 @@ export function AppShell() {
                                           ? Number(profileResult.id)
                                           : NaN;
                                     if (!Number.isNaN(myNumericId) && Number(values.user_id) === myNumericId) {
-                                      await fetchMeWorkspaceAccess();
+                                      await Promise.all([fetchMeWorkspaceAccess(), fetchMeAdminAreaAccess()]);
                                     }
                                     setAdminOpsResult(response.data as Record<string, unknown>);
                                     setAdminUsersCache((prev) =>
@@ -8556,24 +8737,40 @@ export function AppShell() {
                                     {({ getFieldValue }) =>
                                       getFieldValue("is_staff") === true ? (
                                         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                                          Administradores tem acesso a todas as areas de trabalho.
+                                          Administradores tem acesso a todas as areas de trabalho e da administracao.
                                         </Typography.Paragraph>
                                       ) : (
-                                        <Form.Item
-                                          name="workspace_ids"
-                                          label="Areas de trabalho liberadas"
-                                          extra="Visiveis para o colaborador na estrutura de projetos; combinadas com areas onde ele tem tarefas."
-                                        >
-                                          <Select
-                                            mode="multiple"
-                                            allowClear
-                                            placeholder="Selecione as areas"
-                                            options={workspaces.map((row) => ({
-                                              value: String(row.id),
-                                              label: String(row.name ?? row.id),
-                                            }))}
-                                          />
-                                        </Form.Item>
+                                        <>
+                                          <Form.Item
+                                            name="workspace_ids"
+                                            label="Areas de trabalho liberadas"
+                                            extra="Visiveis para o colaborador na estrutura de projetos; combinadas com areas onde ele tem tarefas."
+                                          >
+                                            <Select
+                                              mode="multiple"
+                                              allowClear
+                                              placeholder="Selecione as areas"
+                                              options={workspaces.map((row) => ({
+                                                value: String(row.id),
+                                                label: String(row.name ?? row.id),
+                                              }))}
+                                            />
+                                          </Form.Item>
+                                          {isAdmin ? (
+                                            <Form.Item
+                                              name="area_keys"
+                                              label="Areas da administracao liberadas"
+                                              extra="Somente as areas marcadas aparecem no menu do colaborador."
+                                            >
+                                              <Select
+                                                mode="multiple"
+                                                allowClear
+                                                placeholder="Selecione as areas"
+                                                options={GRANTABLE_ADMIN_AREA_OPTIONS}
+                                              />
+                                            </Form.Item>
+                                          ) : null}
+                                        </>
                                       )}
                                   </Form.Item>
                                   <Form.Item name="birth_date" label="Data de aniversario">
@@ -8818,7 +9015,7 @@ export function AppShell() {
                     </Col>
                   </Row>
                 )}
-                {activeKey === "status-config" && isAdmin && (
+                {activeKey === "status-config" && canAccessAdminArea("status-config") && (
                   <Row gutter={[16, 16]}>
                     <Col span={24}>
                       <Card title="Status globais de tarefas (cor + rotulo)">
@@ -9005,7 +9202,7 @@ export function AppShell() {
                   </Row>
                 )}
 
-                {activeKey === "clients" && isAdmin && (
+                {activeKey === "clients" && canAccessAdminArea("clients") && (
                   <Card
                     title="Clientes"
                     extra={
@@ -9107,7 +9304,7 @@ export function AppShell() {
                     />
                   </Card>
                 )}
-                {activeKey === "services" && isAdmin && (
+                {activeKey === "services" && canAccessAdminArea("services") && (
                   <Card
                     title="Servicos"
                     extra={
@@ -9196,7 +9393,7 @@ export function AppShell() {
                     />
                   </Card>
                 )}
-                {activeKey === "sales" && isAdmin && (
+                {activeKey === "sales" && canAccessAdminArea("sales") && (
                   <Card
                     title="Vendas e contratos"
                     extra={
@@ -10888,15 +11085,15 @@ export function AppShell() {
                   </Card>
                 )}
 
-                {activeKey === "problems" && isAdmin && token ? (
+                {activeKey === "problems" && canAccessAdminArea("problems") && token ? (
                   <ProblemReportsPanel token={token} />
                 ) : null}
 
-                {activeKey === "agents" && isAdmin && token ? (
+                {activeKey === "agents" && canAccessAdminArea("agents") && token ? (
                   <AgentsPanel token={token} />
                 ) : null}
 
-                {activeKey === "leads" && isAdmin && token ? (
+                {activeKey === "leads" && canAccessAdminArea("leads") && token ? (
                   <LeadsPanel token={token} />
                 ) : null}
 
@@ -10930,7 +11127,7 @@ export function AppShell() {
                   />
                 ) : null}
 
-                {activeKey === "client-requests" && isAdmin && (
+                {activeKey === "client-requests" && canAccessAdminArea("client-requests") && (
                   <Card
                     title="Pedidos de clientes"
                     extra={
@@ -11028,7 +11225,7 @@ export function AppShell() {
                   </Card>
                 )}
 
-                {activeKey === "stats" && isAdmin && (
+                {activeKey === "stats" && canAccessAdminArea("stats") && (
                   <Row gutter={[16, 16]}>
                     <Col xs={24} lg={8}>
                       <Card title="Estatisticas do workspace">
