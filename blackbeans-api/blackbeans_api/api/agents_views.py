@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -65,7 +65,7 @@ def agent_run_to_representation(run: AgentRun | None, *, include_report: bool = 
 
 
 class AgentListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("agents")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -96,7 +96,7 @@ class AgentListView(APIView):
 
 
 class AgentRunListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("agents")]
 
     def get(self, request: Request, slug: str):
         correlation_id = get_correlation_id(request)
@@ -134,7 +134,7 @@ class AgentRunListView(APIView):
 
 
 class AgentRunDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("agents")]
 
     def get(self, request: Request, slug: str, run_id: uuid.UUID):
         correlation_id = get_correlation_id(request)
@@ -155,7 +155,7 @@ class AgentRunDetailView(APIView):
 
 
 class AgentRunNowView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("agents")]
 
     def post(self, request: Request, slug: str):
         correlation_id = get_correlation_id(request)

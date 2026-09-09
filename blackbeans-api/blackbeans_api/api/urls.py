@@ -122,12 +122,14 @@ from blackbeans_api.api.permissions_views import PermissionConflictResolveView
 from blackbeans_api.api.permissions_views import PermissionsMatrixView
 from blackbeans_api.api.system_views import HealthCheckView
 from blackbeans_api.api.system_views import InfrastructureHealthView
+from blackbeans_api.api.users_views import AdminUserAdminAreaAccessView
 from blackbeans_api.api.users_views import AdminUserCollaboratorLinkDetailView
 from blackbeans_api.api.users_views import AdminUserCollaboratorLinkView
 from blackbeans_api.api.users_views import AdminUserDetailView
 from blackbeans_api.api.users_views import AdminUserListCreateView
 from blackbeans_api.api.users_views import AdminUserWorkspaceAccessView
 from blackbeans_api.api.users_views import AssigneeDirectoryView
+from blackbeans_api.api.users_views import MeAdminAreaAccessView
 from blackbeans_api.api.users_views import MeAvatarView
 from blackbeans_api.api.users_views import MeEmailTestView
 from blackbeans_api.api.users_views import MePasswordChangeView
@@ -221,6 +223,11 @@ urlpatterns = [
         MeWorkspaceAccessView.as_view(),
         name="me-workspace-access",
     ),
+    path(
+        "me/admin-area-access",
+        MeAdminAreaAccessView.as_view(),
+        name="me-admin-area-access",
+    ),
     path("me", MeView.as_view(), name="me"),
     path("me/avatar", MeAvatarView.as_view(), name="me-avatar"),
     path("me/password", MePasswordChangeView.as_view(), name="me-password"),
@@ -290,6 +297,11 @@ urlpatterns = [
         "users/<int:user_id>/workspace-access",
         AdminUserWorkspaceAccessView.as_view(),
         name="users-workspace-access",
+    ),
+    path(
+        "users/<int:user_id>/admin-area-access",
+        AdminUserAdminAreaAccessView.as_view(),
+        name="users-admin-area-access",
     ),
     path(
         "users/<int:user_id>/collaborator-links/<uuid:collaborator_id>",

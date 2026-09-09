@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request  # noqa: TC002
 from rest_framework.views import APIView
 
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.rdstation_serializers import RdSettingsUpdateSerializer
 from blackbeans_api.api.rdstation_serializers import RdSyncCreateSerializer
 from blackbeans_api.api.responses import error_response
@@ -64,7 +64,7 @@ def _settings_payload(cfg: IntegrationSettings) -> dict:
 
 
 class RdStatusView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -83,7 +83,7 @@ class RdStatusView(APIView):
 
 
 class RdOAuthStartView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -120,7 +120,7 @@ class RdOAuthCallbackView(APIView):
 
 
 class RdOAuthDisconnectView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -132,7 +132,7 @@ class RdOAuthDisconnectView(APIView):
 
 
 class RdSettingsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def get(self, request: Request):
@@ -199,7 +199,7 @@ def _pipeline_stages(client, pipeline_id: str) -> list[dict]:
 
 
 class RdOptionsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -263,7 +263,7 @@ class RdOptionsView(APIView):
 
 
 class RdSyncPreviewView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -302,7 +302,7 @@ class RdSyncPreviewView(APIView):
 
 
 class RdSyncCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def post(self, request: Request):
@@ -345,7 +345,7 @@ class RdSyncCreateView(APIView):
 
 
 class RdSyncJobDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request, job_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -364,7 +364,7 @@ class RdSyncJobDetailView(APIView):
 
 
 class RdCompanySyncView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def post(self, request: Request, company_id: UUID):
@@ -404,7 +404,7 @@ class RdCompanySyncView(APIView):
 
 
 class RdHistoryView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)

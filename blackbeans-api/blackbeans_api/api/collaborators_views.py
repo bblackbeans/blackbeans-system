@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 from blackbeans_api.api.collaborators_serializers import CollaboratorCreateSerializer
 from blackbeans_api.api.collaborators_serializers import CollaboratorDepartmentLinkCreateSerializer
 from blackbeans_api.api.collaborators_serializers import CollaboratorUpdateSerializer
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.users_serializers import user_to_representation
@@ -93,7 +93,7 @@ def _ensure_collaborator_link_for_user(user) -> UserCollaboratorLink:
 
 
 class AdminCollaboratorListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -114,7 +114,7 @@ class AdminCollaboratorListCreateView(APIView):
 
 
 class AdminCollaboratorDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def patch(self, request: Request, collaborator_id):
         correlation_id = get_correlation_id(request)
@@ -160,7 +160,7 @@ class AdminCollaboratorDetailView(APIView):
 class AdminCollaboratorDepartmentLinkView(APIView):
     """Substitui vinculo ativo anterior em transacao; idempotente se mesmo departamento ja ativo."""
 
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("users")]
 
     def post(self, request: Request, collaborator_id):
         correlation_id = get_correlation_id(request)

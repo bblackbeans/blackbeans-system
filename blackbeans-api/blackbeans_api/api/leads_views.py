@@ -21,7 +21,7 @@ from blackbeans_api.api.leads_serializers import LeadUpdateSerializer
 from blackbeans_api.api.leads_serializers import lead_company_to_representation
 from blackbeans_api.api.leads_serializers import lead_import_to_representation
 from blackbeans_api.api.leads_serializers import lead_to_representation
-from blackbeans_api.api.permissions import IsStaffOrSuperuser
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -110,7 +110,7 @@ def _read_upload(request: Request, correlation_id: str):
 
 
 class LeadCompaniesListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def get(self, request: Request):
@@ -250,7 +250,7 @@ class LeadCompaniesListCreateView(APIView):
 
 
 class LeadCompanyDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def get(self, request: Request, company_id: UUID):
@@ -346,7 +346,7 @@ class LeadCompanyDetailView(APIView):
 
 
 class LeadsListView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [JSONParser]
 
     def get(self, request: Request):
@@ -575,7 +575,7 @@ class LeadsListView(APIView):
 
 
 class LeadDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request, lead_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -660,7 +660,7 @@ class LeadDetailView(APIView):
 
 
 class LeadOrigensView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
@@ -681,7 +681,7 @@ class LeadOrigensView(APIView):
 
 
 class LeadImportPreviewView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request: Request):
@@ -713,7 +713,7 @@ class LeadImportPreviewView(APIView):
 
 
 class LeadImportsListCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
     parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request: Request):
@@ -854,7 +854,7 @@ class LeadImportsListCreateView(APIView):
 
 
 class LeadImportDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("leads")]
 
     def delete(self, request: Request, import_id: UUID):
         correlation_id = get_correlation_id(request)

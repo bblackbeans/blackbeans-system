@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
+from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
@@ -43,9 +44,9 @@ class HealthCheckView(APIView):
 
 
 class InfrastructureHealthView(APIView):
-    """Snapshot de DB/disco/Redis + alertas ativos (staff). Pode forcar um check."""
+    """Snapshot de DB/disco/Redis + alertas ativos (staff ou area Problemas). Pode forcar um check."""
 
-    permission_classes = [IsAuthenticated, IsStaffOrSuperuser]
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("problems")]
 
     def get(self, request: Request):
         from blackbeans_api.feedback.infra_monitor import collect_infrastructure_snapshot
