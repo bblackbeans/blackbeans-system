@@ -4,6 +4,7 @@ import { FolderOutlined, LockOutlined, ReloadOutlined, ThunderboltOutlined, Unlo
 import {
   Button,
   Card,
+  Checkbox,
   Col,
   Collapse,
   DatePicker,
@@ -143,6 +144,25 @@ function personKeysFromItems(items: SprintItem[] | undefined): string[] {
   );
 }
 
+function startOfTodayMs(): number {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function isSprintItemOverdue(item: SprintItem, todayStartMs = startOfTodayMs()): boolean {
+  if (!item.end_date || item.status === "done") return false;
+  return new Date(item.end_date).getTime() < todayStartMs;
+}
+
+function compareOverdueFirst(a: SprintItem, b: SprintItem, todayStartMs: number): number {
+  const aOverdue = isSprintItemOverdue(a, todayStartMs) ? 0 : 1;
+  const bOverdue = isSprintItemOverdue(b, todayStartMs) ? 0 : 1;
+  if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+  const aEnd = a.end_date ? new Date(a.end_date).getTime() : Number.POSITIVE_INFINITY;
+  const bEnd = b.end_date ? new Date(b.end_date).getTime() : Number.POSITIVE_INFINITY;
+  return aEnd - bEnd;
+}
+
 function sumHours(items: SprintItem[]): { planned: number; logged: number } {
   return items.reduce(
     (acc, item) => ({
@@ -153,10 +173,17 @@ function sumHours(items: SprintItem[]): { planned: number; logged: number } {
   );
 }
 
-function totalsLabel(items: SprintItem[]): string {
+function countOverdue(items: SprintItem[], todayStartMs = startOfTodayMs()): number {
+  return items.reduce((acc, item) => acc + (isSprintItemOverdue(item, todayStartMs) ? 1 : 0), 0);
+}
+
+function totalsLabel(items: SprintItem[], todayStartMs = startOfTodayMs()): string {
   const { planned, logged } = sumHours(items);
   const n = items.length;
-  return `${n} tarefa${n === 1 ? "" : "s"} · ${formatLoggedHours(planned)} previstas · ${formatLoggedHours(logged)} apontadas na semana`;
+  const overdue = countOverdue(items, todayStartMs);
+  const overduePart =
+    overdue > 0 ? ` · ${overdue} atrasada${overdue === 1 ? "" : "s"}` : "";
+  return `${n} tarefa${n === 1 ? "" : "s"}${overduePart} · ${formatLoggedHours(planned)} previstas · ${formatLoggedHours(logged)} apontadas na semana`;
 }
 
 function renderPriorityTag(value?: string) {
@@ -189,9 +216,11 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
   const [projectFilter, setProjectFilter] = useState<string[]>([]);
   const [projectFilterMode, setProjectFilterMode] = useState<FilterMatchMode>("include");
   const [searchFilter, setSearchFilter] = useState("");
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
   const [openPersonKeys, setOpenPersonKeys] = useState<string[]>([]);
 
   const resolvedStatusOptions = statusOptions?.length ? statusOptions : DEFAULT_STATUS_OPTIONS;
+  const todayStartMs = useMemo(() => startOfTodayMs(), []);
 
   const fetchWeeks = useCallback(async () => {
     setLoading(true);
@@ -222,6 +251,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
     setProjectFilter([]);
     setProjectFilterMode("include");
     setSearchFilter("");
+    setOnlyOverdue(false);
   };
 
   const openWeek = async (weekId: string) => {
@@ -375,6 +405,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
       if (!matchesFilter(statusFilter, item.status, statusFilterMode)) return;
       if (!matchesFilter(priorityFilter, item.priority || "", priorityFilterMode)) return;
       if (!matchesFilter(projectFilter, item.project_name || "", projectFilterMode)) return;
+      if (onlyOverdue && !isSprintItemOverdue(item, todayStartMs)) return;
       if (query) {
         const haystack = [
           item.title,
@@ -401,10 +432,14 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
         items: [item],
       });
     });
-    return Array.from(map.values());
+    return Array.from(map.values()).map((group) => ({
+      ...group,
+      items: [...group.items].sort((a, b) => compareOverdueFirst(a, b, todayStartMs)),
+    }));
   }, [
     assigneeFilter,
     assigneeFilterMode,
+    onlyOverdue,
     priorityFilter,
     priorityFilterMode,
     projectFilter,
@@ -413,6 +448,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
     selected,
     statusFilter,
     statusFilterMode,
+    todayStartMs,
   ]);
 
   const weekTotals = useMemo(() => {
@@ -420,8 +456,9 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
     const { planned, logged } = sumHours(items);
     const people = grouped.length;
     const avgPlanned = people > 0 ? planned / people : 0;
-    return { items: items.length, planned, logged, people, avgPlanned };
-  }, [grouped]);
+    const overdue = countOverdue(items, todayStartMs);
+    return { items: items.length, planned, logged, people, avgPlanned, overdue };
+  }, [grouped, todayStartMs]);
 
   const canEditDates = Boolean(isAdmin && selected && !selected.is_locked);
   const hasActiveFilters =
@@ -429,6 +466,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
     statusFilter.length > 0 ||
     priorityFilter.length > 0 ||
     projectFilter.length > 0 ||
+    onlyOverdue ||
     Boolean(searchFilter.trim());
 
   const renderDateCell = (item: SprintItem, field: "start_date" | "end_date") => {
@@ -468,6 +506,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
           ) : (
             <Typography.Text ellipsis={{ tooltip: title }}>{title}</Typography.Text>
           )}
+          {isSprintItemOverdue(item, todayStartMs) ? <Tag color="red">Atrasada</Tag> : null}
           {item.is_recurring ? <Tag color="purple">Recorrente</Tag> : null}
           {item.always_in_sprint ? <Tag color="cyan">Na sprint</Tag> : null}
         </Space>
@@ -725,6 +764,9 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
                 onChange={(event) => setSearchFilter(event.target.value)}
                 style={{ width: 240 }}
               />
+              <Checkbox checked={onlyOverdue} onChange={(event) => setOnlyOverdue(event.target.checked)}>
+                Só atrasadas
+              </Checkbox>
               {hasActiveFilters ? (
                 <Button onClick={clearFilters}>Limpar filtros</Button>
               ) : null}
@@ -732,8 +774,12 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
           ) : null}
           {grouped.length > 0 ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              {weekTotals.items} tarefa{weekTotals.items === 1 ? "" : "s"} ·{" "}
-              {formatLoggedHours(weekTotals.planned)} previstas · {formatLoggedHours(weekTotals.logged)} apontadas na semana
+              {weekTotals.items} tarefa{weekTotals.items === 1 ? "" : "s"}
+              {weekTotals.overdue > 0
+                ? ` · ${weekTotals.overdue} atrasada${weekTotals.overdue === 1 ? "" : "s"}`
+                : ""}{" "}
+              · {formatLoggedHours(weekTotals.planned)} previstas · {formatLoggedHours(weekTotals.logged)} apontadas na
+              semana
               {weekTotals.people > 0
                 ? ` · média ${formatLoggedHours(weekTotals.avgPlanned)} previstas / pessoa`
                 : ""}
@@ -763,7 +809,7 @@ export function SprintPanel({ token, isAdmin, statusOptions, onOpenTask }: Sprin
                 ),
                 extra: (
                   <Typography.Text type="secondary" onClick={(event) => event.stopPropagation()}>
-                    {totalsLabel(group.items)}
+                    {totalsLabel(group.items, todayStartMs)}
                   </Typography.Text>
                 ),
                 children: (

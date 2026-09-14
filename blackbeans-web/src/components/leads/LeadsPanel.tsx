@@ -12,6 +12,7 @@ import {
   SettingOutlined,
   SyncOutlined,
   UploadOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -316,14 +317,9 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   const [searchDraft, setSearchDraft] = useState("");
   const [origemFilter, setOrigemFilter] = useState<string>("all");
   const [freshnessFilter, setFreshnessFilter] = useState<string>("all");
-  const [contactStatusFilter, setContactStatusFilter] = useState<string>("all");
-  const [hasCnpj, setHasCnpj] = useState(false);
   const [hasPhone, setHasPhone] = useState(false);
   const [hasEmail, setHasEmail] = useState(false);
   const [bestOnly, setBestOnly] = useState(false);
-  const [decisionMakersOnly, setDecisionMakersOnly] = useState(false);
-  const [hideGenericEmail, setHideGenericEmail] = useState(false);
-  const [hideSharedPhone, setHideSharedPhone] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [contactsByCompany, setContactsByCompany] = useState<Record<string, LeadListItem[]>>({});
@@ -341,6 +337,25 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   const [selectAllMatching, setSelectAllMatching] = useState(false);
   const [rdStatusFilter, setRdStatusFilter] = useState<string>("all");
+
+  const clearLeadSelection = useCallback(() => {
+    setSelectedRowKeys([]);
+    setSelectAllMatching(false);
+  }, []);
+
+  const uniqueSelectedKeys = useMemo(() => {
+    const seen = new Set<string>();
+    const unique: Key[] = [];
+    for (const key of selectedRowKeys) {
+      const id = String(key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      unique.push(key);
+    }
+    return unique;
+  }, [selectedRowKeys]);
+
+  const rdSelectedCount = selectAllMatching ? total : uniqueSelectedKeys.length;
   const [rdStatus, setRdStatus] = useState<RdStatusPayload | null>(null);
   const [rdSettings, setRdSettings] = useState<RdSettings | null>(null);
   const [rdConfigOpen, setRdConfigOpen] = useState(false);
@@ -444,27 +459,17 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
       if (search.trim()) params.set("q", search.trim());
       if (origemFilter !== "all") params.set("origem", origemFilter);
       if (freshnessFilter !== "all") params.set("freshness", freshnessFilter);
-      if (contactStatusFilter !== "all") params.set("contact_status", contactStatusFilter);
-      if (hasCnpj) params.set("has_cnpj", "true");
       if (hasPhone) params.set("has_phone", "true");
       if (hasEmail) params.set("has_email", "true");
       if (bestOnly) params.set("quality", "best");
-      if (decisionMakersOnly) params.set("decision_makers", "true");
-      if (hideGenericEmail) params.set("hide_generic_email", "true");
-      if (hideSharedPhone) params.set("hide_shared_phone", "true");
       if (rdStatusFilter !== "all") params.set("rd_status", rdStatusFilter);
       return params;
     },
     [
       bestOnly,
-      contactStatusFilter,
-      decisionMakersOnly,
       freshnessFilter,
-      hasCnpj,
       hasEmail,
       hasPhone,
-      hideGenericEmail,
-      hideSharedPhone,
       origemFilter,
       page,
       rdStatusFilter,
@@ -801,7 +806,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
   };
 
   const openRdPreview = async () => {
-    if (!selectAllMatching && selectedRowKeys.length < 1) {
+    if (!selectAllMatching && uniqueSelectedKeys.length < 1) {
       msg.warning("Selecione empresas ou marque todos os filtrados.");
       return;
     }
@@ -810,7 +815,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
     try {
       const filters = buildLeadQuery(false);
       if (!selectAllMatching) {
-        filters.set("company_ids", selectedRowKeys.map(String).join(","));
+        filters.set("company_ids", uniqueSelectedKeys.map(String).join(","));
       }
       const response = await apiRequest<RdPreview>(
         `/integrations/rdstation/sync/preview?${filters.toString()}`,
@@ -840,7 +845,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
       } else if (selectAllMatching) {
         body.select_all_matching = true;
       } else {
-        body.company_ids = selectedRowKeys.map(String);
+        body.company_ids = uniqueSelectedKeys.map(String);
       }
       const response = await apiRequest<{ job: RdJob }>(
         `/integrations/rdstation/sync?${filters.toString()}`,
@@ -1098,12 +1103,12 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
       {
         title: nowrapHeader("RD CRM"),
         key: "rd",
-        width: 140,
+        width: 180,
         render: (_: unknown, record: CompanyListItem) => (
-          <Space size={4} wrap>
+          <Space size={4} wrap={false} style={{ maxWidth: 170 }}>
             {rdStatusTag(record.rd_status)}
             {record.rd_deal?.stage_name ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
                 {record.rd_deal.stage_name}
               </Typography.Text>
             ) : null}
@@ -1125,21 +1130,23 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
       {
         title: nowrapHeader("Ações"),
         key: "actions",
-        width: 168,
+        width: 220,
         render: (_: unknown, record: CompanyListItem) => (
-          <Space size={4} onClick={(event) => event.stopPropagation()}>
+          <Space size={4} wrap={false} onClick={(event) => event.stopPropagation()}>
             <Button
               size="small"
               icon={<EyeOutlined />}
               title="Abrir"
               onClick={() => setSelectedCompanyId(record.id)}
             />
-            <Button
-              size="small"
-              icon={<SendOutlined />}
-              title="Enviar ao RD"
-              onClick={() => void handleRdSend({ companyId: record.id })}
-            />
+            {record.rd_status !== "synced" ? (
+              <Button
+                size="small"
+                icon={<SendOutlined />}
+                title="Enviar ao RD"
+                onClick={() => void handleRdSend({ companyId: record.id })}
+              />
+            ) : null}
             {record.rd_url ? (
               <Button
                 size="small"
@@ -1293,12 +1300,17 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
             </Button>
             <Button
               icon={<SendOutlined />}
-              disabled={total < 1 || (!selectAllMatching && selectedRowKeys.length < 1)}
+              disabled={total < 1 || rdSelectedCount < 1}
               loading={rdSending}
               onClick={() => void openRdPreview()}
             >
-              Enviar ao RD
+              {rdSelectedCount > 0 ? `Enviar ao RD (${rdSelectedCount})` : "Enviar ao RD"}
             </Button>
+            {rdSelectedCount > 0 ? (
+              <Button icon={<CloseOutlined />} onClick={clearLeadSelection}>
+                Desmarcar seleção ({rdSelectedCount})
+              </Button>
+            ) : null}
             <Button
               icon={<PlusOutlined />}
               onClick={() => {
@@ -1346,6 +1358,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               onChange={(e) => setSearchDraft(e.target.value)}
               onSearch={(value) => {
                 setPage(1);
+                clearLeadSelection();
                 setSearch(value);
               }}
               style={{ width: 280 }}
@@ -1356,6 +1369,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               options={origemOptions}
               onChange={(value) => {
                 setPage(1);
+                clearLeadSelection();
                 setOrigemFilter(value);
               }}
               showSearch
@@ -1367,31 +1381,25 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               options={[{ value: "all", label: "Novo e antigo" }, ...FRESHNESS_OPTIONS]}
               onChange={(value) => {
                 setPage(1);
+                clearLeadSelection();
                 setFreshnessFilter(value);
               }}
             />
             <Select
               style={{ minWidth: 180 }}
-              value={contactStatusFilter}
-              options={[{ value: "all", label: "Todos os status" }, ...CONTACT_STATUS_OPTIONS]}
+              value={rdStatusFilter}
+              options={RD_STATUS_OPTIONS}
               onChange={(value) => {
                 setPage(1);
-                setContactStatusFilter(value);
+                clearLeadSelection();
+                setRdStatusFilter(value);
               }}
             />
-            <Checkbox
-              checked={hasCnpj}
-              onChange={(e) => {
-                setPage(1);
-                setHasCnpj(e.target.checked);
-              }}
-            >
-              Com CNPJ
-            </Checkbox>
             <Checkbox
               checked={hasPhone}
               onChange={(e) => {
                 setPage(1);
+                clearLeadSelection();
                 setHasPhone(e.target.checked);
               }}
             >
@@ -1401,6 +1409,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               checked={hasEmail}
               onChange={(e) => {
                 setPage(1);
+                clearLeadSelection();
                 setHasEmail(e.target.checked);
               }}
             >
@@ -1410,67 +1419,53 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
               checked={bestOnly}
               onChange={(e) => {
                 setPage(1);
+                clearLeadSelection();
                 setBestOnly(e.target.checked);
               }}
             >
               Melhores leads
             </Checkbox>
             <Checkbox
-              checked={decisionMakersOnly}
-              onChange={(e) => {
-                setPage(1);
-                setDecisionMakersOnly(e.target.checked);
-              }}
-            >
-              Só decisores
-            </Checkbox>
-            <Checkbox
-              checked={hideGenericEmail}
-              onChange={(e) => {
-                setPage(1);
-                setHideGenericEmail(e.target.checked);
-              }}
-            >
-              Esconder e-mail genérico
-            </Checkbox>
-            <Checkbox
-              checked={hideSharedPhone}
-              onChange={(e) => {
-                setPage(1);
-                setHideSharedPhone(e.target.checked);
-              }}
-            >
-              Esconder telefone repetido
-            </Checkbox>
-            <Select
-              style={{ minWidth: 160 }}
-              value={rdStatusFilter}
-              options={RD_STATUS_OPTIONS}
-              onChange={(value) => {
-                setPage(1);
-                setRdStatusFilter(value);
-              }}
-            />
-            <Checkbox
               checked={selectAllMatching}
               onChange={(e) => {
                 setSelectAllMatching(e.target.checked);
-                if (e.target.checked) {
-                  setSelectedRowKeys(companies.map((row) => row.id));
-                } else {
-                  setSelectedRowKeys([]);
-                }
+                setSelectedRowKeys([]);
               }}
             >
               Todos os filtrados ({total})
             </Checkbox>
+            {rdSelectedCount > 0 && !selectAllMatching ? (
+              <Button size="small" icon={<CloseOutlined />} onClick={clearLeadSelection}>
+                Desmarcar tudo
+              </Button>
+            ) : null}
           </Space>
+
+          <Alert
+            type="info"
+            showIcon
+            title="Como enviar ao RD Station"
+            description={
+              <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                <Typography.Text>
+                  1. Marque empresas na lista — pode mudar de página; o contador soma todas as marcadas.
+                  Use <strong>Desmarcar</strong> para limpar a seleção de todas as páginas.
+                </Typography.Text>
+                <Typography.Text>
+                  2. Ou use <strong>Todos os filtrados</strong> para enviar o resultado do filtro (todas as páginas).
+                </Typography.Text>
+                <Typography.Text>
+                  3. Clique <strong>Enviar ao RD</strong>, confira o resumo e confirme. Já no CRM não reenvia no fluxo
+                  normal — use Ressincronizar.
+                </Typography.Text>
+              </Space>
+            }
+          />
 
           <Typography.Text type="secondary">
             Cada linha é uma empresa. Score de prospecção prioriza contato nominativo e
             decisor; e-mail genérico e telefone repetido perdem pontos. Use a seta à
-            esquerda para ver as pessoas. Enviar ao RD usa a lista filtrada (todas as
-            páginas) quando “Todos os filtrados” está marcado.
+            esquerda para ver as pessoas.
           </Typography.Text>
 
           {rdJob && rdJob.status !== "done" && rdJob.status !== "failed" ? (
@@ -1498,12 +1493,23 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
             loading={loading}
             dataSource={companies}
             columns={companyColumns}
-            scroll={{ x: 1380 }}
+            scroll={{ x: 1480 }}
             rowSelection={{
-              selectedRowKeys: selectAllMatching ? companies.map((row) => row.id) : selectedRowKeys,
+              selectedRowKeys: selectAllMatching ? companies.map((row) => row.id) : uniqueSelectedKeys,
+              preserveSelectedRowKeys: true,
               onChange: (keys) => {
                 setSelectAllMatching(false);
-                setSelectedRowKeys(keys);
+                // Com preserveSelectedRowKeys, `keys` já é a seleção global da tabela.
+                // Não fazer merge com o estado anterior (isso duplicava IDs a cada clique).
+                const seen = new Set<string>();
+                const unique: Key[] = [];
+                for (const key of keys) {
+                  const id = String(key);
+                  if (seen.has(id)) continue;
+                  seen.add(id);
+                  unique.push(key);
+                }
+                setSelectedRowKeys(unique);
               },
             }}
             expandable={{
@@ -2158,7 +2164,7 @@ export function LeadsPanel({ token }: LeadsPanelProps) {
         sending={rdSending}
         preview={rdPreview}
         selectAll={selectAllMatching}
-        selectedCount={selectedRowKeys.length}
+        selectedCount={rdSelectedCount}
         onClose={() => setRdPreviewOpen(false)}
         onConfirm={() => void handleRdSend()}
       />

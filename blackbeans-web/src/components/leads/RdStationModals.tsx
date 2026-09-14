@@ -86,7 +86,7 @@ export const RD_STATUS_OPTIONS = [
   { value: "all", label: "Todos no RD" },
   { value: "not_sent", label: "Não enviados" },
   { value: "syncing", label: "Enviando" },
-  { value: "synced", label: "No CRM" },
+  { value: "synced", label: "Enviados (No CRM)" },
   { value: "pending_update", label: "Atualizar" },
   { value: "error", label: "Com erro" },
 ];
@@ -324,7 +324,7 @@ export function RdPreviewModal({
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             {selectAll
               ? `Todos os filtrados: ${preview.found} empresa(s) nas páginas da lista atual.`
-              : `${selectedCount} empresa(s) marcada(s) nesta página.`}
+              : `${selectedCount} empresa(s) selecionada(s).`}
           </Typography.Paragraph>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             Elegíveis agora (não enviadas ou com erro): <strong>{preview.eligible}</strong>. Já no
