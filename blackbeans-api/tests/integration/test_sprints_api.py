@@ -102,7 +102,12 @@ def item_by_title(response, title: str) -> dict:
     raise AssertionError(f"item not found: {title}")
 
 
-def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client, admin_user, collaborator):
+def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client, admin_user, collaborator, monkeypatch):
+    # Garante criterio de atraso estavel: "hoje" = segunda da semana gerada.
+    monkeypatch.setattr(
+        "blackbeans_api.api.sprints_views.timezone.localdate",
+        lambda: WEEK_START,
+    )
     board, group = make_board()
     wednesday = WEEK_START + timedelta(days=2)
     next_wednesday = WEEK_START + timedelta(days=9)
@@ -165,6 +170,15 @@ def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client,
         board=board,
         group=group,
         assignee=collaborator,
+        title="Atrasada ja concluida",
+        task_status="done",
+        start=noon(previous_monday),
+        end=noon(previous_friday),
+    )
+    make_task(
+        board=board,
+        group=group,
+        assignee=collaborator,
         title="Relatorio semanal",
         task_status="todo",
         start=noon(wednesday),
@@ -201,7 +215,9 @@ def test_generate_includes_overlap_all_statuses_role_and_recurring(admin_client,
     assert "Tarefa do admin" in found
     assert "Reunioes internas" in found
     assert "Sem data" not in found
-    assert "Semana anterior" not in found
+    # Atrasada aberta (fim antes de hoje) entra na pasta; concluida nao.
+    assert "Semana anterior" in found
+    assert "Atrasada ja concluida" not in found
 
     recurring = item_by_title(response, "Relatorio semanal")
     assert recurring["is_recurring"] is True

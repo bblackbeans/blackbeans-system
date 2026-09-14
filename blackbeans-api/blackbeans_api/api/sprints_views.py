@@ -198,7 +198,12 @@ def week_to_representation(week: SprintWeek, *, include_items: bool = False) -> 
 
 
 def generate_snapshot(week: SprintWeek) -> int:
+    """Monta a pasta da semana: overlap de datas, always_in_sprint e atrasadas abertas."""
     start_dt, end_dt = week_bounds_dt(week.week_start, week.week_end)
+    today_start = timezone.make_aware(
+        datetime.combine(timezone.localdate(), time.min),
+        timezone.get_current_timezone(),
+    )
     qs = (
         Task.objects.filter(assignee_id__isnull=False)
         .annotate(
@@ -207,7 +212,8 @@ def generate_snapshot(week: SprintWeek) -> int:
         )
         .filter(
             Q(always_in_sprint=True)
-            | Q(span_start__lte=end_dt, span_end__gte=start_dt),
+            | Q(span_start__lte=end_dt, span_end__gte=start_dt)
+            | (Q(end_date__lt=today_start) & ~Q(status=Task.Status.DONE)),
         )
         .select_related("assignee", "board__project__client")
     )
