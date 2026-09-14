@@ -1448,7 +1448,6 @@ function EffortHoursInput({
       placeholder="Esforco"
       value={pickerValue}
       onChange={commit}
-      onSelect={commit}
     />
   );
 }
