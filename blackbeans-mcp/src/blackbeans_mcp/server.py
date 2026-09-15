@@ -12,14 +12,18 @@ from fastmcp import FastMCP
 from blackbeans_mcp.client import BlackBeansApiError
 from blackbeans_mcp.client import BlackBeansClient
 from blackbeans_mcp.client import compact_task
+from blackbeans_mcp.client import is_task_overdue
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 mcp = FastMCP(
     "BlackBeans",
     instructions=(
-        "MCP do BlackBeans System. Use whoami e list_my_tasks para contexto. "
-        "Prefira IDs retornados pelas tools. Mutacoes sensiveis exigem confirm=true quando indicado."
+        "MCP do BlackBeans System. Autentique com Authorization: Bearer bb_pat_... "
+        "(token gerado na Conta) ou BLACKBEANS_PAT no stdio. "
+        "Use whoami e list_my_tasks para contexto. Prefira IDs retornados pelas tools. "
+        "Mutacoes sensiveis exigem confirm=true quando indicado. "
+        "delete_task so funciona para staff/admin."
     ),
 )
 
@@ -51,8 +55,12 @@ def whoami() -> str:
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def list_my_tasks(status: str | None = None, priority: str | None = None) -> str:
-    """Lista tarefas atribuídas ao usuário autenticado."""
+def list_my_tasks(
+    status: str | None = None,
+    priority: str | None = None,
+    overdue: bool = False,
+) -> str:
+    """Lista tarefas atribuídas ao usuário autenticado. Use overdue=true para só atrasadas."""
     try:
         params: dict[str, Any] = {}
         if status:
@@ -61,7 +69,9 @@ def list_my_tasks(status: str | None = None, priority: str | None = None) -> str
             params["priority"] = priority
         data = _client().request("GET", "/my-tasks", params=params, tool="list_my_tasks")
         tasks = [compact_task(row) for row in data.get("tasks", [])]
-        return _ok({"count": len(tasks), "tasks": tasks})
+        if overdue:
+            tasks = [row for row in tasks if is_task_overdue(row)]
+        return _ok({"count": len(tasks), "overdue_only": overdue, "tasks": tasks})
     except Exception as exc:
         return _err(exc)
 
@@ -74,7 +84,7 @@ def search_tasks(
     assignee_id: str | None = None,
     roots_only: bool = True,
 ) -> str:
-    """Busca tarefas visíveis ao usuário (filtros opcionais)."""
+    """Busca tarefas visíveis ao usuário. Filtros: search, board_id, status, assignee_id."""
     try:
         params: dict[str, Any] = {}
         if search:
@@ -200,6 +210,24 @@ def set_task_status(task_id: str, status: str, complete: bool = False) -> str:
             )
         task = data.get("task") or data
         return _ok(compact_task(task) if isinstance(task, dict) else task)
+    except Exception as exc:
+        return _err(exc)
+
+
+@mcp.tool(annotations={"destructiveHint": True})
+def delete_task(task_id: str, confirm: bool = False) -> str:
+    """Exclui uma tarefa. Exige confirm=true. Apenas staff/admin na API."""
+    if not confirm:
+        return _ok(
+            {
+                "needs_confirm": True,
+                "task_id": task_id,
+                "message": "Confirme com confirm=true para excluir a tarefa.",
+            },
+        )
+    try:
+        data = _client().request("DELETE", f"/tasks/{task_id}", tool="delete_task")
+        return _ok(data)
     except Exception as exc:
         return _err(exc)
 
