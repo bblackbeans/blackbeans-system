@@ -204,6 +204,24 @@ def set_task_status(task_id: str, status: str, complete: bool = False) -> str:
         return _err(exc)
 
 
+@mcp.tool(annotations={"destructiveHint": True})
+def delete_task(task_id: str, confirm: bool = False) -> str:
+    """Exclui uma tarefa. Exige confirm=true. Apenas staff/admin na API."""
+    if not confirm:
+        return _ok(
+            {
+                "needs_confirm": True,
+                "task_id": task_id,
+                "message": "Confirme com confirm=true para excluir a tarefa.",
+            },
+        )
+    try:
+        data = _client().request("DELETE", f"/tasks/{task_id}", tool="delete_task")
+        return _ok(data)
+    except Exception as exc:
+        return _err(exc)
+
+
 @mcp.tool
 def set_task_assignee(task_id: str, assignee_id: int) -> str:
     """Define o responsável da tarefa."""
