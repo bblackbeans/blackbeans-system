@@ -78,6 +78,22 @@ services:
     ports:
       - "13000:3000"
 
+  mcp:
+    build:
+      context: ..
+      dockerfile: infra/docker/mcp.Dockerfile
+    container_name: blackbeans-mcp
+    restart: unless-stopped
+    env_file:
+      - ./env/mcp.env.example
+    volumes:
+      - ../blackbeans-mcp:/app
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "18100:8100"
+
   proxy:
     image: nginx:1.27-alpine
     container_name: blackbeans-proxy

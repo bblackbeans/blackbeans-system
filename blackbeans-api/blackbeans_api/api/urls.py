@@ -11,6 +11,8 @@ from blackbeans_api.api.agents_views import AgentListView
 from blackbeans_api.api.agents_views import AgentRunDetailView
 from blackbeans_api.api.agents_views import AgentRunListView
 from blackbeans_api.api.agents_views import AgentRunNowView
+from blackbeans_api.api.api_tokens_views import MeApiTokenDetailView
+from blackbeans_api.api.api_tokens_views import MeApiTokenListCreateView
 from blackbeans_api.api.audit_views import AuditDashboardView
 from blackbeans_api.api.audit_views import AuditLogsView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorDepartmentLinkView
@@ -232,6 +234,8 @@ urlpatterns = [
     path("me/avatar", MeAvatarView.as_view(), name="me-avatar"),
     path("me/password", MePasswordChangeView.as_view(), name="me-password"),
     path("me/email-test", MeEmailTestView.as_view(), name="me-email-test"),
+    path("me/api-tokens", MeApiTokenListCreateView.as_view(), name="me-api-tokens"),
+    path("me/api-tokens/<uuid:token_id>", MeApiTokenDetailView.as_view(), name="me-api-tokens-detail"),
     path("assignees", AssigneeDirectoryView.as_view(), name="assignees-directory"),
     path(
         "permissions/bulk/preview",

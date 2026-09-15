@@ -199,3 +199,55 @@ class UserCollaboratorLink(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id} -> {self.collaborator_id}"
+
+
+API_TOKEN_SCOPES = frozenset(
+    {
+        "tasks:read",
+        "tasks:write",
+        "time:write",
+        "sprints:read",
+        "sprints:write",
+        "*",
+    },
+)
+
+DEFAULT_API_TOKEN_SCOPES = [
+    "tasks:read",
+    "tasks:write",
+    "time:write",
+    "sprints:read",
+]
+
+
+class UserApiToken(models.Model):
+    """Personal Access Token para MCP e automacoes (Bearer bb_pat_*)."""
+
+    id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = ForeignKey(User, on_delete=CASCADE, related_name="api_tokens")
+    name = CharField(_("Name"), max_length=120)
+    token_prefix = CharField(max_length=16)
+    token_hash = CharField(max_length=64, unique=True, db_index=True)
+    scopes = JSONField(default=list, blank=True)
+    expires_at = DateTimeField(null=True, blank=True)
+    revoked_at = DateTimeField(null=True, blank=True)
+    last_used_at = DateTimeField(null=True, blank=True)
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("User API token")
+        verbose_name_plural = _("User API tokens")
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.token_prefix}…)"
+
+    @property
+    def is_active(self) -> bool:
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None:
+            from django.utils import timezone
+
+            return self.expires_at > timezone.now()
+        return True

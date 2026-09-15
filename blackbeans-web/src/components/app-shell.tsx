@@ -91,6 +91,7 @@ import { toBrowserMediaSrc } from "@/lib/media";
 import { isEmptyRichHtml, toEditorHtml } from "@/lib/rich-content";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
+import { ApiTokensPanel } from "@/components/account/ApiTokensPanel";
 import { TaskIntakePanel } from "@/components/intake/TaskIntakePanel";
 import { LeadsPanel } from "@/components/leads/LeadsPanel";
 import { SprintPanel } from "@/components/sprints/SprintPanel";
@@ -10729,6 +10730,9 @@ export function AppShell() {
                           </Space>
                         </Space>
                       </Card>
+                    </Col>
+                    <Col xs={24}>
+                      <ApiTokensPanel token={token} />
                     </Col>
                     <Col xs={24} lg={12}>
                       <Card title="Alterar senha">
