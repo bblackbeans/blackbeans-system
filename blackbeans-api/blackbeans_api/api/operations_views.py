@@ -45,6 +45,13 @@ from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.permissions import IsSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
+from blackbeans_api.api.authentication import require_token_scope
+from blackbeans_api.api.task_access import boards_queryset_for_user
+from blackbeans_api.api.task_access import tasks_queryset_for_user
+from blackbeans_api.api.task_access import user_can_access_board
+from blackbeans_api.api.task_access import user_can_access_task
+from blackbeans_api.api.task_access import user_can_delete_task
+from blackbeans_api.api.task_access import user_can_mutate_task
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.governance.models import Board
 from blackbeans_api.governance.models import BoardGroup
@@ -897,7 +904,7 @@ class BoardListCreateView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        queryset = Board.objects.select_related("project__portfolio").order_by("created_at")
+        queryset = boards_queryset_for_user(request.user).order_by("created_at")
         project_id = request.query_params.get("project_id")
         if project_id:
             queryset = queryset.filter(project_id=project_id)
@@ -932,8 +939,16 @@ class BoardGroupListCreateView(APIView):
     def get(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)
         try:
-            board = Board.objects.get(pk=board_id)
+            board = Board.objects.select_related("project__portfolio").get(pk=board_id)
         except Board.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_not_found",
+                message="Board nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_board(request.user, board):
             return error_response(
                 correlation_id=correlation_id,
                 code="board_not_found",
@@ -1055,8 +1070,16 @@ class BoardDetailView(APIView):
     def get(self, request: Request, board_id: UUID):
         correlation_id = get_correlation_id(request)
         try:
-            board = Board.objects.select_related("project").get(pk=board_id)
+            board = Board.objects.select_related("project__portfolio").get(pk=board_id)
         except Board.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_not_found",
+                message="Board nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_board(request.user, board):
             return error_response(
                 correlation_id=correlation_id,
                 code="board_not_found",
@@ -1206,8 +1229,10 @@ class TaskListCreateView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:read")
         queryset = (
-            Task.objects.select_related("group", "board", "assignee")
+            tasks_queryset_for_user(request.user)
+            .select_related("group", "board", "assignee")
             .annotate(subtasks_count=Count("subtasks"))
             .order_by("created_at")
         )
@@ -1217,6 +1242,7 @@ class TaskListCreateView(APIView):
         status_filter = request.query_params.get("status")
         search = (request.query_params.get("search") or "").strip()
         roots_only = (request.query_params.get("roots_only") or "").strip().lower()
+        assignee_id = request.query_params.get("assignee_id")
 
         if board_id:
             queryset = queryset.filter(board_id=board_id)
@@ -1230,6 +1256,8 @@ class TaskListCreateView(APIView):
             queryset = queryset.filter(status=status_filter)
         if search:
             queryset = queryset.filter(title__icontains=search)
+        if assignee_id:
+            queryset = queryset.filter(assignee_id=assignee_id)
 
         return success_response(
             correlation_id=correlation_id,
@@ -1238,8 +1266,30 @@ class TaskListCreateView(APIView):
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         serializer = TaskWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        board = None
+        group_id = serializer.validated_data.get("group_id")
+        parent_id = serializer.validated_data.get("parent_id")
+        if group_id:
+            try:
+                board = BoardGroup.objects.select_related("board").get(pk=group_id).board
+            except BoardGroup.DoesNotExist:
+                board = None
+        elif parent_id:
+            try:
+                board = Task.objects.select_related("board").get(pk=parent_id).board
+            except Task.DoesNotExist:
+                board = None
+        if board is not None and not user_can_access_board(request.user, board):
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_forbidden",
+                message="Sem acesso ao quadro desta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
         task = serializer.save()
         _sync_task_placement_by_status(task)
         actor_name = get_user_display_name(request.user)
@@ -1262,9 +1312,18 @@ class TaskDetailView(APIView):
 
     def get(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:read")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
             return error_response(
                 correlation_id=correlation_id,
                 code="task_not_found",
@@ -1277,8 +1336,9 @@ class TaskDetailView(APIView):
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -1286,6 +1346,14 @@ class TaskDetailView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para alterar esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         serializer = TaskWriteSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -1361,8 +1429,9 @@ class TaskDetailView(APIView):
 
     def delete(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -1370,6 +1439,14 @@ class TaskDetailView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_delete_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_delete_forbidden",
+                message="Apenas administradores podem excluir tarefas.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         if TimeLog.objects.filter(task=task, status=TimeLog.Status.ACTIVE).exists():
             return error_response(
@@ -1395,8 +1472,9 @@ class TaskAssigneeView(APIView):
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -1404,6 +1482,14 @@ class TaskAssigneeView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para alterar esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         serializer = TaskAssigneeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1435,6 +1521,7 @@ class MyTasksView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:read")
         # Minhas tarefas (raiz + subtarefas) e pais das minhas subtarefas (para aninhar na UI).
         my_assigned = Task.objects.filter(assignee=request.user)
         root_ids = my_assigned.filter(parent__isnull=True).values_list("pk", flat=True)
@@ -1524,9 +1611,10 @@ class TaskStatusView(APIView):
 
     def patch(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         is_admin = bool(request.user.is_staff or request.user.is_superuser)
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -1534,6 +1622,14 @@ class TaskStatusView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not is_admin and not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para alterar o status desta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         if not is_admin and task.assignee_id != request.user.id:
             return error_response(
@@ -1604,9 +1700,18 @@ class TaskTimeStartView(APIView):
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "time:write")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
             return error_response(
                 correlation_id=correlation_id,
                 code="task_not_found",
@@ -1700,6 +1805,7 @@ class TaskTimePauseView(APIView):
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "time:write")
         try:
             task = Task.objects.get(pk=task_id)
         except Task.DoesNotExist:
@@ -1760,6 +1866,7 @@ class TaskTimeResumeView(APIView):
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "time:write")
         try:
             task = Task.objects.get(pk=task_id)
         except Task.DoesNotExist:
@@ -1835,6 +1942,7 @@ class TaskTimeManualView(APIView):
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "time:write")
         try:
             task = Task.objects.select_related("board__project__portfolio__workspace").get(pk=task_id)
         except Task.DoesNotExist:
@@ -1898,8 +2006,9 @@ class TaskCompleteView(APIView):
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
         try:
-            task = Task.objects.get(pk=task_id)
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
         except Task.DoesNotExist:
             return error_response(
                 correlation_id=correlation_id,
@@ -1907,6 +2016,14 @@ class TaskCompleteView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para concluir esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         if TaskDependency.objects.filter(task=task, depends_on__status=Task.Status.BLOCKED).exists():
             return error_response(

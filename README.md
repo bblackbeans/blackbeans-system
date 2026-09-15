@@ -6,7 +6,8 @@ Bootstrap inicial da plataforma com backend Django/DRF e frontend Next.js, segui
 
 - `blackbeans-api/`: backend gerado a partir de `cookiecutter-django`
 - `blackbeans-web/`: frontend gerado com `create-next-app` (TypeScript + App Router)
-- `infra/`: stack Docker de desenvolvimento (`api`, `web`, `worker`, `redis`, `postgres`, `proxy`)
+- `blackbeans-mcp/`: servidor MCP (FastMCP) para IAs operarem tarefas/status/sprints
+- `infra/`: stack Docker de desenvolvimento (`api`, `web`, `worker`, `redis`, `postgres`, `proxy`, `mcp`)
 
 ## Requisitos locais
 
@@ -35,6 +36,7 @@ docker compose -f infra/docker-compose.dev.yml up --build
 - Web (direto): `http://localhost:13000`
 - API (direto): `http://localhost:18000`
 - Proxy (entrada unica web + api): `http://localhost:18080`
+- MCP HTTP (opcional): `http://localhost:18100/mcp` — ver [`blackbeans-mcp/README.md`](blackbeans-mcp/README.md)
 
 ## Convencoes iniciais
 

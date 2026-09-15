@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
+from blackbeans_api.api.authentication import require_token_scope
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.governance.models import SprintItem
 from blackbeans_api.governance.models import SprintWeek
@@ -248,6 +249,7 @@ class SprintWeekListView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:read")
         weeks = list(SprintWeek.objects.all()[:52])
         monday, friday = monday_friday_for()
         has_current = any(row.week_start == monday and row.week_end == friday for row in weeks)
@@ -272,6 +274,7 @@ class SprintWeekGenerateView(APIView):
 
     def post(self, request: Request):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:write")
         raw = request.data.get("week_start")
         parsed = parse_date(str(raw)) if raw else None
         monday, friday = monday_friday_for(parsed)
@@ -300,6 +303,7 @@ class SprintWeekDetailView(APIView):
 
     def get(self, request: Request, sprint_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:read")
         try:
             week = SprintWeek.objects.prefetch_related("items__assignee", "items__task").get(pk=sprint_id)
         except SprintWeek.DoesNotExist:
@@ -321,6 +325,7 @@ class SprintWeekLockView(APIView):
 
     def post(self, request: Request, sprint_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:write")
         try:
             week = SprintWeek.objects.get(pk=sprint_id)
         except SprintWeek.DoesNotExist:
@@ -353,6 +358,7 @@ class SprintWeekUnlockView(APIView):
 
     def post(self, request: Request, sprint_id: UUID):
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:write")
         try:
             week = SprintWeek.objects.get(pk=sprint_id)
         except SprintWeek.DoesNotExist:
@@ -385,6 +391,7 @@ class SprintItemDateView(APIView):
 
     def patch(self, request: Request, sprint_id: UUID, item_id: UUID):  # noqa: C901, PLR0912
         correlation_id = get_correlation_id(request)
+        require_token_scope(request, "sprints:write")
         try:
             item = SprintItem.objects.select_related("sprint", "task__board__project__client").get(
                 pk=item_id, sprint_id=sprint_id

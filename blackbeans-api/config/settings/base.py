@@ -333,6 +333,7 @@ SOCIALACCOUNT_FORMS = {"signup": "blackbeans_api.users.forms.UserSocialSignupFor
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
+        "blackbeans_api.api.authentication.PersonalAccessTokenAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
