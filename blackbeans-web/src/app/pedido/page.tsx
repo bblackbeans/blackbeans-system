@@ -403,10 +403,7 @@ export default function PedidoPublicoPage() {
           <Form.Item
             name="contact_email"
             label="E-mail de contato"
-            rules={[
-              { required: true, message: "Informe o e-mail." },
-              { type: "email", message: "E-mail invalido." },
-            ]}
+            rules={[{ type: "email", message: "E-mail invalido." }]}
           >
             <Input type="email" />
           </Form.Item>

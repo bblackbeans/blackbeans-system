@@ -16,6 +16,7 @@ from blackbeans_api.integrations.client import RdHttpError
 from blackbeans_api.integrations.crypto import decrypt_secret
 from blackbeans_api.integrations.crypto import encrypt_secret
 from blackbeans_api.integrations.jobs import create_sync_job
+from blackbeans_api.integrations.jobs import eligible_company_ids
 from blackbeans_api.integrations.jobs import preview_sync
 from blackbeans_api.integrations.models import IntegrationCredential
 from blackbeans_api.integrations.models import LocalType
@@ -185,6 +186,51 @@ def test_mapping_blank_remote_id_not_unique():
         sync_status=SyncStatus.SYNCING,
     )
     assert RdEntityMapping.objects.filter(remote_id="").count() == 2
+
+
+def test_force_resync_includes_stuck_syncing_companies():
+    stuck = _company(name="Travada", name_normalized="travada", cnpj=None)
+    RdEntityMapping.objects.create(
+        provider=Provider.RD_STATION_CRM,
+        local_type=LocalType.COMPANY,
+        local_id=stuck.pk,
+        remote_type=RemoteType.ORGANIZATION,
+        remote_id="",
+        sync_status=SyncStatus.SYNCING,
+    )
+    assert eligible_company_ids([stuck.pk], force_resync=False) == []
+    assert eligible_company_ids([stuck.pk], force_resync=True) == [stuck.pk]
+    user = UserFactory.create(is_staff=True)
+    job = create_sync_job(
+        params={},
+        company_ids=[stuck.pk],
+        select_all_matching=False,
+        force_resync=True,
+        user=user,
+    )
+    assert job.total == 1
+
+
+def test_token_decrypt_error_clears_syncing_status():
+    _connect()
+    company = _company()
+    mapping = RdEntityMapping.objects.create(
+        provider=Provider.RD_STATION_CRM,
+        local_type=LocalType.COMPANY,
+        local_id=company.pk,
+        remote_type=RemoteType.ORGANIZATION,
+        remote_id="",
+        sync_status=SyncStatus.ERROR,
+    )
+    cred = IntegrationCredential.objects.get(provider=Provider.RD_STATION_CRM)
+    cred.access_token_encrypted = "nao-e-fernet"
+    cred.refresh_token_encrypted = "tambem-invalido"
+    cred.save(update_fields=["access_token_encrypted", "refresh_token_encrypted"])
+    result = sync_company(company.pk, force_resync=True)
+    assert result["status"] == "error"
+    mapping.refresh_from_db()
+    assert mapping.sync_status == SyncStatus.ERROR
+    assert "Token criptografado invalido" in mapping.last_error
 
 
 @override_settings(

@@ -87,7 +87,7 @@ def _claim_mapping(
                 sync_status=SyncStatus.SYNCING,
             )
             return mapping, "created"
-        if mapping.sync_status == SyncStatus.SYNCING:
+        if mapping.sync_status == SyncStatus.SYNCING and not force_resync:
             return None, "syncing"
         if mapping.sync_status == SyncStatus.SYNCED and not force_resync:
             return None, "already_synced"
@@ -356,8 +356,8 @@ def sync_company(
             job=job,
         )
         return {"status": "skipped", "reason": reason}
-    client = connected_client(transport=transport, max_retry_after=20)
     try:
+        client = connected_client(transport=transport, max_retry_after=20)
         org_id = _sync_organization(client, company, cfg, mapping)
         if not org_id:
             _finish_mapping(mapping, remote_id="", error="Organizacao sem id remoto.")
@@ -428,4 +428,15 @@ def sync_company(
         )
         if exc.retryable:
             raise
+        return {"status": "error", "reason": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        # Ex.: token criptografado invalido — nao deixar mapping em "syncing".
+        _finish_mapping(mapping, remote_id=mapping.remote_id, error=str(exc))
+        _log(
+            company_id=company.pk,
+            action="sync_company",
+            success=False,
+            message=str(exc),
+            job=job,
+        )
         return {"status": "error", "reason": str(exc)}

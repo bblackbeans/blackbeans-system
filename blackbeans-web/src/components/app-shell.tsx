@@ -9265,6 +9265,9 @@ export function AppShell() {
                                       contact_name: String(row.contact_name ?? ""),
                                       financial_emails: String(row.financial_emails ?? ""),
                                       description: String(row.description ?? ""),
+                                      portal_username: String(row.portal_username ?? ""),
+                                      portal_enabled: Boolean(row.portal_enabled),
+                                      portal_password: undefined,
                                     });
                                     setManageClientModal({ mode: "edit", clientId });
                                   }}
@@ -13204,6 +13207,11 @@ export function AppShell() {
                   contact_name: String(values.contact_name ?? ""),
                   financial_emails: String(values.financial_emails ?? ""),
                   description: values.description ?? "",
+                  portal_username: String(values.portal_username ?? "").trim() || null,
+                  portal_enabled: Boolean(values.portal_enabled),
+                  ...(String(values.portal_password ?? "").trim()
+                    ? { portal_password: String(values.portal_password) }
+                    : {}),
                 },
               });
               if (!response.ok) {
@@ -13221,6 +13229,11 @@ export function AppShell() {
                   contact_name: String(values.contact_name ?? ""),
                   financial_emails: String(values.financial_emails ?? ""),
                   description: values.description ?? "",
+                  portal_username: String(values.portal_username ?? "").trim() || null,
+                  portal_enabled: Boolean(values.portal_enabled),
+                  ...(String(values.portal_password ?? "").trim()
+                    ? { portal_password: String(values.portal_password) }
+                    : {}),
                 },
               });
               if (!response.ok) {
@@ -13272,6 +13285,29 @@ export function AppShell() {
           </Form.Item>
           <Form.Item name="description" label="Descricao">
             <Input.TextArea rows={3} />
+          </Form.Item>
+          <Typography.Title level={5} style={{ marginTop: 8 }}>
+            Acesso portal
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+            Login unico da empresa em /portal/login (visualizar e criar pedidos, sem editar/excluir).
+          </Typography.Paragraph>
+          <Form.Item name="portal_enabled" label="Portal ativo" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="portal_username" label="Usuario do portal">
+            <Input placeholder="empresa.login" autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="portal_password"
+            label={manageClientModal?.mode === "edit" ? "Nova senha do portal" : "Senha do portal"}
+            extra={
+              manageClientModal?.mode === "edit"
+                ? "Deixe em branco para manter a senha atual."
+                : undefined
+            }
+          >
+            <Input.Password autoComplete="new-password" />
           </Form.Item>
         </Form>
       </Modal>
@@ -14325,8 +14361,8 @@ export function AppShell() {
               apiMessage.error("Nao foi possivel preparar o grupo para criar a tarefa.");
               return;
             }
-            const startIso = fromDatetimeLocalValue(values.start_date);
-            const endIso = fromDatetimeLocalValue(values.end_date);
+            const startIso = fromDateInputValue(values.start_date);
+            const endIso = fromDateInputValue(values.end_date);
             if (startIso && endIso && new Date(startIso).getTime() > new Date(endIso).getTime()) {
               apiMessage.error("Prazo de inicio deve ser anterior ou igual ao prazo final.");
               return;
@@ -14452,12 +14488,12 @@ export function AppShell() {
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="start_date" label="Prazo inicio" extra="Opcional">
-                <Input type="datetime-local" style={{ width: "100%", maxWidth: "100%" }} />
+                <Input type="date" style={{ width: "100%", maxWidth: "100%" }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} style={{ minWidth: 0 }}>
               <Form.Item name="end_date" label="Prazo final" extra="Opcional">
-                <Input type="datetime-local" style={{ width: "100%", maxWidth: "100%" }} />
+                <Input type="date" style={{ width: "100%", maxWidth: "100%" }} />
               </Form.Item>
             </Col>
           </Row>
@@ -15228,6 +15264,19 @@ export function AppShell() {
                           const prev = repliesByParent.get(parentId) ?? [];
                           prev.push(row);
                           repliesByParent.set(parentId, prev);
+                        }
+                        const createdAtMs = (iso: string | null | undefined) => {
+                          const ms = iso ? new Date(iso).getTime() : 0;
+                          return Number.isFinite(ms) ? ms : 0;
+                        };
+                        roots.sort(
+                          (a, b) => createdAtMs(b.comment.created_at) - createdAtMs(a.comment.created_at),
+                        );
+                        for (const [parentId, replies] of repliesByParent) {
+                          replies.sort(
+                            (a, b) => createdAtMs(a.comment.created_at) - createdAtMs(b.comment.created_at),
+                          );
+                          repliesByParent.set(parentId, replies);
                         }
                         if (roots.length === 0) return <Empty description="Ainda nao ha atualizacoes nesta tarefa." />;
                         return roots.map((root) => {

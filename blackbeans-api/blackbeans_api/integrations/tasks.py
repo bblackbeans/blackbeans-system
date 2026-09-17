@@ -96,6 +96,12 @@ def sync_rd_company_item(_self, item_id: str) -> dict:
         item.save(update_fields=["status", "error_message", "updated_at"])
         _refresh_job(item.job)
         return {"ok": False, "status": "error"}
+    except Exception as exc:  # noqa: BLE001
+        item.status = JobItemStatus.ERROR
+        item.error_message = str(exc)[:2000]
+        item.save(update_fields=["status", "error_message", "updated_at"])
+        _refresh_job(item.job)
+        return {"ok": False, "status": "error", "reason": str(exc)}
     status = result.get("status")
     if status == "synced":
         item.status = JobItemStatus.SYNCED

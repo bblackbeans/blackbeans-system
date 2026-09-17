@@ -74,13 +74,10 @@ def company_sync_status_map(company_ids: list[UUID]) -> dict[UUID, str]:
 
 
 def eligible_company_ids(company_ids: list[UUID], *, force_resync: bool) -> list[UUID]:
-    status_map = company_sync_status_map(company_ids)
     if force_resync:
-        return [
-            company_id
-            for company_id in company_ids
-            if status_map.get(company_id) != SyncStatus.SYNCING
-        ]
+        # Inclui SYNCING: jobs mortos deixam mapping preso em "Enviando".
+        return list(company_ids)
+    status_map = company_sync_status_map(company_ids)
     selected = []
     for company_id in company_ids:
         status = status_map.get(company_id)
