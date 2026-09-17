@@ -22,6 +22,12 @@ from blackbeans_api.api.client_requests_views import AdminHoursDashboardView
 from blackbeans_api.api.client_requests_views import ClientRequestConvertView
 from blackbeans_api.api.client_requests_views import ClientRequestListView
 from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateView
+from blackbeans_api.api.client_portal_views import ClientPortalLoginView
+from blackbeans_api.api.client_portal_views import ClientPortalMeView
+from blackbeans_api.api.client_portal_views import ClientPortalRequestApproveView
+from blackbeans_api.api.client_portal_views import ClientPortalRequestDetailView
+from blackbeans_api.api.client_portal_views import ClientPortalRequestListCreateView
+from blackbeans_api.api.client_portal_views import ClientPortalRequestRevisionView
 from blackbeans_api.api.clients_views import ClientDetailView
 from blackbeans_api.api.clients_views import ClientsListCreateView
 from blackbeans_api.api.clients_views import ClientStatusToggleView
@@ -148,6 +154,24 @@ urlpatterns = [
     path("clients", ClientsListCreateView.as_view(), name="clients-list-create"),
     path("clients/<uuid:client_id>/status-toggle", ClientStatusToggleView.as_view(), name="clients-status-toggle"),
     path("clients/<uuid:client_id>", ClientDetailView.as_view(), name="clients-detail"),
+    path("client-portal/auth/login", ClientPortalLoginView.as_view(), name="client-portal-login"),
+    path("client-portal/me", ClientPortalMeView.as_view(), name="client-portal-me"),
+    path("client-portal/requests", ClientPortalRequestListCreateView.as_view(), name="client-portal-requests"),
+    path(
+        "client-portal/requests/<uuid:request_id>",
+        ClientPortalRequestDetailView.as_view(),
+        name="client-portal-request-detail",
+    ),
+    path(
+        "client-portal/requests/<uuid:request_id>/approve",
+        ClientPortalRequestApproveView.as_view(),
+        name="client-portal-request-approve",
+    ),
+    path(
+        "client-portal/requests/<uuid:request_id>/request-revision",
+        ClientPortalRequestRevisionView.as_view(),
+        name="client-portal-request-revision",
+    ),
     path("client-requests", ClientRequestListView.as_view(), name="client-requests-list"),
     path("client-requests/public", ClientRequestPublicCreateView.as_view(), name="client-requests-public"),
     path(

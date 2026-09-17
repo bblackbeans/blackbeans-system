@@ -2433,7 +2433,7 @@ class TaskCommentsView(APIView):
             TaskComment.objects.filter(task=task)
             .select_related("author")
             .prefetch_related("attachments")
-            .order_by("created_at")
+            .order_by("-created_at")
         )
         return success_response(
             correlation_id=correlation_id,

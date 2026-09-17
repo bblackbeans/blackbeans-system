@@ -120,6 +120,7 @@ def client_request_to_representation(item: ClientRequest) -> dict:
     ] if hasattr(item, "attachments") else []
     return {
         "id": str(item.pk),
+        "client_id": str(item.client_id) if item.client_id else None,
         "client_name": item.client_name,
         "contact_name": item.contact_name,
         "contact_email": item.contact_email,
@@ -127,6 +128,13 @@ def client_request_to_representation(item: ClientRequest) -> dict:
         "title": item.title,
         "description": item.description,
         "status": item.status,
+        "client_review_status": getattr(item, "client_review_status", None) or "none",
+        "client_revision_note": getattr(item, "client_revision_note", "") or "",
+        "client_reviewed_at": (
+            item.client_reviewed_at.isoformat().replace("+00:00", "Z")
+            if getattr(item, "client_reviewed_at", None)
+            else None
+        ),
         "converted_task_id": str(item.converted_task_id) if item.converted_task_id else None,
         "converted_project_id": str(item.converted_project_id) if item.converted_project_id else None,
         "attachments": attachments,

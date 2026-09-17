@@ -753,6 +753,13 @@ class ClientRequest(models.Model):
         REJECTED = "rejected", _("Rejected")
 
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = ForeignKey(
+        "clients.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requests",
+    )
     client_name = CharField(max_length=255)
     contact_name = CharField(max_length=255, blank=True, default="")
     contact_email = CharField(max_length=255, blank=True, default="")
@@ -760,6 +767,14 @@ class ClientRequest(models.Model):
     title = CharField(max_length=255)
     description = TextField(blank=True, default="")
     status = CharField(max_length=16, choices=Status.choices, default=Status.NEW)
+    client_review_status = CharField(
+        max_length=32,
+        blank=True,
+        default="none",
+        help_text="none|awaiting_client|approved|revision_requested",
+    )
+    client_revision_note = TextField(blank=True, default="")
+    client_reviewed_at = DateTimeField(null=True, blank=True)
     converted_task = ForeignKey(
         Task,
         on_delete=models.SET_NULL,
