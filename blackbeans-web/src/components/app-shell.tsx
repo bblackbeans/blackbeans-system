@@ -5605,7 +5605,7 @@ export function AppShell() {
         );
         if (!response.ok) return;
         setCompletionNotifyUserIds(
-          (response.data?.completion_recipient_ids ?? []).map((id) => Number(id)),
+          (response.data?.completion_recipient_ids ?? []).map((id: number) => Number(id)),
         );
       })();
     });
@@ -9559,7 +9559,7 @@ export function AppShell() {
                               return;
                             }
                             setCompletionNotifyUserIds(
-                              (response.data?.completion_recipient_ids ?? ids).map((id) => Number(id)),
+                              (response.data?.completion_recipient_ids ?? ids).map((id: number) => Number(id)),
                             );
                             apiMessage.success("Destinatarios de conclusao atualizados.");
                           }}
