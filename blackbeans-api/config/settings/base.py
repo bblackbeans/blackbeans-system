@@ -236,7 +236,13 @@ EMAIL_TIMEOUT = 5
 # Django Admin URL.
 ADMIN_URL = "admin/"
 # https://docs.djangoproject.com/en/dev/ref/settings/#admins
-ADMINS = ['"BlackBeans Team" <dev@blackbeans.local>']
+# Destinatario dos e-mails de erro 500 (AdminEmailHandler). Nao usar .local.
+_admin_email = (env("DJANGO_ADMIN_EMAIL", default="") or "").strip()
+if _admin_email and not _admin_email.lower().endswith(".local"):
+    ADMINS = [('"BlackBeans Team"', _admin_email)]
+else:
+    # Sem destinatario valido: erros ficam so no log do container (evita bounce).
+    ADMINS = []
 # https://docs.djangoproject.com/en/dev/ref/settings/#managers
 MANAGERS = ADMINS
 # https://cookiecutter-django.readthedocs.io/en/latest/settings.html#other-environment-settings
