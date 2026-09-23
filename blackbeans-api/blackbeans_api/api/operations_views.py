@@ -28,6 +28,8 @@ from blackbeans_api.api.operations_serializers import TaskAttachmentCreateSerial
 from blackbeans_api.api.operations_serializers import TaskCommentCreateSerializer
 from blackbeans_api.api.operations_serializers import TaskCommentUpdateSerializer
 from blackbeans_api.api.operations_serializers import TaskDependencyCreateSerializer
+from blackbeans_api.api.operations_serializers import allocate_next_task_number
+from blackbeans_api.api.operations_serializers import link_depends_on_previous_sibling
 from blackbeans_api.api.operations_serializers import notification_to_representation
 from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.operations_serializers import TimeLogManualCreateSerializer
@@ -35,6 +37,7 @@ from blackbeans_api.api.operations_serializers import TimeLogUpdateSerializer
 from blackbeans_api.api.operations_serializers import time_log_to_representation
 from blackbeans_api.api.operations_serializers import task_comment_to_representation
 from blackbeans_api.api.operations_serializers import task_attachment_to_representation
+from blackbeans_api.api.operations_serializers import truthy_query_flag
 from blackbeans_api.api.operations_serializers import validate_active_task_status
 from blackbeans_api.api.operations_serializers import MAX_ATTACHMENT_BYTES
 from blackbeans_api.api.operations_serializers import portfolio_to_representation
@@ -76,8 +79,8 @@ from blackbeans_api.governance.board_status import sync_task_board_by_pull_statu
 from blackbeans_api.governance.board_status import sync_task_group_by_status
 from blackbeans_api.governance.board_status import validate_pull_status_keys_unique
 from blackbeans_api.governance.notification_service import dispatch_task_comment
+from blackbeans_api.governance.notification_service import dispatch_task_created
 from blackbeans_api.governance.notification_service import dispatch_task_mentions
-from blackbeans_api.governance.notification_service import dispatch_task_priority_changed
 from blackbeans_api.governance.notification_service import dispatch_task_status_changed
 from blackbeans_api.governance.notification_service import dispatch_task_updated
 from blackbeans_api.governance.notification_service import get_user_display_name
@@ -349,6 +352,7 @@ def _spawn_next_recurrence(task: Task) -> Task | None:
         board=task.board,
         group=task.group,
         parent=task.parent,
+        number=allocate_next_task_number(board_id=task.board_id),
         title=task.title,
         description=task.description,
         status=Task.Status.TODO,
@@ -618,6 +622,11 @@ class ProjectListCreateView(APIView):
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
         rows = Project.objects.select_related("portfolio__workspace").order_by("name")
+        include_archived = truthy_query_flag(request.query_params.get("include_archived")) or truthy_query_flag(
+            request.query_params.get("archived"),
+        )
+        if not include_archived:
+            rows = rows.filter(archived_at__isnull=True)
         return success_response(
             correlation_id=correlation_id,
             data={"projects": [project_to_representation(item) for item in rows]},
@@ -696,6 +705,54 @@ class ProjectDetailView(APIView):
             )
         project.delete()
         return success_response(correlation_id=correlation_id, data={"deleted": True})
+
+
+class ProjectArchiveView(APIView):
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+
+    def post(self, request: Request, project_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            project = Project.objects.select_related("portfolio__workspace").get(pk=project_id)
+        except Project.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="project_not_found",
+                message="Projeto nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if project.archived_at is None:
+            project.archived_at = timezone.now()
+            project.save(update_fields=["archived_at", "updated_at"])
+        return success_response(
+            correlation_id=correlation_id,
+            data={"project": project_to_representation(project)},
+        )
+
+
+class ProjectUnarchiveView(APIView):
+    permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+
+    def post(self, request: Request, project_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            project = Project.objects.select_related("portfolio__workspace").get(pk=project_id)
+        except Project.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="project_not_found",
+                message="Projeto nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if project.archived_at is not None:
+            project.archived_at = None
+            project.save(update_fields=["archived_at", "updated_at"])
+        return success_response(
+            correlation_id=correlation_id,
+            data={"project": project_to_representation(project)},
+        )
 
 
 class ProjectStatusView(APIView):
@@ -1258,6 +1315,11 @@ class TaskListCreateView(APIView):
             queryset = queryset.filter(title__icontains=search)
         if assignee_id:
             queryset = queryset.filter(assignee_id=assignee_id)
+        include_archived = truthy_query_flag(request.query_params.get("include_archived")) or truthy_query_flag(
+            request.query_params.get("archived"),
+        )
+        if not include_archived:
+            queryset = queryset.filter(archived_at__isnull=True)
 
         return success_response(
             correlation_id=correlation_id,
@@ -1298,6 +1360,11 @@ class TaskListCreateView(APIView):
             actor_id=request.user.pk,
             event_type="task.created",
             summary=f"{actor_name} criou a tarefa com status={task.status}.",
+        )
+        dispatch_task_created(
+            task=task,
+            actor=request.user,
+            correlation_id=correlation_id,
         )
         task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
         return success_response(
@@ -1358,8 +1425,8 @@ class TaskDetailView(APIView):
         serializer = TaskWriteSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         before_status = task.status
-        before_priority = task.priority
         before_description = task.description or ""
+        before_assignee_id = task.assignee_id
         changed_fields = sorted(serializer.validated_data.keys())
         with transaction.atomic():
             serializer.save()
@@ -1386,14 +1453,6 @@ class TaskDetailView(APIView):
                     spawned = _spawn_next_recurrence(task)
                     if spawned is not None:
                         pass
-        if "priority" in serializer.validated_data and task.priority != before_priority:
-            dispatch_task_priority_changed(
-                task=task,
-                actor=request.user,
-                old_priority=before_priority,
-                new_priority=task.priority,
-                correlation_id=correlation_id,
-            )
         if task.status != before_status:
             dispatch_task_status_changed(
                 task=task,
@@ -1402,7 +1461,22 @@ class TaskDetailView(APIView):
                 new_status=task.status,
                 correlation_id=correlation_id,
             )
-        other_fields = [field for field in changed_fields if field not in {"priority", "status"}]
+        if (
+            "assignee_id" in serializer.validated_data
+            and task.assignee_id
+            and task.assignee_id != before_assignee_id
+        ):
+            dispatch_task_assigned_notification.delay(
+                task_id=str(task.pk),
+                assignee_id=task.assignee_id,
+                actor_id=request.user.pk,
+                correlation_id=correlation_id,
+            )
+        other_fields = [
+            field
+            for field in changed_fields
+            if field not in {"priority", "status", "assignee_id"}
+        ]
         if other_fields:
             dispatch_task_updated(
                 task=task,
@@ -1465,6 +1539,132 @@ class TaskDetailView(APIView):
         )
         task.delete()
         return success_response(correlation_id=correlation_id, data={"deleted": True, "task_id": task_pk})
+
+
+class TaskDuplicateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
+        try:
+            source = Task.objects.select_related("board__project__portfolio", "group").get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_board(request.user, source.board):
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_forbidden",
+                message="Sem acesso ao quadro desta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+
+        title = source.title
+        if not title.endswith(" (copia)"):
+            title = f"{title} (copia)"
+
+        with transaction.atomic():
+            copy = Task.objects.create(
+                board=source.board,
+                group=source.group,
+                parent=source.parent,
+                number=allocate_next_task_number(board_id=source.board_id),
+                title=title[:255],
+                description=source.description,
+                status=Task.Status.TODO,
+                priority=source.priority,
+                effort_points=source.effort_points,
+                assignee=None,
+                start_date=None,
+                end_date=None,
+                is_recurring=False,
+                always_in_sprint=False,
+                recurrence_frequency="",
+            )
+            _sync_task_placement_by_status(copy)
+
+        actor_name = get_user_display_name(request.user)
+        _log_task_activity(
+            task=copy,
+            actor_id=request.user.pk,
+            event_type="task.duplicated",
+            summary=f"{actor_name} duplicou a tarefa a partir de {source.pk}.",
+        )
+        copy = Task.objects.filter(pk=copy.pk).annotate(subtasks_count=Count("subtasks")).get()
+        return success_response(
+            correlation_id=correlation_id,
+            data={"task": task_to_representation(copy)},
+            http_status=status.HTTP_201_CREATED,
+        )
+
+
+class TaskArchiveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
+        try:
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para alterar esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        if task.archived_at is None:
+            task.archived_at = timezone.now()
+            task.save(update_fields=["archived_at", "updated_at"])
+        task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
+        return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
+
+
+class TaskUnarchiveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        require_token_scope(request, "tasks:write")
+        try:
+            task = Task.objects.select_related("board__project__portfolio").get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_mutate_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem permissao para alterar esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        if task.archived_at is not None:
+            task.archived_at = None
+            task.save(update_fields=["archived_at", "updated_at"])
+        task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
+        return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
 
 
 class TaskAssigneeView(APIView):
@@ -1540,6 +1740,11 @@ class MyTasksView(APIView):
             qs = qs.filter(status=status_filter)
         if priority_filter:
             qs = qs.filter(priority=priority_filter)
+        include_archived = truthy_query_flag(request.query_params.get("include_archived")) or truthy_query_flag(
+            request.query_params.get("archived"),
+        )
+        if not include_archived:
+            qs = qs.filter(archived_at__isnull=True)
         return success_response(
             correlation_id=correlation_id,
             data={"tasks": [task_to_representation(t) for t in qs]},
@@ -1564,34 +1769,63 @@ class TaskDependenciesView(APIView):
             )
         serializer = TaskDependencyCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        dep_id = serializer.validated_data["depends_on_task_id"]
-        try:
-            depends_on = Task.objects.get(pk=dep_id)
-        except Task.DoesNotExist:
-            return error_response(
-                correlation_id=correlation_id,
-                code="dependency_not_found",
-                message="Tarefa predecessora nao encontrada.",
-                details={},
-                http_status=status.HTTP_404_NOT_FOUND,
+
+        if serializer.validated_data.get("depends_on_previous"):
+            if not task.parent_id:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="depends_on_previous so se aplica a subtarefas.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            previous = (
+                Task.objects.filter(parent_id=task.parent_id)
+                .exclude(pk=task.pk)
+                .filter(created_at__lte=task.created_at)
+                .order_by("-created_at", "-number")
+                .first()
             )
-        if task.pk == depends_on.pk:
-            return error_response(
-                correlation_id=correlation_id,
-                code="validation_error",
-                message="Dependencia circular nao permitida.",
-                details={},
-                http_status=status.HTTP_400_BAD_REQUEST,
-            )
-        if TaskDependency.objects.filter(task=depends_on, depends_on=task).exists():
-            return error_response(
-                correlation_id=correlation_id,
-                code="validation_error",
-                message="Dependencia circular nao permitida.",
-                details={},
-                http_status=status.HTTP_400_BAD_REQUEST,
-            )
-        dep, created = TaskDependency.objects.get_or_create(task=task, depends_on=depends_on)
+            if previous is None:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="dependency_not_found",
+                    message="Nao ha subtarefa anterior para depender.",
+                    details={},
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+            depends_on = previous
+            dep, created = TaskDependency.objects.get_or_create(task=task, depends_on=depends_on)
+        else:
+            dep_id = serializer.validated_data["depends_on_task_id"]
+            try:
+                depends_on = Task.objects.get(pk=dep_id)
+            except Task.DoesNotExist:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="dependency_not_found",
+                    message="Tarefa predecessora nao encontrada.",
+                    details={},
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+            if task.pk == depends_on.pk:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Dependencia circular nao permitida.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            if TaskDependency.objects.filter(task=depends_on, depends_on=task).exists():
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Dependencia circular nao permitida.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            dep, created = TaskDependency.objects.get_or_create(task=task, depends_on=depends_on)
+
         _recalculate_dependents(depends_on)
         _log_task_activity(
             task=task,

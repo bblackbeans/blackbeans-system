@@ -54,6 +54,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
 }
 
 .bb-compact-table .bb-task-title-cell .ant-tag {

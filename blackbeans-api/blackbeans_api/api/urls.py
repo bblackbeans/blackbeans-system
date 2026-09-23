@@ -7,6 +7,8 @@ from blackbeans_api.api.auth_views import Auth2FADisableView
 from blackbeans_api.api.auth_views import Auth2FAEnrollConfirmView
 from blackbeans_api.api.auth_views import Auth2FAEnrollStartView
 from blackbeans_api.api.auth_views import Auth2FASettingsView
+from blackbeans_api.api.password_reset_views import PasswordResetConfirmView
+from blackbeans_api.api.password_reset_views import PasswordResetRequestView
 from blackbeans_api.api.agents_views import AgentListView
 from blackbeans_api.api.agents_views import AgentRunDetailView
 from blackbeans_api.api.agents_views import AgentRunListView
@@ -22,6 +24,7 @@ from blackbeans_api.api.client_requests_views import AdminHoursDashboardView
 from blackbeans_api.api.client_requests_views import ClientRequestConvertView
 from blackbeans_api.api.client_requests_views import ClientRequestListView
 from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateView
+from blackbeans_api.api.client_portal_views import ClientPortalAreaView
 from blackbeans_api.api.client_portal_views import ClientPortalLoginView
 from blackbeans_api.api.client_portal_views import ClientPortalMeView
 from blackbeans_api.api.client_portal_views import ClientPortalRequestApproveView
@@ -83,6 +86,7 @@ from blackbeans_api.api.operations_views import BoardProgressView
 from blackbeans_api.api.notification_views import BoardWatchView
 from blackbeans_api.api.notification_views import MeNotificationPreferencesView
 from blackbeans_api.api.notification_views import MeNotificationSubscriptionsView
+from blackbeans_api.api.notification_views import NotificationRoutingSettingsView
 from blackbeans_api.api.notification_views import NotificationUnsubscribeView
 from blackbeans_api.api.notification_views import NotificationsReadAllView
 from blackbeans_api.api.notification_views import TaskWatchView
@@ -90,7 +94,10 @@ from blackbeans_api.api.operations_views import NotificationsDeadlineScanView
 from blackbeans_api.api.operations_views import NotificationsListView
 from blackbeans_api.api.operations_views import NotificationsUnreadCountView
 from blackbeans_api.api.operations_views import NotificationReadView
+from blackbeans_api.api.operations_views import ProjectArchiveView
+from blackbeans_api.api.operations_views import ProjectUnarchiveView
 from blackbeans_api.api.operations_views import TaskActivityView
+from blackbeans_api.api.operations_views import TaskArchiveView
 from blackbeans_api.api.operations_views import TaskAssigneeView
 from blackbeans_api.api.operations_views import TaskAttachmentsView
 from blackbeans_api.api.operations_views import TaskCompleteView
@@ -98,6 +105,7 @@ from blackbeans_api.api.operations_views import TaskCommentsView
 from blackbeans_api.api.operations_views import TaskCommentDetailView
 from blackbeans_api.api.operations_views import TaskDependenciesView
 from blackbeans_api.api.operations_views import TaskDetailView
+from blackbeans_api.api.operations_views import TaskDuplicateView
 from blackbeans_api.api.operations_views import TaskListCreateView
 from blackbeans_api.api.operations_views import TaskStatusView
 from blackbeans_api.api.operations_views import TaskTimePauseView
@@ -106,6 +114,7 @@ from blackbeans_api.api.operations_views import TaskTimeStartView
 from blackbeans_api.api.operations_views import TaskTimeManualView
 from blackbeans_api.api.operations_views import TaskTimeSummariesBatchView
 from blackbeans_api.api.operations_views import TaskTimeSummaryView
+from blackbeans_api.api.operations_views import TaskUnarchiveView
 from blackbeans_api.api.status_views import TaskStatusCatalogView
 from blackbeans_api.api.operations_views import TimeLogDetailView
 from blackbeans_api.api.operations_views import TimeLogsListView
@@ -156,6 +165,7 @@ urlpatterns = [
     path("clients/<uuid:client_id>", ClientDetailView.as_view(), name="clients-detail"),
     path("client-portal/auth/login", ClientPortalLoginView.as_view(), name="client-portal-login"),
     path("client-portal/me", ClientPortalMeView.as_view(), name="client-portal-me"),
+    path("client-portal/area", ClientPortalAreaView.as_view(), name="client-portal-area"),
     path("client-portal/requests", ClientPortalRequestListCreateView.as_view(), name="client-portal-requests"),
     path(
         "client-portal/requests/<uuid:request_id>",
@@ -195,6 +205,9 @@ urlpatterns = [
     path("tasks", TaskListCreateView.as_view(), name="tasks-list-create"),
     path("tasks/time-summaries", TaskTimeSummariesBatchView.as_view(), name="tasks-time-summaries-batch"),
     path("tasks/<uuid:task_id>", TaskDetailView.as_view(), name="tasks-detail"),
+    path("tasks/<uuid:task_id>/duplicate", TaskDuplicateView.as_view(), name="tasks-duplicate"),
+    path("tasks/<uuid:task_id>/archive", TaskArchiveView.as_view(), name="tasks-archive"),
+    path("tasks/<uuid:task_id>/unarchive", TaskUnarchiveView.as_view(), name="tasks-unarchive"),
     path("tasks/<uuid:task_id>/assignee", TaskAssigneeView.as_view(), name="tasks-assignee"),
     path("tasks/<uuid:task_id>/dependencies", TaskDependenciesView.as_view(), name="tasks-dependencies"),
     path("tasks/<uuid:task_id>/status", TaskStatusView.as_view(), name="tasks-status"),
@@ -213,6 +226,7 @@ urlpatterns = [
     path("time-logs/<uuid:time_log_id>", TimeLogDetailView.as_view(), name="time-logs-detail"),
     path("my-tasks", MyTasksView.as_view(), name="my-tasks"),
     path("notifications", NotificationsListView.as_view(), name="notifications-list"),
+    path("notifications/routing", NotificationRoutingSettingsView.as_view(), name="notifications-routing"),
     path("notifications/unread-count", NotificationsUnreadCountView.as_view(), name="notifications-unread-count"),
     path("notifications/read-all", NotificationsReadAllView.as_view(), name="notifications-read-all"),
     path("notifications/unsubscribe", NotificationUnsubscribeView.as_view(), name="notifications-unsubscribe"),
@@ -231,6 +245,8 @@ urlpatterns = [
     path("tasks/<uuid:task_id>/watch", TaskWatchView.as_view(), name="tasks-watch"),
     path("boards/<uuid:board_id>/watch", BoardWatchView.as_view(), name="boards-watch"),
     path("projects/<uuid:project_id>", ProjectDetailView.as_view(), name="projects-detail"),
+    path("projects/<uuid:project_id>/archive", ProjectArchiveView.as_view(), name="projects-archive"),
+    path("projects/<uuid:project_id>/unarchive", ProjectUnarchiveView.as_view(), name="projects-unarchive"),
     path("projects/<uuid:project_id>/status", ProjectStatusView.as_view(), name="projects-status"),
     path("projects/<uuid:project_id>/schedule", ProjectScheduleView.as_view(), name="projects-schedule"),
     path("projects/<uuid:project_id>/metrics", ProjectMetricsView.as_view(), name="projects-metrics"),
@@ -301,6 +317,16 @@ urlpatterns = [
         "auth/tokens/refresh",
         AdminTokenRefreshView.as_view(),
         name="auth-token-refresh",
+    ),
+    path(
+        "auth/password-reset/request",
+        PasswordResetRequestView.as_view(),
+        name="auth-password-reset-request",
+    ),
+    path(
+        "auth/password-reset/confirm",
+        PasswordResetConfirmView.as_view(),
+        name="auth-password-reset-confirm",
     ),
     path("auth/2fa/settings", Auth2FASettingsView.as_view(), name="auth-2fa-settings"),
     path("auth/2fa/enroll/start", Auth2FAEnrollStartView.as_view(), name="auth-2fa-enroll-start"),

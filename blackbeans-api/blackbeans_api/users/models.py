@@ -26,6 +26,13 @@ class User(AbstractUser):
     # First and last name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
     avatar = models.ImageField(_("Avatar"), upload_to="user_avatars/%Y/%m/", blank=True, null=True)
+    # Admins com esta marca recebem e-mails de reporte de todas as tarefas
+    # (criacao, comentario, status, etc.), mesmo sem estarem na tarefa.
+    receive_all_task_emails = BooleanField(
+        _("Receive all task report emails"),
+        default=False,
+        help_text=_("When enabled for staff, receive report emails for all tasks."),
+    )
     totp_enabled = BooleanField(default=False)
     totp_secret = CharField(max_length=128, blank=True, default="")
     totp_pending_secret = CharField(max_length=128, blank=True, default="")

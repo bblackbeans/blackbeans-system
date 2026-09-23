@@ -40,6 +40,7 @@ def user_to_representation(user, request=None) -> dict:
         "avatar_url": avatar_url,
         "is_active": user.is_active,
         "is_staff": user.is_staff,
+        "receive_all_task_emails": bool(getattr(user, "receive_all_task_emails", False)),
     }
 
 
@@ -50,6 +51,7 @@ class AdminUserCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
     is_staff = serializers.BooleanField(required=False, default=False)
     is_active = serializers.BooleanField(required=False, default=True)
+    receive_all_task_emails = serializers.BooleanField(required=False, default=False)
 
     def validate_username(self, value: str) -> str:
         if User.objects.filter(username__iexact=value).exists():
@@ -82,6 +84,10 @@ class AdminUserCreateSerializer(serializers.Serializer):
         user.is_staff = validated_data.get("is_staff", False)
         user.is_active = validated_data.get("is_active", True)
         user.is_superuser = False
+        # Só faz sentido para admin; colaborador nunca recebe fan-out global.
+        user.receive_all_task_emails = bool(
+            user.is_staff and validated_data.get("receive_all_task_emails", False),
+        )
         user.save()
         return user
 
@@ -91,6 +97,7 @@ class AdminUserUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     is_active = serializers.BooleanField(required=False)
     is_staff = serializers.BooleanField(required=False)
+    receive_all_task_emails = serializers.BooleanField(required=False)
     password = serializers.CharField(
         write_only=True,
         required=False,

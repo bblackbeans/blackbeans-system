@@ -20,6 +20,7 @@ from rest_framework.request import Request
 from rest_framework.serializers import ValidationError as SerializerValidationError
 from rest_framework.views import APIView
 
+from blackbeans_api.api.operations_serializers import allocate_next_task_number
 from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.operations_serializers import validate_active_task_status
 from blackbeans_api.api.permissions import IsStaffOrSuperuser
@@ -709,6 +710,7 @@ class TaskIntakeConvertView(APIView):
                 task = Task.objects.create(
                     board=group.board,
                     group=group,
+                    number=allocate_next_task_number(board_id=group.board_id),
                     title=draft.title,
                     description=draft.description,
                     status=task_status,
