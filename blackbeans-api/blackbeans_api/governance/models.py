@@ -179,6 +179,10 @@ class Project(models.Model):
     end_date = DateTimeField(null=True, blank=True)
     actual_start_date = DateTimeField(null=True, blank=True)
     actual_end_date = DateTimeField(null=True, blank=True)
+    archived_at = DateTimeField(null=True, blank=True)
+    planned_hours = DecimalField(max_digits=12, decimal_places=2, default=0, null=True, blank=True)
+    planned_cost = DecimalField(max_digits=14, decimal_places=2, default=0, null=True, blank=True)
+    monthly_contracted_hours = DecimalField(max_digits=12, decimal_places=2, default=0, null=True, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -188,6 +192,10 @@ class Project(models.Model):
 
     def __str__(self) -> str:
         return self.name or str(self.pk)
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None
 
 
 class Board(models.Model):
@@ -263,6 +271,7 @@ class Task(models.Model):
         TODO = "todo", _("Todo")
         IN_PROGRESS = "in_progress", _("In Progress")
         BLOCKED = "blocked", _("Blocked")
+        OVERDUE = "overdue", _("Overdue")
         DONE = "done", _("Done")
 
     class Priority(models.TextChoices):
@@ -281,6 +290,7 @@ class Task(models.Model):
         blank=True,
         related_name="subtasks",
     )
+    number = models.PositiveIntegerField(null=True, blank=True)
     title = CharField(max_length=255)
     description = TextField(blank=True, default="")
     status = CharField(max_length=64, default=Status.TODO)
@@ -295,6 +305,7 @@ class Task(models.Model):
     )
     start_date = DateTimeField(null=True, blank=True)
     end_date = DateTimeField(null=True, blank=True)
+    archived_at = DateTimeField(null=True, blank=True)
     is_recurring = models.BooleanField(default=False)
     always_in_sprint = models.BooleanField(default=False)
     recurrence_frequency = CharField(
@@ -320,10 +331,16 @@ class Task(models.Model):
             models.Index(fields=["board", "status"]),
             models.Index(fields=["assignee", "status"]),
             models.Index(fields=["parent"]),
+            models.Index(fields=["board", "number"]),
+            models.Index(fields=["archived_at"]),
         ]
 
     def __str__(self) -> str:
         return self.title
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None
 
 
 class TaskDependency(models.Model):
@@ -439,6 +456,7 @@ class TimeLog(models.Model):
 
 class Notification(models.Model):
     class Type(models.TextChoices):
+        CREATED = "task_created", _("Task Created")
         ASSIGNED = "task_assigned", _("Task Assigned")
         COMPLETED = "task_completed", _("Task Completed")
         OVERDUE = "task_overdue", _("Task Overdue")
@@ -618,6 +636,31 @@ class NotificationDeliveryLog(models.Model):
         ]
 
 
+class NotificationRoutingSettings(models.Model):
+    """Singleton: quem recebe e-mails de tarefas concluidas.
+
+    Se completion_recipient_ids estiver vazio, todos os is_staff recebem.
+    Se preenchido, apenas esses usuarios (admins master) recebem no lugar do fan-out geral de staff.
+    """
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    completion_recipient_ids = models.JSONField(default=list, blank=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Notification Routing Settings")
+        verbose_name_plural = _("Notification Routing Settings")
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls) -> "NotificationRoutingSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class AuditLog(models.Model):
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = CharField(max_length=64)
@@ -789,6 +832,7 @@ class ClientRequest(models.Model):
         blank=True,
         related_name="client_requests",
     )
+    metadata = JSONField(default=dict, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

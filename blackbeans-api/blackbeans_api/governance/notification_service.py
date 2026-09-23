@@ -64,13 +64,14 @@ def _mention_tokens_from_content(content: str) -> list[str]:
 
 
 DEFAULT_EMAIL_MODES: dict[str, str] = {
+    Notification.Type.CREATED: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.ASSIGNED: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.MENTIONED: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.COMMENTED: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.OVERDUE: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.DUE_SOON: NotificationPreference.EmailMode.INSTANT,
-    Notification.Type.COMPLETED: NotificationPreference.EmailMode.DAILY,
-    Notification.Type.STATUS_CHANGED: NotificationPreference.EmailMode.DAILY,
+    Notification.Type.COMPLETED: NotificationPreference.EmailMode.INSTANT,
+    Notification.Type.STATUS_CHANGED: NotificationPreference.EmailMode.INSTANT,
     Notification.Type.PRIORITY_CHANGED: NotificationPreference.EmailMode.DAILY,
     Notification.Type.UPDATED: NotificationPreference.EmailMode.DAILY,
     Notification.Type.AGENT_REPORT: NotificationPreference.EmailMode.INSTANT,
@@ -84,7 +85,7 @@ def get_frontend_base_url() -> str:
 
 
 def build_task_deep_link(task_id: str) -> str:
-    return f"{get_frontend_base_url()}/#tasks?task={task_id}"
+    return f"{get_frontend_base_url()}/#task/{task_id}"
 
 
 def build_task_context(task: Task) -> dict:
@@ -224,6 +225,89 @@ def get_task_watchers(task: Task, *, exclude_user_ids: Iterable[int] | None = No
     return list(User.objects.filter(pk__in=user_ids, is_active=True))
 
 
+def get_staff_users(*, exclude_user_ids: Iterable[int] | None = None) -> list[User]:
+    exclude = set(exclude_user_ids or [])
+    qs = User.objects.filter(is_active=True, is_staff=True)
+    if exclude:
+        qs = qs.exclude(pk__in=exclude)
+    return list(qs)
+
+
+def get_global_report_email_users(*, exclude_user_ids: Iterable[int] | None = None) -> list[User]:
+    """Admins com marca 'receber e-mails de tudo' no perfil."""
+    exclude = set(exclude_user_ids or [])
+    qs = User.objects.filter(
+        is_active=True,
+        is_staff=True,
+        receive_all_task_emails=True,
+    )
+    if exclude:
+        qs = qs.exclude(pk__in=exclude)
+    return list(qs)
+
+
+def get_completion_master_users(*, exclude_user_ids: Iterable[int] | None = None) -> list[User]:
+    """Admins master configurados para receber e-mails de conclusao.
+
+    Lista vazia = fallback para admins com receive_all_task_emails.
+    """
+    from blackbeans_api.governance.models import NotificationRoutingSettings
+
+    exclude = set(exclude_user_ids or [])
+    settings_row = NotificationRoutingSettings.get_solo()
+    raw_ids = settings_row.completion_recipient_ids or []
+    ids: list[int] = []
+    for value in raw_ids:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return []
+    qs = User.objects.filter(pk__in=ids, is_active=True)
+    if exclude:
+        qs = qs.exclude(pk__in=exclude)
+    return list(qs)
+
+
+def _merge_users(*groups: Iterable[User]) -> list[User]:
+    seen: set[int] = set()
+    merged: list[User] = []
+    for group in groups:
+        for user in group:
+            if not user or user.pk in seen:
+                continue
+            seen.add(user.pk)
+            merged.append(user)
+    return merged
+
+
+def recipients_for_task_event(
+    task: Task,
+    *,
+    actor: User | None = None,
+    include_staff: bool = True,
+) -> list[User]:
+    """Participantes sempre; fan-out global so para admins com receive_all_task_emails."""
+    exclude = [actor.pk] if actor is not None else []
+    watchers = get_task_watchers(task, exclude_user_ids=exclude)
+    if not include_staff:
+        return watchers
+    globals_ = get_global_report_email_users(exclude_user_ids=exclude)
+    return _merge_users(globals_, watchers)
+
+
+def recipients_for_task_completed(task: Task, *, actor: User | None = None) -> list[User]:
+    """Conclusao: masters (se configurados) ou admins com e-mails de tudo + participantes."""
+    exclude = [actor.pk] if actor is not None else []
+    masters = get_completion_master_users(exclude_user_ids=exclude)
+    watchers = get_task_watchers(task, exclude_user_ids=exclude)
+    if masters:
+        return _merge_users(masters, watchers)
+    globals_ = get_global_report_email_users(exclude_user_ids=exclude)
+    return _merge_users(globals_, watchers)
+
+
 def parse_mentioned_users(content: str) -> list[User]:
     tokens = _mention_tokens_from_content(content)
     if not tokens:
@@ -349,6 +433,33 @@ def dispatch_notification(
     return created_ids
 
 
+def dispatch_task_created(*, task: Task, actor: User, correlation_id: str) -> None:
+    auto_subscribe_task(actor, task)
+    assignee = None
+    if task.assignee_id:
+        assignee = User.objects.filter(pk=task.assignee_id, is_active=True).first()
+        if assignee is not None:
+            auto_subscribe_task(assignee, task)
+    recipients = recipients_for_task_event(task, actor=actor, include_staff=True)
+    dispatch_notification(
+        event_type=Notification.Type.CREATED,
+        recipients=recipients,
+        actor=actor,
+        title="Nova tarefa criada",
+        message=f"{get_user_display_name(actor)} criou a tarefa '{task.title}'.",
+        task=task,
+        correlation_id=correlation_id,
+        dedupe=False,
+    )
+    if assignee is not None and assignee.pk != actor.pk:
+        dispatch_task_assigned(
+            task=task,
+            assignee=assignee,
+            actor=actor,
+            correlation_id=correlation_id,
+        )
+
+
 def dispatch_task_assigned(*, task: Task, assignee: User, actor: User, correlation_id: str) -> None:
     auto_subscribe_task(assignee, task)
     dispatch_notification(
@@ -363,16 +474,13 @@ def dispatch_task_assigned(*, task: Task, assignee: User, actor: User, correlati
 
 
 def dispatch_task_completed(*, task: Task, actor: User, correlation_id: str) -> None:
-    recipients = User.objects.filter(
-        Q(pk=task.assignee_id) | Q(is_superuser=True),
-        is_active=True,
-    ).distinct()
+    recipients = recipients_for_task_completed(task, actor=actor)
     dispatch_notification(
         event_type=Notification.Type.COMPLETED,
         recipients=recipients,
         actor=actor,
         title="Tarefa concluida",
-        message=f"A tarefa '{task.title}' foi concluida.",
+        message=f"{get_user_display_name(actor)} concluiu a tarefa '{task.title}'.",
         task=task,
         correlation_id=correlation_id,
         dedupe=False,
@@ -390,7 +498,7 @@ def dispatch_task_status_changed(
     if new_status == Task.Status.DONE:
         dispatch_task_completed(task=task, actor=actor, correlation_id=correlation_id)
         return
-    recipients = get_task_watchers(task, exclude_user_ids=[actor.pk])
+    recipients = recipients_for_task_event(task, actor=actor, include_staff=True)
     dispatch_notification(
         event_type=Notification.Type.STATUS_CHANGED,
         recipients=recipients,
@@ -411,7 +519,7 @@ def dispatch_task_priority_changed(
     new_priority: str,
     correlation_id: str,
 ) -> None:
-    recipients = get_task_watchers(task, exclude_user_ids=[actor.pk])
+    recipients = recipients_for_task_event(task, actor=actor, include_staff=True)
     dispatch_notification(
         event_type=Notification.Type.PRIORITY_CHANGED,
         recipients=recipients,
@@ -425,7 +533,7 @@ def dispatch_task_priority_changed(
 
 
 def dispatch_task_updated(*, task: Task, actor: User, fields: list[str], correlation_id: str) -> None:
-    recipients = get_task_watchers(task, exclude_user_ids=[actor.pk])
+    recipients = recipients_for_task_event(task, actor=actor, include_staff=True)
     field_labels = {
         "title": "titulo",
         "description": "descricao",
@@ -495,7 +603,8 @@ def dispatch_task_comment(
     auto_subscribe_task(actor, task)
     mentioned = parse_mentioned_users(content)
     mention_ids = {user.pk for user in mentioned}
-    watchers = get_task_watchers(task, exclude_user_ids=[actor.pk, *mention_ids])
+    for user in mentioned:
+        auto_subscribe_task(user, task)
 
     if mentioned:
         dispatch_notification(
@@ -510,9 +619,14 @@ def dispatch_task_comment(
             dedupe=False,
         )
 
+    recipients = [
+        user
+        for user in recipients_for_task_event(task, actor=actor, include_staff=True)
+        if user.pk not in mention_ids
+    ]
     dispatch_notification(
         event_type=Notification.Type.COMMENTED,
-        recipients=watchers,
+        recipients=recipients,
         actor=actor,
         title="Novo comentario na tarefa",
         message=f"{get_user_display_name(actor)} comentou em '{task.title}'.",

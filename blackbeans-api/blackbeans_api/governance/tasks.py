@@ -16,6 +16,7 @@ from blackbeans_api.governance.models import NotificationDeliveryLog
 from blackbeans_api.governance.models import NotificationDigestItem
 from blackbeans_api.governance.models import NotificationPreference
 from blackbeans_api.governance.models import Task
+from blackbeans_api.governance.models import TaskStatusDefinition
 from blackbeans_api.governance.notification_service import dispatch_deadline_notification
 from blackbeans_api.governance.notification_service import dispatch_task_assigned
 from blackbeans_api.governance.notification_service import dispatch_task_completed
@@ -28,7 +29,14 @@ def _email_enabled() -> bool:
 
 
 def _recipient_email(user: User) -> str:
-    return str(user.email or "").strip()
+    email = str(user.email or "").strip()
+    if not email or "@" not in email:
+        return ""
+    domain = email.rsplit("@", 1)[-1].lower()
+    # Domínios de seed/demo nao existem no DNS publico — evita bounce do Gmail.
+    if domain.endswith(".local") or domain in {"localhost", "example.com", "example.org"}:
+        return ""
+    return email
 
 
 @shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -49,14 +57,43 @@ def dispatch_task_completed_notifications(*, task_id: str, actor_id: int, correl
 
 
 @shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def mark_overdue_tasks(*, correlation_id: str = "system") -> dict:
+    """Marca como overdue tarefas com end_date passado (exceto done/overdue)."""
+    now = timezone.now()
+    done_keys = set(
+        TaskStatusDefinition.objects.filter(is_active=True, is_done_like=True).values_list("key", flat=True),
+    )
+    done_keys.add(Task.Status.DONE)
+    exclude_statuses = done_keys | {Task.Status.OVERDUE, "overdue"}
+
+    qs = (
+        Task.objects.filter(end_date__lt=now, archived_at__isnull=True)
+        .exclude(status__in=exclude_statuses)
+    )
+    updated = qs.update(status=Task.Status.OVERDUE, updated_at=now)
+    return {"marked_overdue": int(updated), "correlation_id": correlation_id}
+
+
+@shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def dispatch_deadline_notifications(*, correlation_id: str = "system") -> dict:
     now = timezone.now()
     soon_limit = now + timedelta(days=1)
-    created = {"overdue": 0, "due_soon": 0}
+    marked = mark_overdue_tasks.run(correlation_id=correlation_id)
+    created = {"overdue": 0, "due_soon": 0, "marked_overdue": marked.get("marked_overdue", 0)}
 
-    overdue_tasks = Task.objects.filter(end_date__lt=now).exclude(status=Task.Status.DONE)
-    due_soon_tasks = Task.objects.filter(end_date__gte=now, end_date__lte=soon_limit).exclude(
-        status=Task.Status.DONE,
+    overdue_tasks = (
+        Task.objects.filter(end_date__lt=now, archived_at__isnull=True)
+        .exclude(status=Task.Status.DONE)
+        .exclude(status__in=list(
+            TaskStatusDefinition.objects.filter(is_active=True, is_done_like=True).values_list("key", flat=True),
+        ))
+    )
+    due_soon_tasks = (
+        Task.objects.filter(end_date__gte=now, end_date__lte=soon_limit, archived_at__isnull=True)
+        .exclude(status=Task.Status.DONE)
+        .exclude(status__in=list(
+            TaskStatusDefinition.objects.filter(is_active=True, is_done_like=True).values_list("key", flat=True),
+        ))
     )
 
     for task in overdue_tasks.select_related("board__project__portfolio__workspace"):
@@ -104,8 +141,8 @@ def queue_notification_email(notification_id: str) -> None:
     send_notification_email.delay(notification_id)
 
 
-@shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def send_notification_email(notification_id: str) -> str:
+@shared_task(bind=True, max_retries=3)
+def send_notification_email(self, notification_id: str) -> str:
     if not _email_enabled():
         return "disabled"
 
@@ -150,7 +187,11 @@ def send_notification_email(notification_id: str) -> str:
         log.status = NotificationDeliveryLog.Status.FAILED
         log.error = str(exc)
         log.save(update_fields=["status", "error"])
-        raise
+        err_text = str(exc).lower()
+        # Auth SMTP (535) nao se recupera com retry — evita flood no worker.
+        if "535" in err_text or "authentication" in err_text or "auth" in err_text:
+            return "auth_failed"
+        raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 60))
 
 
 @shared_task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})

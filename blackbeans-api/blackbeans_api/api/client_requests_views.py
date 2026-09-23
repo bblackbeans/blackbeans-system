@@ -16,6 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
+from blackbeans_api.api.operations_serializers import allocate_next_task_number
 from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
@@ -137,6 +138,7 @@ def client_request_to_representation(item: ClientRequest) -> dict:
         ),
         "converted_task_id": str(item.converted_task_id) if item.converted_task_id else None,
         "converted_project_id": str(item.converted_project_id) if item.converted_project_id else None,
+        "metadata": getattr(item, "metadata", None) or {},
         "attachments": attachments,
         "created_at": item.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": item.updated_at.isoformat().replace("+00:00", "Z"),
@@ -320,6 +322,23 @@ class ClientRequestConvertView(APIView):
         project_id = request.data.get("project_id")
         board_id = request.data.get("board_id")
         group_id = request.data.get("group_id")
+
+        # Fallbacks: metadata do pedido → defaults do cliente portal
+        meta = item.metadata if isinstance(getattr(item, "metadata", None), dict) else {}
+        if not project_id:
+            project_id = meta.get("portal_default_project_id") or meta.get("project_id")
+        if not board_id:
+            board_id = meta.get("portal_default_board_id") or meta.get("board_id")
+        if item.client_id and (not project_id or not board_id):
+            from blackbeans_api.clients.models import Client
+
+            client = Client.objects.filter(pk=item.client_id).first()
+            if client is not None:
+                if not project_id and client.portal_default_project_id:
+                    project_id = str(client.portal_default_project_id)
+                if not board_id and client.portal_default_board_id:
+                    board_id = str(client.portal_default_board_id)
+
         try:
             if group_id:
                 group = BoardGroup.objects.select_related("board__project").get(pk=group_id)
@@ -407,6 +426,7 @@ class ClientRequestConvertView(APIView):
             task = Task.objects.create(
                 board=group.board,
                 group=group,
+                number=allocate_next_task_number(board_id=group.board_id),
                 title=title,
                 description=description,
                 status=task_status,

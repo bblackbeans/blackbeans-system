@@ -71,6 +71,12 @@ type PortalRequest = {
   task_status?: string | null;
 };
 
+type PortalArea = {
+  workspace: { id: string; name: string } | null;
+  projects: { id: string; name: string }[];
+  defaults?: { project_id?: string | null; board_id?: string | null };
+};
+
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   new: { label: "Novo", color: "blue" },
   in_review: { label: "Em analise", color: "gold" },
@@ -93,6 +99,8 @@ export default function PortalHomePage() {
   const [client, setClient] = useState<PortalClientInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<PortalRequest[]>([]);
+  const [area, setArea] = useState<PortalArea | null>(null);
+  const [areaLoading, setAreaLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [detail, setDetail] = useState<PortalRequest | null>(null);
@@ -107,6 +115,33 @@ export default function PortalHomePage() {
     clearPortalSession();
     router.replace("/portal/login");
   }, [router]);
+
+  const loadArea = useCallback(
+    async (authToken: string) => {
+      setAreaLoading(true);
+      try {
+        const response = await apiRequest<PortalArea>("/client-portal/area", {
+          token: authToken,
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            logout();
+            return;
+          }
+          message.error(response.error?.message ?? "Falha ao carregar area.");
+          return;
+        }
+        setArea({
+          workspace: response.data?.workspace ?? null,
+          projects: Array.isArray(response.data?.projects) ? response.data.projects : [],
+          defaults: response.data?.defaults,
+        });
+      } finally {
+        setAreaLoading(false);
+      }
+    },
+    [logout, message],
+  );
 
   const loadRequests = useCallback(
     async (authToken: string) => {
@@ -141,7 +176,8 @@ export default function PortalHomePage() {
     setToken(authToken);
     setClient(portalClient);
     void loadRequests(authToken);
-  }, [loadRequests, router]);
+    void loadArea(authToken);
+  }, [loadArea, loadRequests, router]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -273,6 +309,46 @@ export default function PortalHomePage() {
                 </Button>
               </Space>
             </Space>
+          </Card>
+
+          <Card title="Sua area" styles={{ body: { padding: isMobile ? 16 : 20 } }}>
+            {areaLoading && !area ? (
+              <Typography.Text type="secondary">Carregando area…</Typography.Text>
+            ) : !area?.workspace && (area?.projects?.length ?? 0) === 0 ? (
+              <Typography.Text type="secondary">
+                Nenhuma area de trabalho vinculada ainda. Voce pode criar pedidos normalmente.
+              </Typography.Text>
+            ) : (
+              <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+                <div>
+                  <Typography.Text type="secondary">Area de trabalho</Typography.Text>
+                  <div>
+                    <Typography.Text strong>
+                      {area?.workspace?.name ?? "—"}
+                    </Typography.Text>
+                  </div>
+                </div>
+                <div>
+                  <Typography.Text type="secondary">Projetos</Typography.Text>
+                  {(area?.projects?.length ?? 0) === 0 ? (
+                    <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
+                      Nenhum projeto listado.
+                    </Typography.Paragraph>
+                  ) : (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                      {(area?.projects ?? []).map((project) => (
+                        <li key={project.id}>
+                          <Typography.Text>{project.name}</Typography.Text>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                  Visualizacao somente leitura — nao e possivel editar quadros ou tarefas neste portal.
+                </Typography.Paragraph>
+              </Space>
+            )}
           </Card>
 
           <Card title="Como funciona" styles={{ body: { padding: isMobile ? 16 : 20 } }}>

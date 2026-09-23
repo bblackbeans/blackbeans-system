@@ -35,8 +35,11 @@ from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.clients.models import Client
 from blackbeans_api.governance.models import ClientRequest
 from blackbeans_api.governance.models import ClientRequestAttachment
+from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import TaskComment
+from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.notification_service import get_user_display_name
+from blackbeans_api.api.operations_serializers import project_to_representation
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +330,12 @@ class ClientPortalRequestListCreateView(APIView):
             return upload_error
 
         with transaction.atomic():
+            metadata: dict = {}
+            if client.portal_default_project_id:
+                metadata["portal_default_project_id"] = str(client.portal_default_project_id)
+            if client.portal_default_board_id:
+                metadata["portal_default_board_id"] = str(client.portal_default_board_id)
+
             item = ClientRequest.objects.create(
                 client=client,
                 client_name=client.name,
@@ -335,6 +344,7 @@ class ClientPortalRequestListCreateView(APIView):
                 contact_phone=str(request.data.get("contact_phone") or "").strip(),
                 title=title,
                 description=str(request.data.get("description") or "").strip(),
+                metadata=metadata,
             )
             for upload in uploads:
                 filename = str(getattr(upload, "name", "") or "arquivo")[:255]
@@ -496,4 +506,52 @@ class ClientPortalRequestRevisionView(APIView):
         return success_response(
             correlation_id=correlation_id,
             data={"request": portal_request_to_representation(item, include_feedback=True)},
+        )
+
+
+class ClientPortalAreaView(APIView):
+    """GET /client-portal/area — workspace + projetos (somente leitura) do cliente vinculado."""
+
+    authentication_classes = [ClientPortalJWTAuthentication]
+    permission_classes = [IsClientPortal]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        client = _portal_client(request)
+        workspace = (
+            Workspace.objects.filter(client=client)
+            .order_by("created_at")
+            .first()
+        )
+        projects = (
+            Project.objects.filter(client=client, archived_at__isnull=True)
+            .select_related("portfolio__workspace")
+            .order_by("name")
+        )
+        if workspace is None and projects.exists():
+            first = projects.first()
+            if first is not None:
+                workspace = first.portfolio.workspace
+
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "workspace": (
+                    {
+                        "id": str(workspace.pk),
+                        "name": workspace.name,
+                    }
+                    if workspace is not None
+                    else None
+                ),
+                "projects": [project_to_representation(p) for p in projects],
+                "defaults": {
+                    "project_id": (
+                        str(client.portal_default_project_id) if client.portal_default_project_id else None
+                    ),
+                    "board_id": (
+                        str(client.portal_default_board_id) if client.portal_default_board_id else None
+                    ),
+                },
+            },
         )

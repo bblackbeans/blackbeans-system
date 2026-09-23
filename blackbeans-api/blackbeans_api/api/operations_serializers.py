@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -14,10 +16,44 @@ from blackbeans_api.governance.models import Notification
 from blackbeans_api.governance.models import Task
 from blackbeans_api.governance.models import TaskAttachment
 from blackbeans_api.governance.models import TaskComment
+from blackbeans_api.governance.models import TaskDependency
 from blackbeans_api.governance.models import TaskStatusDefinition
 from blackbeans_api.governance.models import TimeLog
 from blackbeans_api.governance.notification_service import get_user_display_name
 from blackbeans_api.users.models import User
+
+
+def allocate_next_task_number(*, board_id) -> int:
+    """Numero sequencial por board (protegido por lock da linha mais recente)."""
+    with transaction.atomic():
+        list(
+            Task.objects.select_for_update()
+            .filter(board_id=board_id)
+            .order_by("-number", "-created_at")[:1],
+        )
+        max_n = Task.objects.filter(board_id=board_id).aggregate(m=Max("number"))["m"]
+        return int(max_n or 0) + 1
+
+
+def link_depends_on_previous_sibling(task: Task) -> TaskDependency | None:
+    """Cria dependencia da subtarefa no irmao imediatamente anterior (mesmo parent)."""
+    if not task.parent_id:
+        return None
+    previous = (
+        Task.objects.filter(parent_id=task.parent_id)
+        .exclude(pk=task.pk)
+        .filter(created_at__lte=task.created_at)
+        .order_by("-created_at", "-number")
+        .first()
+    )
+    if previous is None:
+        return None
+    dep, _ = TaskDependency.objects.get_or_create(task=task, depends_on=previous)
+    return dep
+
+
+def truthy_query_flag(raw: str | None) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes"}
 
 
 def validate_active_task_status(value: str) -> str:
@@ -163,6 +199,10 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
             "end_date",
             "actual_start_date",
             "actual_end_date",
+            "archived_at",
+            "planned_hours",
+            "planned_cost",
+            "monthly_contracted_hours",
         )
         extra_kwargs = {
             "description": {"required": False, "allow_blank": True, "default": ""},
@@ -171,6 +211,10 @@ class ProjectWriteSerializer(serializers.ModelSerializer):
             "end_date": {"required": False, "allow_null": True},
             "actual_start_date": {"required": False, "allow_null": True},
             "actual_end_date": {"required": False, "allow_null": True},
+            "archived_at": {"required": False, "allow_null": True},
+            "planned_hours": {"required": False, "allow_null": True},
+            "planned_cost": {"required": False, "allow_null": True},
+            "monthly_contracted_hours": {"required": False, "allow_null": True},
         }
 
     def validate_portfolio_id(self, value):
@@ -233,6 +277,11 @@ def project_to_representation(project: Project) -> dict:
     def _iso(v):
         return v.isoformat().replace("+00:00", "Z") if v else None
 
+    def _dec(v):
+        if v is None:
+            return None
+        return float(v)
+
     return {
         "id": str(project.pk),
         "portfolio_id": str(project.portfolio_id),
@@ -246,6 +295,10 @@ def project_to_representation(project: Project) -> dict:
         "end_date": _iso(project.end_date),
         "actual_start_date": _iso(project.actual_start_date),
         "actual_end_date": _iso(project.actual_end_date),
+        "archived_at": _iso(getattr(project, "archived_at", None)),
+        "planned_hours": _dec(getattr(project, "planned_hours", None)),
+        "planned_cost": _dec(getattr(project, "planned_cost", None)),
+        "monthly_contracted_hours": _dec(getattr(project, "monthly_contracted_hours", None)),
         "created_at": _iso(project.created_at),
         "updated_at": _iso(project.updated_at),
     }
@@ -367,6 +420,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
     group_id = serializers.UUIDField(required=False)
     parent_id = serializers.UUIDField(required=False, allow_null=True)
     assignee_id = serializers.IntegerField(required=False, allow_null=True)
+    depends_on_previous = serializers.BooleanField(required=False, default=False, write_only=True)
 
     class Meta:
         model = Task
@@ -381,9 +435,11 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "assignee_id",
             "start_date",
             "end_date",
+            "archived_at",
             "is_recurring",
             "always_in_sprint",
             "recurrence_frequency",
+            "depends_on_previous",
         )
         extra_kwargs = {
             "description": {"required": False, "allow_blank": True, "default": ""},
@@ -392,6 +448,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             "effort_points": {"required": False},
             "start_date": {"required": False, "allow_null": True},
             "end_date": {"required": False, "allow_null": True},
+            "archived_at": {"required": False, "allow_null": True},
             "is_recurring": {"required": False},
             "always_in_sprint": {"required": False},
             "recurrence_frequency": {"required": False, "allow_blank": True},
@@ -441,6 +498,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         parent_id = validated_data.pop("parent_id", None)
         assignee_id = validated_data.pop("assignee_id", None)
         group_id = validated_data.pop("group_id", None)
+        depends_on_previous = bool(validated_data.pop("depends_on_previous", False))
 
         parent = None
         if parent_id is not None:
@@ -451,16 +509,22 @@ class TaskWriteSerializer(serializers.ModelSerializer):
             group = BoardGroup.objects.select_related("board").get(pk=group_id)
             board = group.board
 
-        return Task.objects.create(
+        number = allocate_next_task_number(board_id=board.pk)
+        task = Task.objects.create(
             group=group,
             board=board,
             parent=parent,
             assignee_id=assignee_id,
+            number=number,
             **validated_data,
         )
+        if depends_on_previous:
+            link_depends_on_previous_sibling(task)
+        return task
 
     def update(self, instance, validated_data):
         validated_data.pop("parent_id", None)
+        validated_data.pop("depends_on_previous", None)
         if "group_id" in validated_data:
             group = BoardGroup.objects.select_related("board").get(pk=validated_data.pop("group_id"))
             instance.group = group
@@ -508,6 +572,7 @@ def task_to_representation(task: Task, request=None) -> dict:
         "board_id": str(task.board_id),
         "group_id": str(task.group_id),
         "parent_id": str(task.parent_id) if task.parent_id else None,
+        "number": getattr(task, "number", None),
         "subtasks_count": int(subtasks_count),
         "title": task.title,
         "description": task.description,
@@ -520,6 +585,7 @@ def task_to_representation(task: Task, request=None) -> dict:
         "assignee_avatar_url": assignee_avatar_url,
         "start_date": _iso(task.start_date),
         "end_date": _iso(task.end_date),
+        "archived_at": _iso(getattr(task, "archived_at", None)),
         "is_recurring": bool(getattr(task, "is_recurring", False)),
         "always_in_sprint": bool(getattr(task, "always_in_sprint", False)),
         "recurrence_frequency": getattr(task, "recurrence_frequency", None) or "",
@@ -533,7 +599,15 @@ class TaskAssigneeSerializer(serializers.Serializer):
 
 
 class TaskDependencyCreateSerializer(serializers.Serializer):
-    depends_on_task_id = serializers.UUIDField()
+    depends_on_task_id = serializers.UUIDField(required=False)
+    depends_on_previous = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        if not attrs.get("depends_on_previous") and not attrs.get("depends_on_task_id"):
+            raise serializers.ValidationError(
+                {"depends_on_task_id": "Informe depends_on_task_id ou depends_on_previous=true."},
+            )
+        return attrs
 
 
 def normalize_media_file_url(file_url: str | None) -> str | None:

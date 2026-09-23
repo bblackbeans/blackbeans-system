@@ -8,7 +8,9 @@ from django.db import models
 from django.db.models import BooleanField
 from django.db.models import CharField
 from django.db.models import DateTimeField
+from django.db.models import ForeignKey
 from django.db.models import Index
+from django.db.models import SET_NULL
 from django.db.models import TextField
 from django.db.models import UUIDField
 from django.utils.translation import gettext_lazy as _
@@ -29,6 +31,20 @@ class Client(models.Model):
     portal_username = CharField(max_length=150, unique=True, null=True, blank=True)
     portal_password_hash = CharField(max_length=128, blank=True, default="")
     portal_enabled = BooleanField(default=False)
+    portal_default_project = ForeignKey(
+        "governance.Project",
+        on_delete=SET_NULL,
+        null=True,
+        blank=True,
+        related_name="portal_default_for_clients",
+    )
+    portal_default_board = ForeignKey(
+        "governance.Board",
+        on_delete=SET_NULL,
+        null=True,
+        blank=True,
+        related_name="portal_default_for_clients",
+    )
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

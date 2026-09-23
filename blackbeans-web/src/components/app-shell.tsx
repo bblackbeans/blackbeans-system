@@ -21,6 +21,7 @@ import {
   LogoutOutlined,
   MenuOutlined,
   CommentOutlined,
+  CopyOutlined,
   LinkOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -40,6 +41,7 @@ import {
 import {
   Affix,
   Alert,
+  App,
   Avatar,
   Badge,
   Button,
@@ -61,6 +63,7 @@ import {
   Radio,
   Row,
   Select,
+  Segmented,
   Space,
   Spin,
   Statistic,
@@ -133,7 +136,7 @@ const TASK_COL = {
   start: 120,
   end: 120,
   time: 100,
-  actions: 150,
+  actions: 190,
 } as const;
 /** Mínimo para scroll horizontal (notebook / viewport estreita). Full HD (~1600px úteis) não precisa scroll. */
 const TASK_TABLE_SCROLL_X =
@@ -157,6 +160,7 @@ const SELECTED_CLIENT_STORAGE_KEY = "bb_selected_client_id";
 const SELECTED_PROJECT_STORAGE_KEY = "bb_selected_project_id";
 const PROJECT_SIDEBAR_EXPANDED_KEY = "bb_projects_sidebar_expanded_keys";
 const DEFAULT_PORTFOLIO_STORAGE_KEY = "bb_default_portfolio_by_workspace";
+const RETURN_HASH_STORAGE_KEY = "bb_return_hash";
 const DEFAULT_PORTFOLIO_NAME = "Default";
 
 const HELP_TIPS = {
@@ -405,15 +409,17 @@ type NotificationPreferenceItem = {
 };
 
 const NOTIFICATION_EVENT_LABELS: Record<string, string> = {
+  task_created: "Nova tarefa",
   task_assigned: "Tarefa designada",
   task_completed: "Tarefa concluida",
-  task_overdue: "Tarefa atrasada",
-  task_due_soon: "Prazo proximo",
   task_commented: "Novo comentario",
   task_mentioned: "Mencao",
   task_status_changed: "Status alterado",
   task_priority_changed: "Prioridade alterada",
   task_updated: "Tarefa atualizada",
+  task_overdue: "Tarefa atrasada",
+  task_due_soon: "Prazo proximo",
+  agent_report: "Relatorio de agente",
 };
 
 const NOTIFICATION_EMAIL_MODE_OPTIONS = [
@@ -440,6 +446,8 @@ type TaskItem = {
   group_id: string;
   parent_id?: string | null;
   subtasks_count?: number;
+  number?: number | null;
+  archived_at?: string | null;
   client_name?: string | null;
   is_recurring?: boolean;
   always_in_sprint?: boolean;
@@ -626,6 +634,7 @@ const DEFAULT_STATUS_META: Record<string, { label: string; color: string }> = {
   todo: { label: "A fazer", color: "geekblue" },
   in_progress: { label: "Em progresso", color: "blue" },
   blocked: { label: "Bloqueada", color: "volcano" },
+  overdue: { label: "Atrasada", color: "red" },
   done: { label: "Concluida", color: "green" },
 };
 const STATUS_COMPAT_ALIASES: Record<string, string[]> = {
@@ -633,6 +642,7 @@ const STATUS_COMPAT_ALIASES: Record<string, string[]> = {
   in_progress: ["em_progresso", "doing"],
   blocked: ["bloqueada", "bloqueado"],
   done: ["concluida", "concluido", "completed"],
+  overdue: ["atrasada", "atrasado"],
 };
 
 /** Mapeia cores pastel/antigas para presets vivos (mesmo estilo das prioridades). */
@@ -687,6 +697,9 @@ function renderClientRequestStatusTag(value: string) {
 function getMenuKeyFromHash(hash: string, fallback: MenuKey = "dashboard"): MenuKey {
   const normalized = hash.replace(/^#/, "");
   if (normalized.startsWith("task/")) return fallback;
+  if (normalized.startsWith("project/")) return "projects";
+  if (normalized.startsWith("workspace/")) return "workspaces";
+  if (normalized.startsWith("reset/")) return fallback;
   if (MENU_KEYS.includes(normalized as MenuKey)) {
     return normalized as MenuKey;
   }
@@ -697,6 +710,89 @@ function getTaskIdFromHash(hash: string): string | null {
   const normalized = hash.replace(/^#/, "");
   const match = normalized.match(/^task\/([0-9a-f-]{36})$/i);
   return match ? match[1] : null;
+}
+
+function getProjectIdFromHash(hash: string): string | null {
+  const normalized = hash.replace(/^#/, "");
+  const match = normalized.match(/^project\/([0-9a-f-]{36})$/i);
+  return match ? match[1] : null;
+}
+
+function getWorkspaceIdFromHash(hash: string): string | null {
+  const normalized = hash.replace(/^#/, "");
+  const match = normalized.match(/^workspace\/([0-9a-f-]{36})$/i);
+  return match ? match[1] : null;
+}
+
+function getPasswordResetTokenFromHash(hash: string): string | null {
+  const normalized = hash.replace(/^#/, "");
+  const match = normalized.match(/^reset\/(.+)$/);
+  const raw = match?.[1]?.trim() ?? "";
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function peekPasswordResetToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const fromSession = sessionStorage.getItem("bb_password_reset_token");
+    if (fromSession && fromSession.trim()) {
+      return fromSession.trim();
+    }
+  } catch {
+    // ignore
+  }
+  const fromHash = getPasswordResetTokenFromHash(window.location.hash);
+  if (fromHash) return fromHash;
+  const stored = localStorage.getItem(RETURN_HASH_STORAGE_KEY);
+  if (!stored) return null;
+  return getPasswordResetTokenFromHash(stored);
+}
+
+function clearStoredPasswordResetHash() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem("bb_password_reset_token");
+  } catch {
+    // ignore
+  }
+  const stored = localStorage.getItem(RETURN_HASH_STORAGE_KEY);
+  if (stored && getPasswordResetTokenFromHash(stored)) {
+    localStorage.removeItem(RETURN_HASH_STORAGE_KEY);
+  }
+}
+
+function persistReturnHash(hash: string) {
+  const normalized = hash.replace(/^#/, "").trim();
+  if (!normalized) return;
+  if (
+    normalized.startsWith("task/") ||
+    normalized.startsWith("project/") ||
+    normalized.startsWith("workspace/") ||
+    normalized.startsWith("reset/")
+  ) {
+    localStorage.setItem(RETURN_HASH_STORAGE_KEY, `#${normalized}`);
+  }
+}
+
+function consumeReturnHash(): string | null {
+  const stored = localStorage.getItem(RETURN_HASH_STORAGE_KEY);
+  if (!stored) return null;
+  localStorage.removeItem(RETURN_HASH_STORAGE_KEY);
+  return stored;
+}
+
+function applyReturnHashAfterLogin() {
+  if (typeof window === "undefined") return;
+  const stored = consumeReturnHash();
+  if (!stored) return;
+  // Reset de senha nao e deep-link pos-login.
+  if (getPasswordResetTokenFromHash(stored)) return;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${stored}`);
 }
 
 function linkifyText(text: string): ReactNode {
@@ -1945,6 +2041,13 @@ function renderLiveTimeCell(displaySeconds: number, active: boolean) {
   );
 }
 
+
+function hasTextSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  const sel = window.getSelection();
+  return Boolean(sel && String(sel.toString()).trim().length > 0);
+}
+
 function renderPriorityTag(value: string) {
   const meta = PRIORITY_META[value] ?? { label: value, color: "default" };
   return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -1976,17 +2079,197 @@ function AuthPanel({
   on2fa: (values: { code: string }) => void;
   method: TwoFactorMethod;
 }) {
+  const { message: authMessage } = App.useApp();
+  const [authView, setAuthView] = useState<"login" | "forgot" | "reset">("login");
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [forgotDone, setForgotDone] = useState(false);
+
+  useEffect(() => {
+    const tokenFromHash = peekPasswordResetToken();
+    if (tokenFromHash) {
+      setResetToken(tokenFromHash);
+      setAuthView("reset");
+      if (typeof window !== "undefined" && getPasswordResetTokenFromHash(window.location.hash)) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    }
+  }, []);
+
   return (
     <Row justify="center" align="middle" style={{ minHeight: "100vh", padding: 24 }}>
       <Col xs={24} md={14} lg={10} xl={8}>
         <Card>
           <Typography.Title level={3} style={{ marginTop: 0 }}>
-            Entrar no BlackBeans
+            {authView === "forgot"
+              ? "Esqueci minha senha"
+              : authView === "reset"
+                ? "Redefinir senha"
+                : "Entrar no BlackBeans"}
           </Typography.Title>
           <Typography.Paragraph type="secondary">
-            Autenticacao admin com JWT + 2FA integrada aos endpoints reais da API.
+            {authView === "forgot"
+              ? "Informe o e-mail da conta. Se existir, enviaremos instrucoes de redefinicao."
+              : authView === "reset"
+                ? "Defina uma nova senha para sua conta (minimo 12 caracteres, com maiuscula, minuscula, digito e caractere especial)."
+                : "Autenticacao admin com JWT + 2FA integrada aos endpoints reais da API."}
           </Typography.Paragraph>
-          {step === "credentials" ? (
+
+          {authView === "forgot" ? (
+            forgotDone ? (
+              <Space orientation="vertical" style={{ width: "100%" }} size={16}>
+                <Alert
+                  type="success"
+                  showIcon
+                  title="Se o e-mail existir, enviaremos instrucoes de redefinicao."
+                />
+                <Button
+                  type="link"
+                  style={{ padding: 0 }}
+                  onClick={() => {
+                    setForgotDone(false);
+                    setAuthView("login");
+                  }}
+                >
+                  Voltar ao login
+                </Button>
+              </Space>
+            ) : (
+              <Form
+                layout="vertical"
+                onFinish={async (values) => {
+                  setResetLoading(true);
+                  try {
+                    const email = String(values.email ?? "").trim().toLowerCase();
+                    const response = await apiRequest("/auth/password-reset/request", {
+                      method: "POST",
+                      body: { email },
+                    });
+                    if (!response.ok) {
+                      authMessage.error(response.error?.message ?? "Falha ao solicitar redefinicao.");
+                      return;
+                    }
+                    setForgotDone(true);
+                  } finally {
+                    setResetLoading(false);
+                  }
+                }}
+              >
+                <Form.Item
+                  label="E-mail"
+                  name="email"
+                  rules={[
+                    { required: true, message: "Informe o e-mail." },
+                    { type: "email", message: "E-mail invalido." },
+                  ]}
+                >
+                  <Input type="email" autoComplete="email" placeholder="email@empresa.com" />
+                </Form.Item>
+                <Space wrap>
+                  <Button type="primary" htmlType="submit" loading={resetLoading}>
+                    Enviar link
+                  </Button>
+                  <Button
+                    type="link"
+                    onClick={() => {
+                      setForgotDone(false);
+                      setAuthView("login");
+                    }}
+                  >
+                    Voltar ao login
+                  </Button>
+                </Space>
+              </Form>
+            )
+          ) : authView === "reset" && resetToken ? (
+            <Form
+              layout="vertical"
+              onFinish={async (values) => {
+                setResetLoading(true);
+                try {
+                  const response = await apiRequest("/auth/password-reset/confirm", {
+                    method: "POST",
+                    body: {
+                      token: resetToken,
+                      new_password: String(values.new_password ?? ""),
+                    },
+                  });
+                  if (!response.ok) {
+                    authMessage.error(response.error?.message ?? "Token invalido ou expirado.");
+                    return;
+                  }
+                  authMessage.success("Senha redefinida. Entre com a nova senha.");
+                  clearStoredPasswordResetHash();
+                  setResetToken(null);
+                  setAuthView("login");
+                } finally {
+                  setResetLoading(false);
+                }
+              }}
+            >
+              <Form.Item
+                label="Nova senha"
+                name="new_password"
+                rules={[
+                  { required: true, message: "Informe a nova senha." },
+                  { min: 12, message: "Senha deve ter ao menos 12 caracteres." },
+                  {
+                    validator: (_rule, value) => {
+                      const pwd = String(value ?? "");
+                      if (!pwd) return Promise.resolve();
+                      if (!/[A-Z]/.test(pwd)) {
+                        return Promise.reject(new Error("Senha deve conter letra maiuscula."));
+                      }
+                      if (!/[a-z]/.test(pwd)) {
+                        return Promise.reject(new Error("Senha deve conter letra minuscula."));
+                      }
+                      if (!/\d/.test(pwd)) {
+                        return Promise.reject(new Error("Senha deve conter digito."));
+                      }
+                      if (!/[^\w\s]/.test(pwd)) {
+                        return Promise.reject(new Error("Senha deve conter caractere especial."));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+              >
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item
+                label="Confirmar senha"
+                name="confirm_password"
+                dependencies={["new_password"]}
+                rules={[
+                  { required: true, message: "Confirme a senha." },
+                  ({ getFieldValue }) => ({
+                    validator(_rule, value) {
+                      if (!value || getFieldValue("new_password") === value) {
+                        return Promise.resolve();
+                      }
+                      return Promise.reject(new Error("As senhas nao coincidem."));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Space wrap>
+                <Button type="primary" htmlType="submit" loading={resetLoading}>
+                  Salvar nova senha
+                </Button>
+                <Button
+                  type="link"
+                  onClick={() => {
+                    setResetToken(null);
+                    setAuthView("login");
+                  }}
+                >
+                  Voltar ao login
+                </Button>
+              </Space>
+            </Form>
+          ) : step === "credentials" ? (
             <Form layout="vertical" onFinish={onCredentials}>
               <Form.Item
                 label="Usuario ou e-mail"
@@ -1998,9 +2281,14 @@ function AuthPanel({
               <Form.Item label="Senha" name="password" rules={[{ required: true, message: "Informe a senha." }]}>
                 <Input.Password autoComplete="current-password" data-testid="login-password" />
               </Form.Item>
-              <Button type="primary" htmlType="submit" loading={loading} icon={<LoginOutlined />}>
-                Entrar
-              </Button>
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                <Button type="primary" htmlType="submit" loading={loading} icon={<LoginOutlined />}>
+                  Entrar
+                </Button>
+                <Button type="link" style={{ padding: 0 }} onClick={() => setAuthView("forgot")}>
+                  Esqueci minha senha
+                </Button>
+              </Space>
             </Form>
           ) : (
             <Form layout="vertical" onFinish={on2fa}>
@@ -2268,7 +2556,7 @@ export function AppShell() {
   const [adminTasksTablePage, setAdminTasksTablePage] = useState(1);
   const [taskTablePageSize, setTaskTablePageSize] = useState(TASK_TABLE_PAGE_SIZE);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
-  const [taskDrawerTab, setTaskDrawerTab] = useState<TaskDrawerTab>("summary");
+  const [taskDrawerTab, setTaskDrawerTab] = useState<TaskDrawerTab>("comments");
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [taskAssigneePickList, setTaskAssigneePickList] = useState<
     Array<{ id: number; name: string; email: string; username: string; avatar_url?: string | null }>
@@ -2459,11 +2747,13 @@ export function AppShell() {
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const whatsNewCheckedRef = useRef(false);
   const [problemsOpenInfraCount, setProblemsOpenInfraCount] = useState(0);
+  const [projectsViewMode, setProjectsViewMode] = useState<"cards" | "list">("cards");
   const [projectsListSearch, setProjectsListSearch] = useState("");
   const [projectsListClientFilter, setProjectsListClientFilter] = useState<string>("all");
   const [projectsListWorkspaceFilter, setProjectsListWorkspaceFilter] = useState<string>("all");
   const [workspacesListSearch, setWorkspacesListSearch] = useState("");
   const deepLinkTaskHandledRef = useRef<string | null>(null);
+  const deepLinkProjectHandledRef = useRef<string | null>(null);
   const [taskTimeSummaryByTaskId, setTaskTimeSummaryByTaskId] = useState<
     Record<string, { total_seconds: number; logs: TimeLog[]; fetchedAtMs: number }>
   >({});
@@ -2482,11 +2772,19 @@ export function AppShell() {
     app_name: DEFAULT_APP_NAME,
     logo_url: DEFAULT_LOGO_URL,
   });
+  const [completionNotifyUserIds, setCompletionNotifyUserIds] = useState<number[]>([]);
   const [profileAvatarDataUrl, setProfileAvatarDataUrl] = useState<string>("");
   const [meWorkspaceAccess, setMeWorkspaceAccess] = useState<{ all: boolean; workspace_ids: string[] } | null>(null);
   const [meAdminAreaAccess, setMeAdminAreaAccess] = useState<{ all: boolean; area_keys: string[] } | null>(null);
   const [adminUsersCache, setAdminUsersCache] = useState<
-    Array<{ id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string }>
+    Array<{
+      id: number;
+      name: string;
+      email: string;
+      type: "admin" | "collaborador";
+      birth_date: string;
+      receive_all_task_emails?: boolean;
+    }>
   >([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const isAdmin = useMemo(() => {
@@ -2764,6 +3062,47 @@ export function AppShell() {
     // quickChangeTaskStatus e estavel o bastante no ciclo do componente
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [resolveStatusMeta, statusOptions],
+  );
+
+  const renderEditablePriorityTag = useCallback(
+    (record: TaskItem) => {
+      const meta = PRIORITY_META[record.priority] ?? { label: record.priority, color: "default" };
+      const options = [
+        { value: "low", label: "Baixa" },
+        { value: "medium", label: "Media" },
+        { value: "high", label: "Alta" },
+        { value: "critical", label: "Critica" },
+      ];
+      return (
+        <Dropdown
+          trigger={["click"]}
+          menu={{
+            items: options.map((opt) => ({
+              key: opt.value,
+              label: (
+                <Tag color={(PRIORITY_META[opt.value] ?? meta).color} style={{ marginInlineEnd: 0 }}>
+                  {opt.label}
+                </Tag>
+              ),
+              onClick: () => {
+                void quickChangeTaskPriority(record, opt.value);
+              },
+            })),
+          }}
+        >
+          <span
+            onClick={(event) => event.stopPropagation()}
+            style={{ cursor: "pointer", display: "inline-flex" }}
+          >
+            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>
+              {meta.label}
+            </Tag>
+          </span>
+        </Dropdown>
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   const renderTaskTitleCell = useCallback((value: string, record: TaskItem & { children?: TaskItem[]; subRows?: TaskItem[] }) => {
@@ -3474,6 +3813,7 @@ export function AppShell() {
   const filteredProjectsCards = useMemo(() => {
     const query = projectsListSearch.trim().toLowerCase();
     return accessibleProjectsList.filter((project) => {
+      if (project.archived_at) return false;
       const projectId = String(project.id ?? "");
       const name = String(project.name ?? "").toLowerCase();
       const clientId = project.client_id ? String(project.client_id) : "";
@@ -4567,9 +4907,15 @@ export function AppShell() {
       setMyWorkSearchFilter(localStorage.getItem(MY_WORK_SEARCH_FILTER_KEY) ?? "");
       const soundPref = localStorage.getItem(MENTION_SOUND_PREF_KEY);
       setMentionSoundEnabled(soundPref !== "0");
-      // Projetos / Areas de trabalho abrem sempre a visao geral (cards + filtros).
-      // Nao restaurar drill-down do localStorage nessas rotas.
-      if (initialKey === "projects" || initialKey === "workspaces") {
+      // Projetos / Areas de trabalho abrem sempre a visao geral (cards + filtros),
+      // exceto deep link #project/{id} ou #workspace/{id}.
+      const projectDeepLink = getProjectIdFromHash(window.location.hash);
+      const workspaceDeepLink = getWorkspaceIdFromHash(window.location.hash);
+      if (
+        (initialKey === "projects" || initialKey === "workspaces") &&
+        !projectDeepLink &&
+        !workspaceDeepLink
+      ) {
         setSelectedBoardId(null);
         setSelectedWorkspaceId(null);
         setSelectedPortfolioId(null);
@@ -4577,10 +4923,14 @@ export function AppShell() {
         setSelectedProjectId(null);
       } else {
         setSelectedBoardId(localStorage.getItem(BOARD_STORAGE_KEY));
-        setSelectedWorkspaceId(localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY));
+        setSelectedWorkspaceId(
+          workspaceDeepLink ?? localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY),
+        );
         setSelectedPortfolioId(localStorage.getItem(SELECTED_PORTFOLIO_STORAGE_KEY));
         setSelectedClientId(localStorage.getItem(SELECTED_CLIENT_STORAGE_KEY));
-        setSelectedProjectId(localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY));
+        setSelectedProjectId(
+          projectDeepLink ?? localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY),
+        );
       }
       const rawSidebarExpanded = localStorage.getItem(PROJECT_SIDEBAR_EXPANDED_KEY);
       if (rawSidebarExpanded) {
@@ -4674,6 +5024,8 @@ export function AppShell() {
       const defaultKey: MenuKey = "dashboard";
       const taskDeepLink = getTaskIdFromHash(window.location.hash);
       if (taskDeepLink) return;
+      const projectDeepLink = getProjectIdFromHash(window.location.hash);
+      const workspaceDeepLink = getWorkspaceIdFromHash(window.location.hash);
       let nextKey = getMenuKeyFromHash(window.location.hash, defaultKey);
       if (isAdmin && nextKey === "tasks") nextKey = "dashboard";
       const previousKey = getMenuKeyFromHash(previousHash, defaultKey);
@@ -4693,10 +5045,12 @@ export function AppShell() {
         return;
       }
       // Ao entrar em Projetos / Areas pelo menu/hash (mudanca de rota), abrir a visao geral.
-      // Skip se a navegacao veio da arvore de projetos (selecao concreta).
+      // Skip se deep link de projeto/workspace ou navegacao da arvore.
       if (
         (nextKey === "projects" || nextKey === "workspaces") &&
-        previousKey !== nextKey
+        previousKey !== nextKey &&
+        !projectDeepLink &&
+        !workspaceDeepLink
       ) {
         if (skipProjectSelectionResetRef.current) {
           skipProjectSelectionResetRef.current = false;
@@ -4774,6 +5128,35 @@ export function AppShell() {
     // openTask is a function declaration in this component scope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allTasks, hydratedSession, tasks, token]);
+
+  useEffect(() => {
+    if (!token || !hydratedSession) return;
+    const projectId =
+      typeof window !== "undefined" ? getProjectIdFromHash(window.location.hash) : null;
+    const workspaceId =
+      typeof window !== "undefined" ? getWorkspaceIdFromHash(window.location.hash) : null;
+    if (projectId) {
+      if (deepLinkProjectHandledRef.current === projectId) return;
+      if (!projects.some((row) => String(row.id) === projectId)) return;
+      deepLinkProjectHandledRef.current = projectId;
+      skipProjectSelectionResetRef.current = true;
+      setActiveKey("projects");
+      selectAccessibleProject(projectId);
+      return;
+    }
+    if (workspaceId) {
+      if (deepLinkProjectHandledRef.current === `ws:${workspaceId}`) return;
+      if (!workspaces.some((row) => String(row.id) === workspaceId)) return;
+      deepLinkProjectHandledRef.current = `ws:${workspaceId}`;
+      skipProjectSelectionResetRef.current = true;
+      setActiveKey("workspaces");
+      setSelectedWorkspaceId(workspaceId);
+      setSelectedPortfolioId(null);
+      setSelectedProjectId(null);
+      setSelectedBoardId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydratedSession, projects, token, workspaces]);
 
   useEffect(() => {
     if (!token || isAdmin || activeKey !== "dashboard") return;
@@ -5118,11 +5501,39 @@ export function AppShell() {
     if (!token || !canAccessAdminArea("users")) return;
     setAdminUsersLoading(true);
     const response = await apiRequest<
-      | Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>
+      | Array<{
+          id?: number;
+          name?: string;
+          username?: string;
+          email?: string;
+          is_staff?: boolean;
+          receive_all_task_emails?: boolean;
+        }>
       | {
-          users?: Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>;
-          results?: Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>;
-          data?: Array<{ id?: number; name?: string; username?: string; email?: string; is_staff?: boolean }>;
+          users?: Array<{
+            id?: number;
+            name?: string;
+            username?: string;
+            email?: string;
+            is_staff?: boolean;
+            receive_all_task_emails?: boolean;
+          }>;
+          results?: Array<{
+            id?: number;
+            name?: string;
+            username?: string;
+            email?: string;
+            is_staff?: boolean;
+            receive_all_task_emails?: boolean;
+          }>;
+          data?: Array<{
+            id?: number;
+            name?: string;
+            username?: string;
+            email?: string;
+            is_staff?: boolean;
+            receive_all_task_emails?: boolean;
+          }>;
         }
     >("/users?page=1&page_size=200&is_active=true", { method: "GET", token });
     setAdminUsersLoading(false);
@@ -5159,9 +5570,21 @@ export function AppShell() {
           email: String(row.email ?? ""),
           type: prev?.type ?? (isStaff ? "admin" : "collaborador"),
           birth_date: String(prev?.birth_date ?? ""),
+          receive_all_task_emails: Boolean(row.receive_all_task_emails),
         };
       })
-      .filter((row): row is { id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string } => Boolean(row));
+      .filter(
+        (
+          row,
+        ): row is {
+          id: number;
+          name: string;
+          email: string;
+          type: "admin" | "collaborador";
+          birth_date: string;
+          receive_all_task_emails: boolean;
+        } => Boolean(row),
+      );
     setAdminUsersCache(normalized);
   }, [apiMessage, canAccessAdminArea, token]);
   useEffect(() => {
@@ -5170,6 +5593,23 @@ export function AppShell() {
       fetchAdminUsers().catch(() => undefined);
     });
   }, [activeKey, canAccessAdminArea, fetchAdminUsers, token]);
+
+  useEffect(() => {
+    if (activeKey !== "admin-settings" || !token || !isAdmin) return;
+    queueMicrotask(() => {
+      fetchAdminUsers().catch(() => undefined);
+      void (async () => {
+        const response = await apiRequest<{ completion_recipient_ids?: number[] }>(
+          "/notifications/routing",
+          { token },
+        );
+        if (!response.ok) return;
+        setCompletionNotifyUserIds(
+          (response.data?.completion_recipient_ids ?? []).map((id) => Number(id)),
+        );
+      })();
+    });
+  }, [activeKey, fetchAdminUsers, isAdmin, token]);
   useEffect(() => {
     if (activeKey !== "status-config" || !token || !canAccessAdminArea("status-config")) return;
     queueMicrotask(() => {
@@ -5237,6 +5677,7 @@ export function AppShell() {
       localStorage.setItem(REFRESH_STORAGE_KEY, refresh);
       setAuthStep("credentials");
       setChallengeId(null);
+      applyReturnHashAfterLogin();
       apiMessage.success(
         response.data?.requires_2fa_setup
           ? "Login concluido. Recomendado configurar 2FA no perfil."
@@ -5272,6 +5713,7 @@ export function AppShell() {
     localStorage.setItem(REFRESH_STORAGE_KEY, refresh);
     setAuthStep("credentials");
     setChallengeId(null);
+    applyReturnHashAfterLogin();
     apiMessage.success("Sessao iniciada com sucesso.");
   }
 
@@ -5346,7 +5788,7 @@ export function AppShell() {
     apiMessage.success(watched ? "Voce deixou de seguir a tarefa." : "Voce passou a seguir a tarefa.");
   }
 
-  async function openTask(task: TaskItem, focusTab: TaskDrawerTab = "summary") {
+  async function openTask(task: TaskItem, focusTab: TaskDrawerTab = "comments") {
     setSelectedTask(task);
     setTaskDrawerTab(focusTab);
     if (typeof window !== "undefined") {
@@ -5510,6 +5952,7 @@ export function AppShell() {
     start_date?: string | Date | null;
     end_date?: string | Date | null;
     always_in_sprint?: boolean;
+    depends_on_previous?: boolean;
   }) {
     if (!createSubtaskParent) return;
     const startIso = fromDateInputValue(values.start_date);
@@ -5534,6 +5977,7 @@ export function AppShell() {
           start_date: startIso,
           end_date: endIso,
           always_in_sprint: Boolean(values.always_in_sprint),
+          depends_on_previous: Boolean(values.depends_on_previous),
         },
       });
       if (!response.ok) {
@@ -5620,7 +6064,7 @@ export function AppShell() {
             }}
             dataSource={nested}
             onRow={(subtask) => ({
-              onClick: () => void openTask(subtask),
+              onClick: () => { if (!hasTextSelection()) void openTask(subtask); },
               style: { cursor: "pointer" },
             })}
             columns={[
@@ -5641,7 +6085,7 @@ export function AppShell() {
                 title: "Prioridade",
                 dataIndex: "priority",
                 width: 110,
-                render: (value: string) => renderPriorityTag(value),
+                render: (_: string, record: TaskItem) => renderEditablePriorityTag(record),
               },
               {
                 title: "Prazo inicio",
@@ -6201,8 +6645,69 @@ export function AppShell() {
     if (isAdmin) await fetchAllTasks();
     await refreshBoardViewsForProject(selectedProjectId);
     if (selectedTask?.id === task.id) {
-      await openTask(updated ?? { ...task, status: nextStatus });
+      await openTask(updated ?? { ...task, status: nextStatus }, taskDrawerTab);
     }
+  }
+
+  async function quickChangeTaskPriority(task: TaskItem, nextPriority: string) {
+    const response = await apiRequest<{ task?: TaskItem }>(`/tasks/${task.id}`, {
+      method: "PATCH",
+      token,
+      body: { priority: nextPriority },
+    });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao atualizar prioridade.");
+      return;
+    }
+    apiMessage.success("Prioridade atualizada.");
+    const updated = response.data?.task;
+    if (updated) applyUpdatedTaskLocally(updated);
+    await fetchTasks();
+    if (isAdmin) await fetchAllTasks();
+    await refreshBoardViewsForProject(selectedProjectId);
+    if (selectedTask?.id === task.id && updated) {
+      setSelectedTask((prev) => (prev ? { ...prev, ...updated } : updated));
+    }
+  }
+
+  async function duplicateTask(task: TaskItem) {
+    const response = await apiRequest<{ task?: TaskItem }>(`/tasks/${task.id}/duplicate`, {
+      method: "POST",
+      token,
+      body: {},
+    });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao duplicar tarefa.");
+      return;
+    }
+    apiMessage.success("Tarefa duplicada.");
+    await fetchTasks();
+    if (isAdmin) await fetchAllTasks();
+    await refreshBoardViewsForProject(selectedProjectId);
+  }
+
+  async function archiveTask(task: TaskItem) {
+    const response = await apiRequest(`/tasks/${task.id}/archive`, { method: "POST", token, body: {} });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao arquivar tarefa.");
+      return;
+    }
+    apiMessage.success("Tarefa arquivada.");
+    if (selectedTask?.id === task.id) setSelectedTask(null);
+    await fetchTasks();
+    if (isAdmin) await fetchAllTasks();
+    await refreshBoardViewsForProject(selectedProjectId);
+  }
+
+  async function archiveProject(projectId: string) {
+    const response = await apiRequest(`/projects/${projectId}/archive`, { method: "POST", token, body: {} });
+    if (!response.ok) {
+      apiMessage.error(response.error?.message ?? "Falha ao arquivar projeto.");
+      return;
+    }
+    apiMessage.success("Projeto arquivado.");
+    setSelectedProjectId(null);
+    await fetchCrudData();
   }
 
   function selectAccessibleProject(projectId: string) {
@@ -6217,6 +6722,24 @@ export function AppShell() {
     setSelectedProjectId(projectId);
     const firstBoard = boardsForProject(projectId)[0]?.id ?? null;
     setSelectedBoardId(firstBoard);
+    if (typeof window !== "undefined") {
+      const nextHash = `#project/${projectId}`;
+      if (window.location.hash !== nextHash) {
+        skipProjectSelectionResetRef.current = true;
+        window.history.replaceState(null, "", nextHash);
+      }
+    }
+  }
+
+  async function copyProjectDeepLink(projectId: string) {
+    const hash = `#project/${projectId}`;
+    const url = `${window.location.origin}${window.location.pathname}${hash}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      apiMessage.success("Link do projeto copiado.");
+    } catch {
+      apiMessage.error("Nao foi possivel copiar o link.");
+    }
   }
 
   function buildRequestDescription(row: Record<string, unknown>) {
@@ -6479,7 +7002,7 @@ export function AppShell() {
     setMeWorkspaceAccess(null);
     setMeAdminAreaAccess(null);
     setSelectedTask(null);
-    setTaskDrawerTab("summary");
+    setTaskDrawerTab("comments");
     setNotifications([]);
     setTasks([]);
     setAllTasks([]);
@@ -6511,12 +7034,16 @@ export function AppShell() {
   }, [apiMessage, handleLogout]);
 
   useEffect(() => {
+    // So limpa hash apos hidratar sessao e sem token (logout real).
+    // Antes da hidratacao o token e null e o deep link nao pode ser apagado.
+    if (!hydratedSession) return;
     if (token) return;
     if (typeof window === "undefined") return;
     if (window.location.hash) {
+      persistReturnHash(window.location.hash);
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  }, [token]);
+  }, [hydratedSession, token]);
 
   async function patchEntity(path: string, payload: Record<string, unknown>, successMessage: string) {
     const response = await apiRequest(path, { method: "PATCH", token, body: payload });
@@ -7426,7 +7953,7 @@ export function AppShell() {
                             },
                           }}
                           onRow={(record) => ({
-                            onClick: () => openTask(record),
+                            onClick: () => { if (!hasTextSelection()) void openTask(record); },
                             style: { cursor: "pointer" },
                           })}
                           columns={[
@@ -7466,7 +7993,7 @@ export function AppShell() {
                               width: TASK_COL.priority,
                               ellipsis: true,
                               sorter: (a, b) => a.priority.localeCompare(b.priority),
-                              render: (v: string) => renderPriorityTag(v),
+                              render: (_: string, record: TaskItem) => renderEditablePriorityTag(record),
                             },
                             {
                               title: "Status",
@@ -7559,6 +8086,12 @@ export function AppShell() {
                                       size="small"
                                       icon={<CommentOutlined />}
                                       onClick={() => openTask(record, "comments").catch(() => undefined)}
+                                    />
+                                    <TipButton
+                                      tip="Duplicar tarefa"
+                                      size="small"
+                                      icon={<CopyOutlined />}
+                                      onClick={() => void duplicateTask(record)}
                                     />
                                     <TipButton
                                       tip={HELP_TIPS.excluir}
@@ -8199,7 +8732,7 @@ export function AppShell() {
                         },
                       }}
                       onRow={(record) => ({
-                        onClick: () => openTask(record),
+                        onClick: () => { if (!hasTextSelection()) void openTask(record); },
                         style: { cursor: "pointer" },
                       })}
                       columns={[
@@ -8239,7 +8772,7 @@ export function AppShell() {
                           width: TASK_COL.priority,
                           ellipsis: true,
                           sorter: (a, b) => a.priority.localeCompare(b.priority),
-                          render: (v: string) => renderPriorityTag(v),
+                          render: (_: string, record: TaskItem) => renderEditablePriorityTag(record),
                         },
                         {
                           title: "Status",
@@ -8334,6 +8867,12 @@ export function AppShell() {
                                   onClick={() => openTask(record, "comments").catch(() => undefined)}
                                 />
                                 <TipButton
+                                  tip="Duplicar tarefa"
+                                  size="small"
+                                  icon={<CopyOutlined />}
+                                  onClick={() => void duplicateTask(record)}
+                                />
+                                <TipButton
                                   tip={HELP_TIPS.excluir}
                                   size="small"
                                   danger
@@ -8394,7 +8933,14 @@ export function AppShell() {
                                       { title: "Aniversario", dataIndex: "birth_date", render: (v: string) => v || "-" },
                                       {
                                         title: "Acoes",
-                                        render: (record: { id: number; name: string; email: string; type: "admin" | "collaborador"; birth_date: string }) => (
+                                        render: (record: {
+                                          id: number;
+                                          name: string;
+                                          email: string;
+                                          type: "admin" | "collaborador";
+                                          birth_date: string;
+                                          receive_all_task_emails?: boolean;
+                                        }) => (
                                           <Space>
                                             <TipButton
                                               tip={HELP_TIPS.editar}
@@ -8402,11 +8948,17 @@ export function AppShell() {
                                               icon={<EditOutlined />}
                                               onClick={() => {
                                                 void (async () => {
+                                                  setUsersTabKey("u-update-page");
+                                                  // Aguarda o Form conectar (aba inativa nao monta sem forceRender).
+                                                  await Promise.resolve();
                                                   manageUserProfileForm.setFieldsValue({
                                                     user_id: record.id,
                                                     name: record.name,
                                                     email: record.email,
                                                     is_staff: record.type === "admin",
+                                                    receive_all_task_emails: Boolean(
+                                                      record.receive_all_task_emails,
+                                                    ),
                                                     birth_date: record.birth_date,
                                                     workspace_ids: [] as string[],
                                                     area_keys: [] as string[],
@@ -8441,7 +8993,6 @@ export function AppShell() {
                                                     );
                                                     return;
                                                   }
-                                                  setUsersTabKey("u-update-page");
                                                 })();
                                               }}
                                             >
@@ -8487,6 +9038,7 @@ export function AppShell() {
                             {
                               key: "u-create-page",
                               label: "Criar",
+                              forceRender: true,
                               children: (
                                 <Form
                                   layout="vertical"
@@ -8497,6 +9049,9 @@ export function AppShell() {
                                       name: String(values.name ?? ""),
                                       password: String(values.password ?? ""),
                                       is_staff: String(values.type ?? "collaborador") === "admin",
+                                      receive_all_task_emails:
+                                        String(values.type ?? "collaborador") === "admin" &&
+                                        Boolean(values.receive_all_task_emails),
                                     };
                                     const response = await apiRequest("/users", { method: "POST", token, body: payload });
                                     if (!response.ok) {
@@ -8514,6 +9069,7 @@ export function AppShell() {
                                           email: String(created.email ?? payload.email),
                                           type: payload.is_staff ? "admin" : "collaborador",
                                           birth_date: normalizeBirthDateInput(values.birth_date),
+                                          receive_all_task_emails: Boolean(payload.receive_all_task_emails),
                                         },
                                       ]);
                                       const wsIds = Array.isArray(values.workspace_ids)
@@ -8567,6 +9123,25 @@ export function AppShell() {
                                   </Form.Item>
                                   <Form.Item name="type" label="Tipo" initialValue="collaborador" rules={[{ required: true }]}>
                                     <Select options={[{ value: "admin", label: "Admin" }, { value: "collaborador", label: "Colaborador" }]} />
+                                  </Form.Item>
+                                  <Form.Item shouldUpdate={(prev, curr) => prev.type !== curr.type} noStyle>
+                                    {({ getFieldValue }) =>
+                                      getFieldValue("type") === "admin" ? (
+                                        <Form.Item
+                                          name="receive_all_task_emails"
+                                          label="Receber e-mails de tudo"
+                                          initialValue={false}
+                                          extra="Se Sim, este admin recebe e-mails de reporte de todas as tarefas (criacao, comentario, status), mesmo sem estar marcado nelas."
+                                        >
+                                          <Select
+                                            options={[
+                                              { value: true, label: "Sim" },
+                                              { value: false, label: "Nao" },
+                                            ]}
+                                          />
+                                        </Form.Item>
+                                      ) : null
+                                    }
                                   </Form.Item>
                                   <Form.Item shouldUpdate={(prev, curr) => prev.type !== curr.type} noStyle>
                                     {({ getFieldValue }) =>
@@ -8635,6 +9210,7 @@ export function AppShell() {
                             {
                               key: "u-update-page",
                               label: "Atualizar / Excluir",
+                              forceRender: true,
                               children: (
                                 <Form
                                   form={manageUserProfileForm}
@@ -8649,6 +9225,8 @@ export function AppShell() {
                                         email: values.email || undefined,
                                         is_staff: values.is_staff,
                                         is_active: values.is_active,
+                                        receive_all_task_emails: Boolean(values.is_staff) &&
+                                          Boolean(values.receive_all_task_emails),
                                         ...(nextPassword ? { password: nextPassword } : {}),
                                       },
                                     });
@@ -8713,6 +9291,9 @@ export function AppShell() {
                                               email: String(values.email ?? row.email),
                                               type: values.is_staff ? "admin" : "collaborador",
                                               birth_date: normalizeBirthDateInput(values.birth_date ?? row.birth_date),
+                                              receive_all_task_emails:
+                                                Boolean(values.is_staff) &&
+                                                Boolean(values.receive_all_task_emails),
                                             }
                                           : row,
                                       ),
@@ -8736,9 +9317,23 @@ export function AppShell() {
                                   <Form.Item shouldUpdate={(prev, curr) => prev.is_staff !== curr.is_staff} noStyle>
                                     {({ getFieldValue }) =>
                                       getFieldValue("is_staff") === true ? (
-                                        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                                          Administradores tem acesso a todas as areas de trabalho e da administracao.
-                                        </Typography.Paragraph>
+                                        <>
+                                          <Form.Item
+                                            name="receive_all_task_emails"
+                                            label="Receber e-mails de tudo"
+                                            extra="Se Sim, este admin recebe e-mails de reporte de todas as tarefas (criacao, comentario, status), mesmo sem estar marcado nelas."
+                                          >
+                                            <Select
+                                              options={[
+                                                { value: true, label: "Sim" },
+                                                { value: false, label: "Nao" },
+                                              ]}
+                                            />
+                                          </Form.Item>
+                                          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                                            Administradores tem acesso a todas as areas de trabalho e da administracao.
+                                          </Typography.Paragraph>
+                                        </>
                                       ) : (
                                         <>
                                           <Form.Item
@@ -8937,6 +9532,57 @@ export function AppShell() {
                 )}
                 {activeKey === "admin-settings" && isAdmin && (
                   <Row gutter={[16, 16]}>
+                    <Col span={24}>
+                      <Card title="E-mails de tarefas concluidas">
+                        <Typography.Paragraph type="secondary">
+                          Selecione um ou mais admins master. Eles recebem e-mail quando alguem conclui uma tarefa.
+                          Se a lista estiver vazia, todos os administradores (is_staff) recebem.
+                        </Typography.Paragraph>
+                        <Form
+                          layout="vertical"
+                          key={`completion-notify-${completionNotifyUserIds.join("-")}`}
+                          initialValues={{ completion_recipient_ids: completionNotifyUserIds }}
+                          onFinish={async (values) => {
+                            const ids = Array.isArray(values.completion_recipient_ids)
+                              ? values.completion_recipient_ids.map((v: string | number) => Number(v))
+                              : [];
+                            const response = await apiRequest<{ completion_recipient_ids?: number[] }>(
+                              "/notifications/routing",
+                              {
+                                method: "PATCH",
+                                token,
+                                body: { completion_recipient_ids: ids },
+                              },
+                            );
+                            if (!response.ok) {
+                              apiMessage.error(response.error?.message ?? "Falha ao salvar.");
+                              return;
+                            }
+                            setCompletionNotifyUserIds(
+                              (response.data?.completion_recipient_ids ?? ids).map((id) => Number(id)),
+                            );
+                            apiMessage.success("Destinatarios de conclusao atualizados.");
+                          }}
+                        >
+                          <Form.Item name="completion_recipient_ids" label="Admins master (conclusoes)">
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              showSearch
+                              optionFilterProp="label"
+                              placeholder="Vazio = todos os admins"
+                              options={adminUsersCache.map((u) => ({
+                                value: u.id,
+                                label: `${u.name || u.email || u.id} (#${u.id})`,
+                              }))}
+                            />
+                          </Form.Item>
+                          <Button type="primary" htmlType="submit">
+                            Salvar destinatarios
+                          </Button>
+                        </Form>
+                      </Card>
+                    </Col>
                     <Col span={24}>
                       <Card title="Configuracoes admin">
                         <Form
@@ -9249,16 +9895,75 @@ export function AppShell() {
                           ),
                         },
                         {
+                          title: "Portal",
+                          width: 100,
+                          render: (row: Record<string, unknown>) =>
+                            row.portal_enabled ? (
+                              <Tag color="success">{String(row.portal_username ?? "ativo")}</Tag>
+                            ) : (
+                              <Tag>Off</Tag>
+                            ),
+                        },
+                        {
+                          title: "Projeto padrao",
+                          width: 160,
+                          ellipsis: true,
+                          render: (row: Record<string, unknown>) => {
+                            const projectId = row.portal_default_project_id
+                              ? String(row.portal_default_project_id)
+                              : "";
+                            if (!projectId) return "-";
+                            const project = projects.find((p) => String(p.id) === projectId);
+                            return project ? String(project.name ?? projectId) : projectId;
+                          },
+                        },
+                        {
+                          title: "Quadro padrao",
+                          width: 140,
+                          ellipsis: true,
+                          render: (row: Record<string, unknown>) => {
+                            const boardId = row.portal_default_board_id
+                              ? String(row.portal_default_board_id)
+                              : "";
+                            if (!boardId) return "-";
+                            const board = boards.find((b) => b.id === boardId);
+                            return board ? board.name : boardId;
+                          },
+                        },
+                        {
+                          title: "Area vinculada",
+                          width: 160,
+                          ellipsis: true,
+                          render: (row: Record<string, unknown>) => {
+                            const clientId = String(row.id ?? "");
+                            const linked = workspaces.find((ws) => String(ws.client_id ?? "") === clientId);
+                            return linked ? String(linked.name ?? "-") : "-";
+                          },
+                        },
+                        {
                           title: "Acoes",
                           render: (row: Record<string, unknown>) => {
                             const clientId = String(row.id ?? "");
                             return (
                               <Space>
                                 <TipButton
+                                  tip="Ver detalhes do cliente"
+                                  size="small"
+                                  icon={<EyeOutlined />}
+                                  onClick={() => {
+                                    setClientDetailData(row);
+                                  }}
+                                >
+                                  Ver
+                                </TipButton>
+                                <TipButton
                                   tip={HELP_TIPS.editar}
                                   size="small"
                                   icon={<EditOutlined />}
                                   onClick={() => {
+                                    const linkedWorkspace = workspaces.find(
+                                      (ws) => String(ws.client_id ?? "") === clientId,
+                                    );
                                     manageClientForm.setFieldsValue({
                                       name: String(row.name ?? ""),
                                       cnpj: String(row.cnpj ?? ""),
@@ -9268,6 +9973,15 @@ export function AppShell() {
                                       portal_username: String(row.portal_username ?? ""),
                                       portal_enabled: Boolean(row.portal_enabled),
                                       portal_password: undefined,
+                                      portal_default_project_id: row.portal_default_project_id
+                                        ? String(row.portal_default_project_id)
+                                        : undefined,
+                                      portal_default_board_id: row.portal_default_board_id
+                                        ? String(row.portal_default_board_id)
+                                        : undefined,
+                                      linked_workspace_id: linkedWorkspace
+                                        ? String(linkedWorkspace.id)
+                                        : undefined,
                                     });
                                     setManageClientModal({ mode: "edit", clientId });
                                   }}
@@ -11429,7 +12143,19 @@ export function AppShell() {
                 )}
 
                 {activeKey === "projects" && !selectedWorkspaceId && !selectedProjectId && (
-                  <Card title="Projetos">
+                  <Card
+                    title="Projetos"
+                    extra={
+                      <Segmented
+                        value={projectsViewMode}
+                        onChange={(value) => setProjectsViewMode(value as "cards" | "list")}
+                        options={[
+                          { label: "Cards", value: "cards" },
+                          { label: "Lista", value: "list" },
+                        ]}
+                      />
+                    }
+                  >
                     <Space wrap style={{ marginBottom: 16, width: "100%" }}>
                       <Input
                         allowClear
@@ -11469,6 +12195,73 @@ export function AppShell() {
                         Limpar filtros
                       </Button>
                     </Space>
+                    {projectsViewMode === "list" ? (
+                      <Table
+                        rowKey={(row) => String(row.id)}
+                        dataSource={filteredProjectsCards}
+                        pagination={{ pageSize: 12 }}
+                        locale={{ emptyText: "Nenhum projeto encontrado com os filtros atuais." }}
+                        onRow={(project) => ({
+                          onClick: () => selectAccessibleProject(String(project.id)),
+                          style: { cursor: "pointer" },
+                        })}
+                        columns={[
+                          {
+                            title: "Projeto",
+                            dataIndex: "name",
+                            render: (v: string) => v || "-",
+                          },
+                          {
+                            title: "Cliente",
+                            render: (_: unknown, project: Record<string, unknown>) => {
+                              const clientId = project.client_id ? String(project.client_id) : "";
+                              return clientId
+                                ? String(clients.find((c) => String(c.id) === clientId)?.name ?? clientId)
+                                : "-";
+                            },
+                          },
+                          {
+                            title: "Area",
+                            render: (_: unknown, project: Record<string, unknown>) => {
+                              const portfolioId = project.portfolio_id ? String(project.portfolio_id) : "";
+                              const workspaceId = portfolioId
+                                ? String(portfolios.find((p) => String(p.id) === portfolioId)?.workspace_id ?? "")
+                                : "";
+                              return workspaceId
+                                ? String(workspaces.find((w) => String(w.id) === workspaceId)?.name ?? workspaceId)
+                                : "-";
+                            },
+                          },
+                          {
+                            title: "Status",
+                            dataIndex: "status",
+                            render: (v: string) => v || "-",
+                          },
+                          {
+                            title: "Acoes",
+                            width: 160,
+                            render: (_: unknown, project: Record<string, unknown>) => (
+                              <Space size={4} onClick={(e) => e.stopPropagation()}>
+                                <Button
+                                  size="small"
+                                  icon={<LinkOutlined />}
+                                  onClick={() => void copyProjectDeepLink(String(project.id))}
+                                />
+                                {isAdmin ? (
+                                  <Button
+                                    size="small"
+                                    danger
+                                    onClick={() => void archiveProject(String(project.id))}
+                                  >
+                                    Arquivar
+                                  </Button>
+                                ) : null}
+                              </Space>
+                            ),
+                          },
+                        ]}
+                      />
+                    ) : (
                     <Row gutter={[16, 16]}>
                       {filteredProjectsCards.length === 0 ? (
                         <Col span={24}>
@@ -11512,6 +12305,7 @@ export function AppShell() {
                         })
                       )}
                     </Row>
+                    )}
                   </Card>
                 )}
 
@@ -11603,8 +12397,67 @@ export function AppShell() {
                             </Button>
                           </HelpTip>
                         ) : null}
+                        {selectedProjectId ? (
+                          <Button
+                            icon={<LinkOutlined />}
+                            onClick={() => void copyProjectDeepLink(selectedProjectId)}
+                          >
+                            Copiar link
+                          </Button>
+                        ) : null}
+                        {selectedProjectId && isAdmin ? (
+                          <Button danger onClick={() => void archiveProject(selectedProjectId)}>
+                            Arquivar projeto
+                          </Button>
+                        ) : null}
                       </Space>
                     </Space>
+
+                    {selectedProjectId && selectedProject && isAdmin ? (
+                      <Card size="small" title="Horas e custo do projeto" style={{ marginBottom: 8 }}>
+                        <Form
+                          layout="inline"
+                          key={`project-hours-${selectedProjectId}`}
+                          initialValues={{
+                            planned_hours: Number(selectedProject.planned_hours ?? 0),
+                            planned_cost: Number(selectedProject.planned_cost ?? 0),
+                            monthly_contracted_hours: Number(selectedProject.monthly_contracted_hours ?? 0),
+                          }}
+                          onFinish={async (values) => {
+                            const response = await apiRequest(`/projects/${selectedProjectId}`, {
+                              method: "PATCH",
+                              token,
+                              body: {
+                                planned_hours: Number(values.planned_hours ?? 0),
+                                planned_cost: Number(values.planned_cost ?? 0),
+                                monthly_contracted_hours: Number(values.monthly_contracted_hours ?? 0),
+                              },
+                            });
+                            if (!response.ok) {
+                              apiMessage.error(response.error?.message ?? "Falha ao salvar horas do projeto.");
+                              return;
+                            }
+                            apiMessage.success("Horas/custo do projeto atualizados.");
+                            await fetchCrudData();
+                          }}
+                        >
+                          <Form.Item name="planned_hours" label="Horas previstas">
+                            <InputNumber min={0} step={0.5} style={{ width: 110 }} />
+                          </Form.Item>
+                          <Form.Item name="planned_cost" label="Custo previsto">
+                            <InputNumber min={0} step={1} style={{ width: 120 }} />
+                          </Form.Item>
+                          <Form.Item name="monthly_contracted_hours" label="Horas/mes contratadas">
+                            <InputNumber min={0} step={0.5} style={{ width: 110 }} />
+                          </Form.Item>
+                          <Form.Item>
+                            <Button type="primary" htmlType="submit">
+                              Salvar
+                            </Button>
+                          </Form.Item>
+                        </Form>
+                      </Card>
+                    ) : null}
 
                     {selectedProjectId && isAdmin ? (() => {
                       const projectBoards = boardsForProject(selectedProjectId);
@@ -12700,7 +13553,7 @@ export function AppShell() {
                                         expandedRowRender: (record) => renderExpandableSubtasks(record, false),
                                       }}
                                       onRow={(record) => ({
-                                        onClick: () => openTask(record),
+                                        onClick: () => { if (!hasTextSelection()) void openTask(record); },
                                         style: { cursor: "pointer" },
                                       })}
                                       columns={[
@@ -12735,7 +13588,7 @@ export function AppShell() {
                                           width: TASK_COL.priority,
                                           ellipsis: true,
                                           sorter: (a, b) => a.priority.localeCompare(b.priority),
-                                          render: (v: string) => renderPriorityTag(v),
+                                          render: (_: string, record: TaskItem) => renderEditablePriorityTag(record),
                                         },
                                         {
                                           title: "Status",
@@ -12854,6 +13707,12 @@ export function AppShell() {
                                                   onClick={() =>
                                                     openTask(record, "comments").catch(() => undefined)
                                                   }
+                                                />
+                                                <TipButton
+                                                  tip="Duplicar tarefa"
+                                                  size="small"
+                                                  icon={<CopyOutlined />}
+                                                  onClick={() => void duplicateTask(record)}
                                                 />
                                                 {(isAdmin ||
                                                   (currentUserId != null &&
@@ -13197,6 +14056,18 @@ export function AppShell() {
           layout="vertical"
           form={manageClientForm}
           onFinish={async (values) => {
+            const portalDefaults = {
+              portal_default_project_id: values.portal_default_project_id
+                ? String(values.portal_default_project_id)
+                : null,
+              portal_default_board_id: values.portal_default_board_id
+                ? String(values.portal_default_board_id)
+                : null,
+            };
+            let savedClientId: string | null =
+              manageClientModal?.mode === "edit" && manageClientModal.clientId
+                ? manageClientModal.clientId
+                : null;
             if (manageClientModal?.mode === "edit" && manageClientModal.clientId) {
               const response = await apiRequest(`/clients/${manageClientModal.clientId}`, {
                 method: "PATCH",
@@ -13209,6 +14080,7 @@ export function AppShell() {
                   description: values.description ?? "",
                   portal_username: String(values.portal_username ?? "").trim() || null,
                   portal_enabled: Boolean(values.portal_enabled),
+                  ...portalDefaults,
                   ...(String(values.portal_password ?? "").trim()
                     ? { portal_password: String(values.portal_password) }
                     : {}),
@@ -13231,6 +14103,7 @@ export function AppShell() {
                   description: values.description ?? "",
                   portal_username: String(values.portal_username ?? "").trim() || null,
                   portal_enabled: Boolean(values.portal_enabled),
+                  ...portalDefaults,
                   ...(String(values.portal_password ?? "").trim()
                     ? { portal_password: String(values.portal_password) }
                     : {}),
@@ -13241,11 +14114,47 @@ export function AppShell() {
                 return;
               }
               apiMessage.success("Cliente criado.");
-              const newClientId = response.data?.client?.id ? String(response.data.client.id) : null;
-              if (newClientId && createProjectOpen) {
-                createProjectForm.setFieldsValue({ client_id: newClientId });
+              savedClientId = response.data?.client?.id ? String(response.data.client.id) : null;
+              if (savedClientId && createProjectOpen) {
+                createProjectForm.setFieldsValue({ client_id: savedClientId });
               }
             }
+
+            if (savedClientId && manageClientModal?.mode === "edit") {
+              const nextWorkspaceId = values.linked_workspace_id
+                ? String(values.linked_workspace_id)
+                : "";
+              const previouslyLinked = workspaces.filter(
+                (ws) => String(ws.client_id ?? "") === savedClientId,
+              );
+              for (const ws of previouslyLinked) {
+                if (String(ws.id) === nextWorkspaceId) continue;
+                const unlink = await apiRequest(`/workspaces/${ws.id}`, {
+                  method: "PATCH",
+                  token,
+                  body: { client_id: null },
+                });
+                if (!unlink.ok) {
+                  apiMessage.error(unlink.error?.message ?? "Falha ao desvincular area.");
+                  return;
+                }
+              }
+              if (nextWorkspaceId) {
+                const already = previouslyLinked.some((ws) => String(ws.id) === nextWorkspaceId);
+                if (!already) {
+                  const link = await apiRequest(`/workspaces/${nextWorkspaceId}`, {
+                    method: "PATCH",
+                    token,
+                    body: { client_id: savedClientId },
+                  });
+                  if (!link.ok) {
+                    apiMessage.error(link.error?.message ?? "Falha ao vincular area.");
+                    return;
+                  }
+                }
+              }
+            }
+
             setManageClientModal(null);
             manageClientForm.resetFields();
             await fetchCrudData();
@@ -13309,8 +14218,148 @@ export function AppShell() {
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
+          <Form.Item name="portal_default_project_id" label="Projeto padrao do portal">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Selecione o projeto"
+              options={projects.map((project) => ({
+                value: String(project.id),
+                label: String(project.name ?? project.id),
+              }))}
+              onChange={() => {
+                manageClientForm.setFieldsValue({ portal_default_board_id: undefined });
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, curr) =>
+              prev.portal_default_project_id !== curr.portal_default_project_id
+            }
+          >
+            {({ getFieldValue }) => {
+              const projectId = getFieldValue("portal_default_project_id")
+                ? String(getFieldValue("portal_default_project_id"))
+                : "";
+              const boardOptions = boards
+                .filter((board) => !projectId || board.project_id === projectId)
+                .map((board) => ({ value: board.id, label: board.name }));
+              return (
+                <Form.Item name="portal_default_board_id" label="Quadro padrao do portal">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="Selecione o quadro"
+                    disabled={!projectId}
+                    options={boardOptions}
+                  />
+                </Form.Item>
+              );
+            }}
+          </Form.Item>
+          {manageClientModal?.mode === "edit" ? (
+            <Form.Item
+              name="linked_workspace_id"
+              label="Area de trabalho vinculada"
+              extra="Vincula a area ao cliente (PATCH workspace.client_id)."
+            >
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="Selecione a area"
+                options={workspaces.map((ws) => ({
+                  value: String(ws.id),
+                  label: String(ws.name ?? ws.id),
+                }))}
+              />
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
+
+      <Drawer
+        title={clientDetailData ? String(clientDetailData.name ?? "Cliente") : "Cliente"}
+        open={Boolean(clientDetailData)}
+        onClose={() => setClientDetailData(null)}
+        size={420}
+      >
+        {clientDetailData ? (
+          <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+            <div>
+              <Typography.Text type="secondary">CNPJ</Typography.Text>
+              <div>{String(clientDetailData.cnpj ?? "—")}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Contato</Typography.Text>
+              <div>{String(clientDetailData.contact_name ?? "—")}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">E-mails financeiros</Typography.Text>
+              <div>{String(clientDetailData.financial_emails ?? "—")}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Status</Typography.Text>
+              <div>{String(clientDetailData.status ?? "—")}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Descricao</Typography.Text>
+              <Typography.Paragraph style={{ marginBottom: 0 }}>
+                {String(clientDetailData.description ?? "—") || "—"}
+              </Typography.Paragraph>
+            </div>
+            <Divider style={{ margin: "8px 0" }} />
+            <Typography.Text strong>Portal</Typography.Text>
+            <div>
+              <Typography.Text type="secondary">Ativo</Typography.Text>
+              <div>{clientDetailData.portal_enabled ? "Sim" : "Nao"}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Usuario</Typography.Text>
+              <div>{String(clientDetailData.portal_username ?? "—") || "—"}</div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Projeto padrao</Typography.Text>
+              <div>
+                {(() => {
+                  const projectId = clientDetailData.portal_default_project_id
+                    ? String(clientDetailData.portal_default_project_id)
+                    : "";
+                  if (!projectId) return "—";
+                  const project = projects.find((p) => String(p.id) === projectId);
+                  return project ? String(project.name ?? projectId) : projectId;
+                })()}
+              </div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Quadro padrao</Typography.Text>
+              <div>
+                {(() => {
+                  const boardId = clientDetailData.portal_default_board_id
+                    ? String(clientDetailData.portal_default_board_id)
+                    : "";
+                  if (!boardId) return "—";
+                  const board = boards.find((b) => b.id === boardId);
+                  return board ? board.name : boardId;
+                })()}
+              </div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Area vinculada</Typography.Text>
+              <div>
+                {(() => {
+                  const clientId = String(clientDetailData.id ?? "");
+                  const linked = workspaces.find((ws) => String(ws.client_id ?? "") === clientId);
+                  return linked ? String(linked.name ?? "—") : "—";
+                })()}
+              </div>
+            </div>
+          </Space>
+        ) : null}
+      </Drawer>
 
       <Modal
         title={manageServiceModal?.mode === "edit" ? "Editar servico" : "Novo servico"}
@@ -14610,6 +15659,16 @@ export function AppShell() {
                 <Switch />
               </Form.Item>
             </Col>
+            <Col xs={24}>
+              <Form.Item
+                name="depends_on_previous"
+                label="Depende da anterior"
+                valuePropName="checked"
+                extra="Atrela esta subtarefa a ultima subtarefa da lista."
+              >
+                <Switch />
+              </Form.Item>
+            </Col>
           </Row>
         </Form>
       </Modal>
@@ -14618,8 +15677,8 @@ export function AppShell() {
         title={
           selectedTask
             ? selectedTask.parent_id
-              ? `Subtarefa: ${selectedTask.title}`
-              : `Tarefa: ${selectedTask.title}`
+              ? `Subtarefa${selectedTask.number != null ? ` #${selectedTask.number}` : ""}: ${selectedTask.title}`
+              : `Tarefa${selectedTask.number != null ? ` #${selectedTask.number}` : ""}: ${selectedTask.title}`
             : "Tarefa"
         }
         extra={
@@ -14961,7 +16020,7 @@ export function AppShell() {
                     style={{ width: "100%" }}
                     dataSource={taskSubtasks}
                     onRow={(subtask) => ({
-                      onClick: () => void openTask(subtask),
+                      onClick: () => { if (!hasTextSelection()) void openTask(subtask); },
                       style: { cursor: "pointer" },
                     })}
                     columns={[
@@ -15062,113 +16121,6 @@ export function AppShell() {
               activeKey={taskDrawerTab}
               onChange={(key) => setTaskDrawerTab(key as TaskDrawerTab)}
               items={[
-                {
-                  key: "summary",
-                  label: "Registros de tempo",
-                  children: (
-                    <div>
-                      <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }} wrap>
-                        <Typography.Paragraph style={{ marginBottom: 0 }}>
-                          Total acumulado: {secondsToText(liveTaskTotalSeconds)}
-                        </Typography.Paragraph>
-                        <Button
-                          size="small"
-                          icon={<PlusOutlined />}
-                          onClick={() => {
-                            openManualTimeModal();
-                          }}
-                        >
-                          Adicionar sessao
-                        </Button>
-                      </Space>
-                      <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                        {taskSummary.logs.length === 0 ? (
-                          <Typography.Text type="secondary">Nenhum registro ainda.</Typography.Text>
-                        ) : null}
-                        {taskSummary.logs.map((log) => {
-                          const canEdit =
-                            isAdmin || (currentUserId != null && Number(log.user_id) === Number(currentUserId));
-                          if (log.status === "deleted") return null;
-                          return (
-                            <Card key={log.id} size="small">
-                              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-                                <Space orientation="vertical" size={0} style={{ flex: 1, minWidth: 0 }}>
-                                  <Typography.Text style={log.is_manual ? { color: "#cf1322" } : undefined}>
-                                    {log.user_name ? `${log.user_name} · ` : ""}
-                                    {formatTimeLogStatus(log.status)} - {secondsToText(log.total_seconds)}
-                                    {log.is_manual
-                                      ? log.source === "edited"
-                                        ? " (editado)"
-                                        : " (manual)"
-                                      : ""}
-                                  </Typography.Text>
-                                  <Typography.Text type="secondary">
-                                    {formatDate(log.started_at)} ate {formatDate(log.ended_at)}
-                                  </Typography.Text>
-                                </Space>
-                                {canEdit ? (
-                                  <Space size={4} wrap>
-                                    <TipButton
-                                      tip="Ajustar inicio/fim deste registro (ex.: play esquecido ligado)"
-                                      size="small"
-                                      icon={<EditOutlined />}
-                                      onClick={() => openEditTimeLogModal(log)}
-                                    >
-                                      Editar
-                                    </TipButton>
-                                    <TipButton
-                                      tip="Remover este registro"
-                                      size="small"
-                                      danger
-                                      icon={<DeleteOutlined />}
-                                      onClick={() =>
-                                        openDeleteConfirmModal({
-                                          title: "Remover este registro de tempo?",
-                                          onConfirm: async () => {
-                                            await deleteTimeLogFromDrawer(log);
-                                          },
-                                        })
-                                      }
-                                    >
-                                      Excluir
-                                    </TipButton>
-                                  </Space>
-                                ) : null}
-                              </Space>
-                            </Card>
-                          );
-                        })}
-                      </Space>
-                    </div>
-                  ),
-                },
-                {
-                  key: "activity",
-                  label: "Historico",
-                  children: (
-                    <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                      {taskActivity.length === 0 ? (
-                        <Empty description="Nenhum evento no historico ainda." />
-                      ) : (
-                        taskActivity.map((item, index) => (
-                          <Card key={`${item.event_type}-${item.created_at}-${index}`} size="small">
-                            <Space orientation="vertical" size={2} style={{ width: "100%" }}>
-                              <Typography.Text strong>{formatTaskActivityTitle(item.event_type)}</Typography.Text>
-                              {humanizeTaskActivitySummary(item.summary) ? (
-                                <Typography.Text type="secondary">
-                                  {humanizeTaskActivitySummary(item.summary)}
-                                </Typography.Text>
-                              ) : null}
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                {formatDate(item.created_at)}
-                              </Typography.Text>
-                            </Space>
-                          </Card>
-                        ))
-                      )}
-                    </Space>
-                  ),
-                },
                 {
                   key: "comments",
                   label: "Comentarios",
@@ -15507,7 +16459,114 @@ export function AppShell() {
                       })()}
                     </Space>
                   ),
-                },
+                                },
+                {
+                  key: "summary",
+                  label: "Registros de tempo",
+                  children: (
+                    <div>
+                      <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }} wrap>
+                        <Typography.Paragraph style={{ marginBottom: 0 }}>
+                          Total acumulado: {secondsToText(liveTaskTotalSeconds)}
+                        </Typography.Paragraph>
+                        <Button
+                          size="small"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            openManualTimeModal();
+                          }}
+                        >
+                          Adicionar sessao
+                        </Button>
+                      </Space>
+                      <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                        {taskSummary.logs.length === 0 ? (
+                          <Typography.Text type="secondary">Nenhum registro ainda.</Typography.Text>
+                        ) : null}
+                        {taskSummary.logs.map((log) => {
+                          const canEdit =
+                            isAdmin || (currentUserId != null && Number(log.user_id) === Number(currentUserId));
+                          if (log.status === "deleted") return null;
+                          return (
+                            <Card key={log.id} size="small">
+                              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+                                <Space orientation="vertical" size={0} style={{ flex: 1, minWidth: 0 }}>
+                                  <Typography.Text style={log.is_manual ? { color: "#cf1322" } : undefined}>
+                                    {log.user_name ? `${log.user_name} · ` : ""}
+                                    {formatTimeLogStatus(log.status)} - {secondsToText(log.total_seconds)}
+                                    {log.is_manual
+                                      ? log.source === "edited"
+                                        ? " (editado)"
+                                        : " (manual)"
+                                      : ""}
+                                  </Typography.Text>
+                                  <Typography.Text type="secondary">
+                                    {formatDate(log.started_at)} ate {formatDate(log.ended_at)}
+                                  </Typography.Text>
+                                </Space>
+                                {canEdit ? (
+                                  <Space size={4} wrap>
+                                    <TipButton
+                                      tip="Ajustar inicio/fim deste registro (ex.: play esquecido ligado)"
+                                      size="small"
+                                      icon={<EditOutlined />}
+                                      onClick={() => openEditTimeLogModal(log)}
+                                    >
+                                      Editar
+                                    </TipButton>
+                                    <TipButton
+                                      tip="Remover este registro"
+                                      size="small"
+                                      danger
+                                      icon={<DeleteOutlined />}
+                                      onClick={() =>
+                                        openDeleteConfirmModal({
+                                          title: "Remover este registro de tempo?",
+                                          onConfirm: async () => {
+                                            await deleteTimeLogFromDrawer(log);
+                                          },
+                                        })
+                                      }
+                                    >
+                                      Excluir
+                                    </TipButton>
+                                  </Space>
+                                ) : null}
+                              </Space>
+                            </Card>
+                          );
+                        })}
+                      </Space>
+                    </div>
+                  ),
+                                },
+                {
+                  key: "activity",
+                  label: "Historico",
+                  children: (
+                    <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                      {taskActivity.length === 0 ? (
+                        <Empty description="Nenhum evento no historico ainda." />
+                      ) : (
+                        taskActivity.map((item, index) => (
+                          <Card key={`${item.event_type}-${item.created_at}-${index}`} size="small">
+                            <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                              <Typography.Text strong>{formatTaskActivityTitle(item.event_type)}</Typography.Text>
+                              {humanizeTaskActivitySummary(item.summary) ? (
+                                <Typography.Text type="secondary">
+                                  {humanizeTaskActivitySummary(item.summary)}
+                                </Typography.Text>
+                              ) : null}
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                {formatDate(item.created_at)}
+                              </Typography.Text>
+                            </Space>
+                          </Card>
+                        ))
+                      )}
+                    </Space>
+                  ),
+                                }
               ]}
             />
           </Space>

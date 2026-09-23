@@ -31,6 +31,8 @@ class ClientCreateSerializer(serializers.ModelSerializer):
     portal_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     portal_username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     portal_enabled = serializers.BooleanField(required=False)
+    portal_default_project_id = serializers.UUIDField(required=False, allow_null=True)
+    portal_default_board_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Client
@@ -44,6 +46,8 @@ class ClientCreateSerializer(serializers.ModelSerializer):
             "portal_username",
             "portal_password",
             "portal_enabled",
+            "portal_default_project_id",
+            "portal_default_board_id",
         )
         extra_kwargs = {
             "cnpj": {"required": True},
@@ -70,10 +74,30 @@ class ClientCreateSerializer(serializers.ModelSerializer):
         cleaned = str(value).strip()
         return cleaned or None
 
+    def validate_portal_default_project_id(self, value):
+        if value is None:
+            return None
+        from blackbeans_api.governance.models import Project
+
+        if not Project.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Projeto padrao do portal nao encontrado.")
+        return value
+
+    def validate_portal_default_board_id(self, value):
+        if value is None:
+            return None
+        from blackbeans_api.governance.models import Board
+
+        if not Board.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Quadro padrao do portal nao encontrado.")
+        return value
+
     def create(self, validated_data):
         portal_password = validated_data.pop("portal_password", "") or ""
         portal_username = validated_data.get("portal_username")
         portal_enabled = validated_data.get("portal_enabled", False)
+        project_id = validated_data.pop("portal_default_project_id", None)
+        board_id = validated_data.pop("portal_default_board_id", None)
         if portal_enabled and not portal_username:
             raise serializers.ValidationError(
                 {"portal_username": "Informe o usuario do portal quando o acesso estiver ativo."},
@@ -83,6 +107,8 @@ class ClientCreateSerializer(serializers.ModelSerializer):
                 {"portal_password": "Informe a senha do portal quando o acesso estiver ativo."},
             )
         client = Client(**validated_data)
+        client.portal_default_project_id = project_id
+        client.portal_default_board_id = board_id
         if portal_password:
             client.set_portal_password(portal_password)
         client.save()
@@ -93,6 +119,8 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
     portal_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     portal_username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     portal_enabled = serializers.BooleanField(required=False)
+    portal_default_project_id = serializers.UUIDField(required=False, allow_null=True)
+    portal_default_board_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Client
@@ -106,6 +134,8 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
             "portal_username",
             "portal_password",
             "portal_enabled",
+            "portal_default_project_id",
+            "portal_default_board_id",
         )
         extra_kwargs = {
             "name": {"required": False},
@@ -133,8 +163,30 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
         cleaned = str(value).strip()
         return cleaned or None
 
+    def validate_portal_default_project_id(self, value):
+        if value is None:
+            return None
+        from blackbeans_api.governance.models import Project
+
+        if not Project.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Projeto padrao do portal nao encontrado.")
+        return value
+
+    def validate_portal_default_board_id(self, value):
+        if value is None:
+            return None
+        from blackbeans_api.governance.models import Board
+
+        if not Board.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Quadro padrao do portal nao encontrado.")
+        return value
+
     def update(self, instance, validated_data):
         portal_password = validated_data.pop("portal_password", None)
+        if "portal_default_project_id" in validated_data:
+            instance.portal_default_project_id = validated_data.pop("portal_default_project_id")
+        if "portal_default_board_id" in validated_data:
+            instance.portal_default_board_id = validated_data.pop("portal_default_board_id")
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
@@ -166,6 +218,12 @@ def client_to_representation(client: Client) -> dict:
         "portal_username": client.portal_username,
         "portal_enabled": bool(client.portal_enabled),
         "portal_has_password": bool(client.portal_password_hash),
+        "portal_default_project_id": (
+            str(client.portal_default_project_id) if client.portal_default_project_id else None
+        ),
+        "portal_default_board_id": (
+            str(client.portal_default_board_id) if client.portal_default_board_id else None
+        ),
         "created_at": client.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": client.updated_at.isoformat().replace("+00:00", "Z"),
     }

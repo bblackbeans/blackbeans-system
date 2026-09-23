@@ -192,3 +192,85 @@ class NotificationsReadAllView(APIView):
             read_at=now,
         )
         return success_response(correlation_id=correlation_id, data={"updated": updated})
+
+
+class NotificationRoutingSettingsView(APIView):
+    """GET/PATCH /notifications/routing — admins master para e-mails de conclusao."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        if not request.user.is_staff:
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Apenas administradores.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        from blackbeans_api.governance.models import NotificationRoutingSettings
+
+        row = NotificationRoutingSettings.get_solo()
+        ids = [int(v) for v in (row.completion_recipient_ids or []) if str(v).isdigit() or isinstance(v, int)]
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "completion_recipient_ids": ids,
+                "mode": "masters" if ids else "all_staff",
+            },
+        )
+
+    def patch(self, request: Request):
+        correlation_id = get_correlation_id(request)
+        if not request.user.is_staff:
+            return error_response(
+                correlation_id=correlation_id,
+                code="forbidden",
+                message="Apenas administradores.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        from django.contrib.auth import get_user_model
+        from blackbeans_api.governance.models import NotificationRoutingSettings
+
+        User = get_user_model()
+        raw = request.data.get("completion_recipient_ids", [])
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            return error_response(
+                correlation_id=correlation_id,
+                code="invalid_payload",
+                message="completion_recipient_ids deve ser uma lista.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+        ids: list[int] = []
+        for value in raw:
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        ids = sorted(set(ids))
+        if ids:
+            existing = set(User.objects.filter(pk__in=ids, is_active=True).values_list("pk", flat=True))
+            missing = [pk for pk in ids if pk not in existing]
+            if missing:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="invalid_users",
+                    message="Um ou mais usuarios sao invalidos.",
+                    details={"missing": missing},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+        row = NotificationRoutingSettings.get_solo()
+        row.completion_recipient_ids = ids
+        row.save(update_fields=["completion_recipient_ids", "updated_at"])
+        return success_response(
+            correlation_id=correlation_id,
+            data={
+                "completion_recipient_ids": ids,
+                "mode": "masters" if ids else "all_staff",
+            },
+        )
