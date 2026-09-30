@@ -16,6 +16,28 @@ def _normalize_financial_emails(value: str) -> str:
     return ";".join([item for item in parts if item])
 
 
+def _validate_portfolio_id(value):
+    if value is None:
+        return None
+    from blackbeans_api.governance.models import Portfolio
+
+    if not Portfolio.objects.filter(pk=value).exists():
+        raise serializers.ValidationError("Portfolio do portal nao encontrado.")
+    return value
+
+
+def _portal_portfolio_name(client: Client) -> str | None:
+    if not client.portal_portfolio_id:
+        return None
+    cached = client.__dict__.get("portal_portfolio")
+    if cached is not None and str(cached.pk) == str(client.portal_portfolio_id):
+        return cached.name or None
+    from blackbeans_api.governance.models import Portfolio
+
+    name = Portfolio.objects.filter(pk=client.portal_portfolio_id).values_list("name", flat=True).first()
+    return name or None
+
+
 def _validate_financial_emails(value: str) -> str:
     normalized = _normalize_financial_emails(value)
     if not normalized:
@@ -33,6 +55,7 @@ class ClientCreateSerializer(serializers.ModelSerializer):
     portal_enabled = serializers.BooleanField(required=False)
     portal_default_project_id = serializers.UUIDField(required=False, allow_null=True)
     portal_default_board_id = serializers.UUIDField(required=False, allow_null=True)
+    portal_portfolio_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Client
@@ -48,6 +71,7 @@ class ClientCreateSerializer(serializers.ModelSerializer):
             "portal_enabled",
             "portal_default_project_id",
             "portal_default_board_id",
+            "portal_portfolio_id",
         )
         extra_kwargs = {
             "cnpj": {"required": True},
@@ -92,12 +116,16 @@ class ClientCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Quadro padrao do portal nao encontrado.")
         return value
 
+    def validate_portal_portfolio_id(self, value):
+        return _validate_portfolio_id(value)
+
     def create(self, validated_data):
         portal_password = validated_data.pop("portal_password", "") or ""
         portal_username = validated_data.get("portal_username")
         portal_enabled = validated_data.get("portal_enabled", False)
         project_id = validated_data.pop("portal_default_project_id", None)
         board_id = validated_data.pop("portal_default_board_id", None)
+        portfolio_id = validated_data.pop("portal_portfolio_id", None)
         if portal_enabled and not portal_username:
             raise serializers.ValidationError(
                 {"portal_username": "Informe o usuario do portal quando o acesso estiver ativo."},
@@ -109,6 +137,7 @@ class ClientCreateSerializer(serializers.ModelSerializer):
         client = Client(**validated_data)
         client.portal_default_project_id = project_id
         client.portal_default_board_id = board_id
+        client.portal_portfolio_id = portfolio_id
         if portal_password:
             client.set_portal_password(portal_password)
         client.save()
@@ -121,6 +150,7 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
     portal_enabled = serializers.BooleanField(required=False)
     portal_default_project_id = serializers.UUIDField(required=False, allow_null=True)
     portal_default_board_id = serializers.UUIDField(required=False, allow_null=True)
+    portal_portfolio_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Client
@@ -136,6 +166,7 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
             "portal_enabled",
             "portal_default_project_id",
             "portal_default_board_id",
+            "portal_portfolio_id",
         )
         extra_kwargs = {
             "name": {"required": False},
@@ -181,12 +212,18 @@ class ClientUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Quadro padrao do portal nao encontrado.")
         return value
 
+    def validate_portal_portfolio_id(self, value):
+        return _validate_portfolio_id(value)
+
     def update(self, instance, validated_data):
         portal_password = validated_data.pop("portal_password", None)
         if "portal_default_project_id" in validated_data:
             instance.portal_default_project_id = validated_data.pop("portal_default_project_id")
         if "portal_default_board_id" in validated_data:
             instance.portal_default_board_id = validated_data.pop("portal_default_board_id")
+        if "portal_portfolio_id" in validated_data:
+            instance.portal_portfolio_id = validated_data.pop("portal_portfolio_id")
+            instance.__dict__.pop("portal_portfolio", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
@@ -224,6 +261,10 @@ def client_to_representation(client: Client) -> dict:
         "portal_default_board_id": (
             str(client.portal_default_board_id) if client.portal_default_board_id else None
         ),
+        "portal_portfolio_id": (
+            str(client.portal_portfolio_id) if client.portal_portfolio_id else None
+        ),
+        "portal_portfolio_name": _portal_portfolio_name(client),
         "created_at": client.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": client.updated_at.isoformat().replace("+00:00", "Z"),
     }

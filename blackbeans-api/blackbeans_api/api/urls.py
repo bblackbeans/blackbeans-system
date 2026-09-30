@@ -22,6 +22,7 @@ from blackbeans_api.api.collaborators_views import AdminCollaboratorDetailView
 from blackbeans_api.api.collaborators_views import AdminCollaboratorListCreateView
 from blackbeans_api.api.client_requests_views import AdminHoursDashboardView
 from blackbeans_api.api.client_requests_views import ClientRequestConvertView
+from blackbeans_api.api.client_requests_views import ClientRequestDetailView
 from blackbeans_api.api.client_requests_views import ClientRequestListView
 from blackbeans_api.api.client_requests_views import ClientRequestPublicCreateView
 from blackbeans_api.api.client_portal_views import ClientPortalAreaView
@@ -184,6 +185,11 @@ urlpatterns = [
     ),
     path("client-requests", ClientRequestListView.as_view(), name="client-requests-list"),
     path("client-requests/public", ClientRequestPublicCreateView.as_view(), name="client-requests-public"),
+    path(
+        "client-requests/<uuid:request_id>",
+        ClientRequestDetailView.as_view(),
+        name="client-requests-detail",
+    ),
     path(
         "client-requests/<uuid:request_id>/convert",
         ClientRequestConvertView.as_view(),

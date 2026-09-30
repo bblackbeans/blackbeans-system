@@ -22,6 +22,7 @@ from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
+from blackbeans_api.clients.models import Client
 from blackbeans_api.governance.models import Board
 from blackbeans_api.governance.models import BoardGroup
 from blackbeans_api.governance.models import ClientRequest
@@ -122,6 +123,7 @@ def client_request_to_representation(item: ClientRequest) -> dict:
     return {
         "id": str(item.pk),
         "client_id": str(item.client_id) if item.client_id else None,
+        "linked_client_name": item.client.name if item.client_id and item.client else None,
         "client_name": item.client_name,
         "contact_name": item.contact_name,
         "contact_email": item.contact_email,
@@ -292,7 +294,12 @@ class ClientRequestListView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        qs = ClientRequest.objects.prefetch_related("attachments").all().order_by("-created_at")
+        qs = (
+            ClientRequest.objects.select_related("client", "converted_task", "converted_project")
+            .prefetch_related("attachments")
+            .all()
+            .order_by("-created_at")
+        )
         status_filter = (request.query_params.get("status") or "").strip()
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -301,6 +308,61 @@ class ClientRequestListView(APIView):
             correlation_id=correlation_id,
             data={"requests": [client_request_to_representation(row) for row in rows]},
             meta={"total": len(rows)},
+        )
+
+
+class ClientRequestDetailView(APIView):
+    """PATCH /client-requests/{id} — vincula ou desvincula o cliente, em qualquer status."""
+
+    permission_classes = [IsAuthenticated, HasStaffOrAdminArea("client-requests")]
+
+    def patch(self, request: Request, request_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            item = ClientRequest.objects.get(pk=request_id)
+        except ClientRequest.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="not_found",
+                message="Pedido nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "client_id" not in request.data:
+            return error_response(
+                correlation_id=correlation_id,
+                code="validation_error",
+                message="Informe client_id para vincular o pedido.",
+                details={"client_id": ["Obrigatorio."]},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_client_id = request.data.get("client_id")
+        if raw_client_id in (None, ""):
+            item.client = None
+        else:
+            try:
+                client = Client.objects.get(pk=raw_client_id)
+            except (Client.DoesNotExist, ValueError, TypeError):
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="Cliente nao encontrado.",
+                    details={"client_id": ["Cliente nao encontrado."]},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            item.client = client
+
+        item.save(update_fields=["client", "updated_at"])
+        item = (
+            ClientRequest.objects.select_related("client", "converted_task", "converted_project")
+            .prefetch_related("attachments")
+            .get(pk=item.pk)
+        )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"request": client_request_to_representation(item)},
         )
 
 

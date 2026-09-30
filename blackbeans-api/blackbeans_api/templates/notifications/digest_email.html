@@ -16,9 +16,9 @@
               {% for item in notifications %}
               <div style="border-top:1px solid #e6e9ef;padding:12px 0;">
                 <div style="font-weight:600;">{{ item.title }}</div>
-                <div style="font-size:13px;color:#676879;">{{ item.message }}</div>
-                {% if item.metadata.deep_link %}
-                <a href="{{ item.metadata.deep_link }}" style="font-size:13px;color:#ff6b00;">Abrir</a>
+                <div style="font-size:13px;color:#676879;white-space:pre-line;">{{ item.message }}</div>
+                {% if item.deep_link %}
+                <a href="{{ item.deep_link }}" style="font-size:13px;color:#ff6b00;">Abrir</a>
                 {% endif %}
               </div>
               {% endfor %}

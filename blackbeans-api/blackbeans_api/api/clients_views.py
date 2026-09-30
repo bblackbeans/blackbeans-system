@@ -73,7 +73,7 @@ class ClientsListCreateView(APIView):
         page_size = min(page_size, 100)
         search = (request.query_params.get("search") or "").strip()
 
-        queryset = Client.objects.all().order_by("name")
+        queryset = Client.objects.select_related("portal_portfolio").all().order_by("name")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         if search:

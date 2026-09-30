@@ -25,10 +25,29 @@
               {% if breadcrumb %}
               <div style="font-size:13px;color:#676879;margin-bottom:20px;">{{ breadcrumb }}</div>
               {% endif %}
-              {% if message %}
-              <div style="font-size:14px;color:#323338;margin-bottom:20px;">{{ message }}</div>
+              {% if report_items %}
+              {% if summary %}
+              <div style="font-size:14px;color:#323338;margin-bottom:16px;white-space:pre-line;">{{ summary }}</div>
               {% endif %}
-              <a href="{{ deep_link }}" style="display:inline-block;background:#ff6b00;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">Ver tarefa</a>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:20px;border-collapse:collapse;">
+                {% for item in report_items %}
+                <tr>
+                  <td style="padding:10px 0;border-top:1px solid #e6e9ef;font-size:14px;color:#323338;">
+                    <a href="{{ item.deep_link }}" style="color:#111;font-weight:700;text-decoration:none;">{{ item.title }}</a>
+                    <div style="font-size:12px;color:#676879;margin-top:4px;">
+                      {% if item.workspace_name %}{{ item.workspace_name }} &gt; {% endif %}{{ item.project_name }}
+                      · {{ item.reason_label }}
+                      · {{ item.days_idle }} dia(s)
+                      · {{ item.assignee_name }}
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% elif message %}
+              <div style="font-size:14px;color:#323338;margin-bottom:20px;white-space:pre-line;">{{ message }}</div>
+              {% endif %}
+              <a href="{{ deep_link }}" style="display:inline-block;background:#ff6b00;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">{{ cta_label|default:"Ver tarefa" }}</a>
             </td>
           </tr>
         </table>

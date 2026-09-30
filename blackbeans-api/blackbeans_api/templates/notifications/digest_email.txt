@@ -4,7 +4,7 @@ Ola {{ user_name }}, voce tem {{ notifications|length }} notificacoes:
 
 {% for item in notifications %}
 - {{ item.title }}: {{ item.message }}
-  {% if item.metadata.deep_link %}{{ item.metadata.deep_link }}{% endif %}
+  {% if item.deep_link %}{{ item.deep_link }}{% endif %}
 {% endfor %}
 
 Preferencias: {{ preferences_url }}

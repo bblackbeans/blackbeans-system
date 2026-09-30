@@ -694,6 +694,13 @@ function renderClientRequestStatusTag(value: string) {
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }
 
+function clientStatusLabel(value: string) {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (key === "active") return "Ativo";
+  if (key === "inactive") return "Inativo";
+  return value || "—";
+}
+
 function getMenuKeyFromHash(hash: string, fallback: MenuKey = "dashboard"): MenuKey {
   const normalized = hash.replace(/^#/, "");
   if (normalized.startsWith("task/")) return fallback;
@@ -768,15 +775,8 @@ function clearStoredPasswordResetHash() {
 
 function persistReturnHash(hash: string) {
   const normalized = hash.replace(/^#/, "").trim();
-  if (!normalized) return;
-  if (
-    normalized.startsWith("task/") ||
-    normalized.startsWith("project/") ||
-    normalized.startsWith("workspace/") ||
-    normalized.startsWith("reset/")
-  ) {
-    localStorage.setItem(RETURN_HASH_STORAGE_KEY, `#${normalized}`);
-  }
+  if (!normalized || getPasswordResetTokenFromHash(hash)) return;
+  localStorage.setItem(RETURN_HASH_STORAGE_KEY, `#${normalized}`);
 }
 
 function consumeReturnHash(): string | null {
@@ -2730,6 +2730,8 @@ export function AppShell() {
   const [clientRequests, setClientRequests] = useState<Record<string, unknown>[]>([]);
   const [clientRequestsLoading, setClientRequestsLoading] = useState(false);
   const [viewRequestModal, setViewRequestModal] = useState<Record<string, unknown> | null>(null);
+  const [linkRequestClientId, setLinkRequestClientId] = useState<string | undefined>();
+  const [linkRequestSaving, setLinkRequestSaving] = useState(false);
   const [convertRequestModal, setConvertRequestModal] = useState<Record<string, unknown> | null>(null);
   const [convertRequestForm] = Form.useForm();
   const [convertBoardOptions, setConvertBoardOptions] = useState<Array<{ value: string; label: string }>>([]);
@@ -4455,7 +4457,7 @@ export function AppShell() {
 
   const fetchCrudData = useCallback(async () => {
     const [clientsResp, servicesResp, contractsResp, workspacesResp, portfoliosResp, projectsResp] = await Promise.all([
-      apiRequest<{ clients: Record<string, unknown>[] }>("/clients?page=1&page_size=50", { token }),
+      apiRequest<{ clients: Record<string, unknown>[] }>("/clients?page=1&page_size=100", { token }),
       apiRequest<{ services: ServiceCatalogItem[] }>("/services", { token }),
       apiRequest<{ contracts: ContractItem[] }>("/contracts", { token }),
       apiRequest<{ workspaces: Record<string, unknown>[] }>("/workspaces", { token }),
@@ -4883,17 +4885,37 @@ export function AppShell() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
+      void (async () => {
       try {
       const storedToken = localStorage.getItem(AUTH_STORAGE_KEY);
-      const validToken = isTokenExpired(storedToken) ? null : storedToken;
-      if (!validToken) {
+      const storedRefresh = localStorage.getItem(REFRESH_STORAGE_KEY);
+      let validToken = storedToken && !isTokenExpired(storedToken) ? storedToken : null;
+      let nextRefresh = storedRefresh;
+      if (!validToken && storedRefresh) {
+        const refreshed = await apiRequest<{ access_token?: string; refresh_token?: string }>(
+          "/auth/tokens/refresh",
+          { method: "POST", body: { refresh: storedRefresh } },
+        );
+        const access = refreshed.ok ? String(refreshed.data?.access_token ?? "") : "";
+        if (access) {
+          validToken = access;
+          nextRefresh = String(refreshed.data?.refresh_token ?? "") || storedRefresh;
+          localStorage.setItem(AUTH_STORAGE_KEY, access);
+          if (refreshed.data?.refresh_token) {
+            localStorage.setItem(REFRESH_STORAGE_KEY, String(refreshed.data.refresh_token));
+          }
+        } else {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          localStorage.removeItem(REFRESH_STORAGE_KEY);
+          nextRefresh = null;
+        }
+      } else if (!validToken) {
         localStorage.removeItem(AUTH_STORAGE_KEY);
-        localStorage.removeItem(REFRESH_STORAGE_KEY);
       }
       const fallbackKey: MenuKey = "dashboard";
       const initialKey = getMenuKeyFromHash(window.location.hash, fallbackKey);
       setToken(validToken);
-      setRefreshToken(localStorage.getItem(REFRESH_STORAGE_KEY));
+      setRefreshToken(nextRefresh);
       setActiveKey(initialKey);
       try {
         const raw = localStorage.getItem(TASK_STATUS_FILTER_KEY);
@@ -5001,6 +5023,7 @@ export function AppShell() {
       } finally {
         setHydratedSession(true);
       }
+      })();
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -5083,9 +5106,40 @@ export function AppShell() {
   useEffect(() => {
     if (!token || !hydratedSession) return;
     if (!isTokenExpired(token, nowMs)) return;
-    apiMessage.error("Sessao expirada. Entre novamente.");
-    handleLogout();
-  }, [apiMessage, hydratedSession, nowMs, token]);
+    let cancelled = false;
+    void (async () => {
+      const storedRefresh =
+        refreshToken || (typeof window !== "undefined" ? localStorage.getItem(REFRESH_STORAGE_KEY) : null);
+      if (!storedRefresh) {
+        if (!cancelled) {
+          apiMessage.error("Sessao expirada. Entre novamente.");
+          handleLogout();
+        }
+        return;
+      }
+      const response = await apiRequest<{ access_token?: string; refresh_token?: string }>(
+        "/auth/tokens/refresh",
+        { method: "POST", body: { refresh: storedRefresh } },
+      );
+      if (cancelled) return;
+      const access = response.ok ? String(response.data?.access_token ?? "") : "";
+      if (!access) {
+        apiMessage.error("Sessao expirada. Entre novamente.");
+        handleLogout();
+        return;
+      }
+      const nextRefresh = String(response.data?.refresh_token ?? "") || storedRefresh;
+      setToken(access);
+      setRefreshToken(nextRefresh);
+      localStorage.setItem(AUTH_STORAGE_KEY, access);
+      if (response.data?.refresh_token) {
+        localStorage.setItem(REFRESH_STORAGE_KEY, String(response.data.refresh_token));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiMessage, handleLogout, hydratedSession, nowMs, refreshToken, token]);
 
   useEffect(() => {
     if (!token || !hydratedSession) return;
@@ -6825,6 +6879,42 @@ export function AppShell() {
     setClientRequests(Array.isArray(rows) ? rows : []);
   }
 
+  function openClientRequest(row: Record<string, unknown>) {
+    setViewRequestModal(row);
+    setLinkRequestClientId(row.client_id ? String(row.client_id) : undefined);
+  }
+
+  async function saveClientRequestLink() {
+    if (!viewRequestModal || !token) return;
+    const requestId = String(viewRequestModal.id ?? "");
+    if (!requestId) return;
+    setLinkRequestSaving(true);
+    try {
+      const response = await apiRequest<{ request?: Record<string, unknown> }>(
+        `/client-requests/${requestId}`,
+        {
+          method: "PATCH",
+          token,
+          body: { client_id: linkRequestClientId || null },
+        },
+      );
+      if (!response.ok) {
+        apiMessage.error(response.error?.message ?? "Falha ao vincular o pedido.");
+        return;
+      }
+      apiMessage.success(linkRequestClientId ? "Pedido vinculado ao cliente." : "Vinculo do pedido removido.");
+      if (response.data?.request) {
+        setViewRequestModal(response.data.request);
+        setLinkRequestClientId(
+          response.data.request.client_id ? String(response.data.request.client_id) : undefined,
+        );
+      }
+      await fetchClientRequestsList();
+    } finally {
+      setLinkRequestSaving(false);
+    }
+  }
+
   async function fetchHoursDashboardData(
     clientId = hoursClientFilter,
     projectId = hoursProjectFilter,
@@ -7393,6 +7483,15 @@ export function AppShell() {
         if (isSuperuser) await fetchAudit();
       },
     });
+  }
+
+  if (!hydratedSession) {
+    return (
+      <>
+        {contextHolder}
+        {modalContextHolder}
+      </>
+    );
   }
 
   if (!token) {
@@ -9883,6 +9982,7 @@ export function AppShell() {
                       rowKey="id"
                       dataSource={filteredClientsManage}
                       pagination={{ pageSize: 10 }}
+                      scroll={{ x: 1280 }}
                       columns={[
                         { title: "Nome", dataIndex: "name" },
                         { title: "CNPJ", dataIndex: "cnpj", render: (v: string) => v || "-" },
@@ -9890,8 +9990,9 @@ export function AppShell() {
                         {
                           title: "Status",
                           dataIndex: "status",
+                          width: 110,
                           render: (v: string) => (
-                            <Tag color={v === "active" ? "success" : "default"}>{v === "active" ? "Ativo" : v ?? "-"}</Tag>
+                            <Tag color={v === "active" ? "success" : "default"}>{clientStatusLabel(v)}</Tag>
                           ),
                         },
                         {
@@ -9905,34 +10006,8 @@ export function AppShell() {
                             ),
                         },
                         {
-                          title: "Projeto padrao",
-                          width: 160,
-                          ellipsis: true,
-                          render: (row: Record<string, unknown>) => {
-                            const projectId = row.portal_default_project_id
-                              ? String(row.portal_default_project_id)
-                              : "";
-                            if (!projectId) return "-";
-                            const project = projects.find((p) => String(p.id) === projectId);
-                            return project ? String(project.name ?? projectId) : projectId;
-                          },
-                        },
-                        {
-                          title: "Quadro padrao",
-                          width: 140,
-                          ellipsis: true,
-                          render: (row: Record<string, unknown>) => {
-                            const boardId = row.portal_default_board_id
-                              ? String(row.portal_default_board_id)
-                              : "";
-                            if (!boardId) return "-";
-                            const board = boards.find((b) => b.id === boardId);
-                            return board ? board.name : boardId;
-                          },
-                        },
-                        {
-                          title: "Area vinculada",
-                          width: 160,
+                          title: "Area de trabalho",
+                          width: 170,
                           ellipsis: true,
                           render: (row: Record<string, unknown>) => {
                             const clientId = String(row.id ?? "");
@@ -9941,7 +10016,21 @@ export function AppShell() {
                           },
                         },
                         {
+                          title: "Portfolio",
+                          width: 170,
+                          ellipsis: true,
+                          render: (row: Record<string, unknown>) => {
+                            const name = String(row.portal_portfolio_name ?? "").trim();
+                            if (name) return name;
+                            const portfolioId = row.portal_portfolio_id ? String(row.portal_portfolio_id) : "";
+                            if (!portfolioId) return "-";
+                            const portfolio = portfolios.find((item) => String(item.id) === portfolioId);
+                            return portfolio ? String(portfolio.name ?? portfolioId) : portfolioId;
+                          },
+                        },
+                        {
                           title: "Acoes",
+                          width: 280,
                           render: (row: Record<string, unknown>) => {
                             const clientId = String(row.id ?? "");
                             return (
@@ -9961,9 +10050,19 @@ export function AppShell() {
                                   size="small"
                                   icon={<EditOutlined />}
                                   onClick={() => {
-                                    const linkedWorkspace = workspaces.find(
-                                      (ws) => String(ws.client_id ?? "") === clientId,
+                                    const portfolioId = row.portal_portfolio_id
+                                      ? String(row.portal_portfolio_id)
+                                      : undefined;
+                                    const portfolio = portfolios.find(
+                                      (item) => String(item.id) === (portfolioId ?? ""),
                                     );
+                                    const linkedWorkspace =
+                                      workspaces.find((ws) => String(ws.client_id ?? "") === clientId) ??
+                                      (portfolio
+                                        ? workspaces.find(
+                                            (ws) => String(ws.id) === String(portfolio.workspace_id ?? ""),
+                                          )
+                                        : undefined);
                                     manageClientForm.setFieldsValue({
                                       name: String(row.name ?? ""),
                                       cnpj: String(row.cnpj ?? ""),
@@ -9973,12 +10072,7 @@ export function AppShell() {
                                       portal_username: String(row.portal_username ?? ""),
                                       portal_enabled: Boolean(row.portal_enabled),
                                       portal_password: undefined,
-                                      portal_default_project_id: row.portal_default_project_id
-                                        ? String(row.portal_default_project_id)
-                                        : undefined,
-                                      portal_default_board_id: row.portal_default_board_id
-                                        ? String(row.portal_default_board_id)
-                                        : undefined,
+                                      portal_portfolio_id: portfolioId,
                                       linked_workspace_id: linkedWorkspace
                                         ? String(linkedWorkspace.id)
                                         : undefined,
@@ -11893,7 +11987,7 @@ export function AppShell() {
                               ? `${window.location.origin}/pedido`
                               : "/pedido"}
                           </Typography.Link>
-                          . Depois voce converte em tarefa neste painel.
+                          . Vincule o pedido a um cliente para ele aparecer no login, mesmo ainda novo. Pedidos ja convertidos tambem podem ser vinculados.
                         </span>
                       }
                     />
@@ -11902,10 +11996,24 @@ export function AppShell() {
                       loading={clientRequestsLoading}
                       dataSource={clientRequests}
                       pagination={{ pageSize: 10 }}
-                      locale={{ emptyText: "Nenhum pedido pendente." }}
+                      scroll={{ x: 1100 }}
+                      locale={{ emptyText: "Nenhum pedido." }}
                       columns={[
                         { title: "Titulo", dataIndex: "title", render: (v: string) => v || "-" },
-                        { title: "Cliente", dataIndex: "client_name", render: (v: string) => v || "-" },
+                        { title: "Cliente informado", dataIndex: "client_name", render: (v: string) => v || "-" },
+                        {
+                          title: "Cliente vinculado",
+                          width: 180,
+                          ellipsis: true,
+                          render: (row: Record<string, unknown>) => {
+                            const linkedName = String(row.linked_client_name ?? "").trim();
+                            if (linkedName) return linkedName;
+                            const clientId = row.client_id ? String(row.client_id) : "";
+                            if (!clientId) return "-";
+                            const linked = clients.find((item) => String(item.id) === clientId);
+                            return linked ? String(linked.name ?? clientId) : clientId;
+                          },
+                        },
                         { title: "Contato", dataIndex: "contact_email", render: (v: string) => v || "-" },
                         {
                           title: "Status",
@@ -11925,8 +12033,11 @@ export function AppShell() {
                             const converted = String(row.status ?? "") === "converted";
                             return (
                               <Space size={6} wrap>
-                                <Button size="small" icon={<EyeOutlined />} onClick={() => setViewRequestModal(row)}>
+                                <Button size="small" icon={<EyeOutlined />} onClick={() => openClientRequest(row)}>
                                   Visualizar
+                                </Button>
+                                <Button size="small" onClick={() => openClientRequest(row)}>
+                                  Vincular
                                 </Button>
                                 <Button
                                   type="primary"
@@ -14050,6 +14161,8 @@ export function AppShell() {
         onOk={() => manageClientForm.submit()}
         okText={manageClientModal?.mode === "edit" ? "Salvar" : "Criar"}
         cancelText="Cancelar"
+        width={720}
+        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
         destroyOnHidden
       >
         <Form
@@ -14057,11 +14170,8 @@ export function AppShell() {
           form={manageClientForm}
           onFinish={async (values) => {
             const portalDefaults = {
-              portal_default_project_id: values.portal_default_project_id
-                ? String(values.portal_default_project_id)
-                : null,
-              portal_default_board_id: values.portal_default_board_id
-                ? String(values.portal_default_board_id)
+              portal_portfolio_id: values.portal_portfolio_id
+                ? String(values.portal_portfolio_id)
                 : null,
             };
             let savedClientId: string | null =
@@ -14120,7 +14230,7 @@ export function AppShell() {
               }
             }
 
-            if (savedClientId && manageClientModal?.mode === "edit") {
+            if (savedClientId) {
               const nextWorkspaceId = values.linked_workspace_id
                 ? String(values.linked_workspace_id)
                 : "";
@@ -14218,66 +14328,62 @@ export function AppShell() {
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>
-          <Form.Item name="portal_default_project_id" label="Projeto padrao do portal">
+          <Form.Item
+            name="linked_workspace_id"
+            label="Area de trabalho"
+            extra="O portfolio do portal precisa pertencer a esta area."
+          >
             <Select
               allowClear
               showSearch
               optionFilterProp="label"
-              placeholder="Selecione o projeto"
-              options={projects.map((project) => ({
-                value: String(project.id),
-                label: String(project.name ?? project.id),
+              placeholder="Selecione a area"
+              options={workspaces.map((ws) => ({
+                value: String(ws.id),
+                label: String(ws.name ?? ws.id),
               }))}
-              onChange={() => {
-                manageClientForm.setFieldsValue({ portal_default_board_id: undefined });
+              onChange={(workspaceId) => {
+                const portfolioId = manageClientForm.getFieldValue("portal_portfolio_id");
+                if (!portfolioId) return;
+                const portfolio = portfolios.find((item) => String(item.id) === String(portfolioId));
+                if (!portfolio || String(portfolio.workspace_id ?? "") !== String(workspaceId ?? "")) {
+                  manageClientForm.setFieldsValue({ portal_portfolio_id: undefined });
+                }
               }}
             />
           </Form.Item>
           <Form.Item
             noStyle
-            shouldUpdate={(prev, curr) =>
-              prev.portal_default_project_id !== curr.portal_default_project_id
-            }
+            shouldUpdate={(prev, curr) => prev.linked_workspace_id !== curr.linked_workspace_id}
           >
             {({ getFieldValue }) => {
-              const projectId = getFieldValue("portal_default_project_id")
-                ? String(getFieldValue("portal_default_project_id"))
+              const workspaceId = getFieldValue("linked_workspace_id")
+                ? String(getFieldValue("linked_workspace_id"))
                 : "";
-              const boardOptions = boards
-                .filter((board) => !projectId || board.project_id === projectId)
-                .map((board) => ({ value: board.id, label: board.name }));
+              const portfolioOptions = portfolios
+                .filter((item) => !workspaceId || String(item.workspace_id ?? "") === workspaceId)
+                .map((item) => ({
+                  value: String(item.id),
+                  label: String(item.name ?? item.id),
+                }));
               return (
-                <Form.Item name="portal_default_board_id" label="Quadro padrao do portal">
+                <Form.Item
+                  name="portal_portfolio_id"
+                  label="Portfolio"
+                  extra="No login, o cliente ve as tarefas dos pedidos deste portfolio."
+                >
                   <Select
                     allowClear
                     showSearch
                     optionFilterProp="label"
-                    placeholder="Selecione o quadro"
-                    disabled={!projectId}
-                    options={boardOptions}
+                    placeholder={workspaceId ? "Selecione o portfolio" : "Selecione a area primeiro"}
+                    disabled={!workspaceId}
+                    options={portfolioOptions}
                   />
                 </Form.Item>
               );
             }}
           </Form.Item>
-          {manageClientModal?.mode === "edit" ? (
-            <Form.Item
-              name="linked_workspace_id"
-              label="Area de trabalho vinculada"
-              extra="Vincula a area ao cliente (PATCH workspace.client_id)."
-            >
-              <Select
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                placeholder="Selecione a area"
-                options={workspaces.map((ws) => ({
-                  value: String(ws.id),
-                  label: String(ws.name ?? ws.id),
-                }))}
-              />
-            </Form.Item>
-          ) : null}
         </Form>
       </Modal>
 
@@ -14303,7 +14409,7 @@ export function AppShell() {
             </div>
             <div>
               <Typography.Text type="secondary">Status</Typography.Text>
-              <div>{String(clientDetailData.status ?? "—")}</div>
+              <div>{clientStatusLabel(String(clientDetailData.status ?? ""))}</div>
             </div>
             <div>
               <Typography.Text type="secondary">Descricao</Typography.Text>
@@ -14322,38 +14428,27 @@ export function AppShell() {
               <div>{String(clientDetailData.portal_username ?? "—") || "—"}</div>
             </div>
             <div>
-              <Typography.Text type="secondary">Projeto padrao</Typography.Text>
-              <div>
-                {(() => {
-                  const projectId = clientDetailData.portal_default_project_id
-                    ? String(clientDetailData.portal_default_project_id)
-                    : "";
-                  if (!projectId) return "—";
-                  const project = projects.find((p) => String(p.id) === projectId);
-                  return project ? String(project.name ?? projectId) : projectId;
-                })()}
-              </div>
-            </div>
-            <div>
-              <Typography.Text type="secondary">Quadro padrao</Typography.Text>
-              <div>
-                {(() => {
-                  const boardId = clientDetailData.portal_default_board_id
-                    ? String(clientDetailData.portal_default_board_id)
-                    : "";
-                  if (!boardId) return "—";
-                  const board = boards.find((b) => b.id === boardId);
-                  return board ? board.name : boardId;
-                })()}
-              </div>
-            </div>
-            <div>
-              <Typography.Text type="secondary">Area vinculada</Typography.Text>
+              <Typography.Text type="secondary">Area de trabalho</Typography.Text>
               <div>
                 {(() => {
                   const clientId = String(clientDetailData.id ?? "");
                   const linked = workspaces.find((ws) => String(ws.client_id ?? "") === clientId);
                   return linked ? String(linked.name ?? "—") : "—";
+                })()}
+              </div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Portfolio</Typography.Text>
+              <div>
+                {(() => {
+                  const name = String(clientDetailData.portal_portfolio_name ?? "").trim();
+                  if (name) return name;
+                  const portfolioId = clientDetailData.portal_portfolio_id
+                    ? String(clientDetailData.portal_portfolio_id)
+                    : "";
+                  if (!portfolioId) return "—";
+                  const portfolio = portfolios.find((item) => String(item.id) === portfolioId);
+                  return portfolio ? String(portfolio.name ?? portfolioId) : portfolioId;
                 })()}
               </div>
             </div>
@@ -16717,6 +16812,7 @@ export function AppShell() {
         title="Detalhes do pedido"
         open={Boolean(viewRequestModal)}
         onCancel={() => setViewRequestModal(null)}
+        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
         footer={[
           <Button key="close" onClick={() => setViewRequestModal(null)}>
             Fechar
@@ -16746,10 +16842,32 @@ export function AppShell() {
               </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text type="secondary">Cliente</Typography.Text>
+              <Typography.Text type="secondary">Cliente informado</Typography.Text>
               <Typography.Paragraph style={{ marginBottom: 0 }}>
                 {String(viewRequestModal.client_name ?? "-")}
               </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Cliente vinculado</Typography.Text>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                Vale para pedido novo ou ja convertido. Com o vinculo, o pedido aparece no login desse cliente.
+              </Typography.Paragraph>
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="Selecione o cliente"
+                style={{ width: "100%", marginBottom: 8 }}
+                value={linkRequestClientId}
+                onChange={(value) => setLinkRequestClientId(value ? String(value) : undefined)}
+                options={clients.map((item) => ({
+                  value: String(item.id),
+                  label: String(item.name ?? item.id),
+                }))}
+              />
+              <Button type="primary" loading={linkRequestSaving} onClick={() => void saveClientRequestLink()}>
+                Salvar vinculo
+              </Button>
             </div>
             <div>
               <Typography.Text type="secondary">Solicitante</Typography.Text>

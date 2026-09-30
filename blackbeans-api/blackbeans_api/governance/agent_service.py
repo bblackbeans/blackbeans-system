@@ -19,7 +19,9 @@ from blackbeans_api.governance.models import AgentDefinition
 from blackbeans_api.governance.models import AgentRun
 from blackbeans_api.governance.models import Notification
 from blackbeans_api.governance.models import Task
+from blackbeans_api.governance.notification_service import build_task_deep_link
 from blackbeans_api.governance.notification_service import dispatch_notification
+from blackbeans_api.governance.notification_service import get_frontend_base_url
 from blackbeans_api.governance.notification_service import get_user_display_name
 
 User = get_user_model()
@@ -309,6 +311,28 @@ def _admin_recipients() -> list:
     )
 
 
+def _reason_label(reason: str) -> str:
+    return {"blocked": "Bloqueada", "stale": "Sem movimento"}.get(reason, reason or "Sinalizada")
+
+
+def _report_email_items(report: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in (report.get("items") or [])[:limit]:
+        task_id = str(row.get("task_id") or "")
+        rows.append(
+            {
+                "title": row.get("title") or "Tarefa",
+                "project_name": row.get("project_name") or "Projeto",
+                "workspace_name": row.get("workspace_name") or "",
+                "reason_label": _reason_label(str(row.get("reason") or "")),
+                "days_idle": row.get("days_idle") if row.get("days_idle") is not None else row.get("days_overdue"),
+                "assignee_name": row.get("assignee_name") or "Sem responsavel",
+                "deep_link": build_task_deep_link(task_id) if task_id else "",
+            },
+        )
+    return rows
+
+
 def notify_admins_of_agent_report(
     *,
     report: dict[str, Any],
@@ -318,17 +342,33 @@ def notify_admins_of_agent_report(
     intro: str,
 ) -> int:
     admins = _admin_recipients()
-    briefing = str(report.get("ai_briefing") or "").strip()
-    message = intro
-    if briefing:
-        message += f"\n\nAnalise:\n{briefing}"
-    message += f"\n\nVeja o relatorio completo em Administracao > Agentes (run {run.pk})."
+    items = _report_email_items(report)
+    lines = [intro.strip()]
+    if items:
+        lines.append("")
+        for row in items:
+            place = " > ".join(
+                part for part in (row.get("workspace_name"), row.get("project_name")) if part
+            )
+            days = row.get("days_idle")
+            days_text = f"{days} dia(s)" if days is not None else ""
+            detail = " · ".join(
+                part
+                for part in (place, row.get("reason_label"), days_text, f"resp. {row.get('assignee_name')}")
+                if part
+            )
+            lines.append(f"• {row.get('title')} — {detail}")
+        total = int(report.get("total_flagged") or report.get("total_overdue") or 0)
+        if total > len(items):
+            lines.append(f"… e mais {total - len(items)}.")
+    lines.append("")
+    lines.append("O relatorio completo fica em Administracao > Agentes.")
     dispatch_notification(
         event_type=Notification.Type.AGENT_REPORT,
         recipients=admins,
         actor=None,
         title=title,
-        message=message,
+        message="\n".join(lines),
         task=None,
         metadata={
             "agent_slug": run.agent.slug,
@@ -336,7 +376,10 @@ def notify_admins_of_agent_report(
             "total_overdue": int(report.get("total_overdue") or 0),
             "total_flagged": int(report.get("total_flagged") or 0),
             "ai_mode": report.get("ai_mode"),
+            "deep_link": f"{get_frontend_base_url()}/#agents",
             "deep_link_hash": "#agents",
+            "summary": intro.strip(),
+            "report_items": items,
         },
         correlation_id=correlation_id,
         dedupe=False,
@@ -374,7 +417,8 @@ def notify_admins_of_blocked_stale_report(
 ) -> int:
     total = int(report.get("total_flagged") or 0)
     reason_lines = [
-        f"- {row['reason']}: {row['count']}" for row in (report.get("by_reason") or [])
+        f"- {_reason_label(str(row['reason']))}: {row['count']}"
+        for row in (report.get("by_reason") or [])
     ]
     intro = (
         f"O agente '{run.agent.title}' sinalizou {total} tarefa(s) bloqueada(s) ou parada(s).\n"

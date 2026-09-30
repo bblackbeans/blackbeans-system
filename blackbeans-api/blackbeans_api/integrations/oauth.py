@@ -241,5 +241,7 @@ def disconnect() -> None:
 
 
 def frontend_redirect(status: str) -> str:
-    base = (settings.FRONTEND_BASE_URL or "/").rstrip("/")
+    from blackbeans_api.governance.notification_service import get_frontend_base_url
+
+    base = get_frontend_base_url()
     return f"{base}/?rd={status}#leads"
