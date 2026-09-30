@@ -48,6 +48,7 @@ Variáveis do container MCP (só API; sem PAT compartilhado):
 
 ```bash
 BLACKBEANS_API_URL=http://api:8000/api/v1
+BLACKBEANS_APP_URL=https://sistema.blackbeans.com.br
 MCP_HOST=0.0.0.0
 MCP_PORT=8100
 ```
@@ -78,16 +79,18 @@ Compose local também pode expor HTTP em `http://localhost:18100/mcp` (mapeia `1
 ## Tools
 
 ### Leitura / tarefas
-`whoami`, `list_my_tasks` (filtro `overdue`), `search_tasks` (`assignee_id`, `status`, …), `get_task`, `list_task_statuses`, `list_assignees`, `list_boards`, `get_board`
+`whoami`, `list_workspaces`, `list_projects` (`search` em projeto, portfólio, workspace e cliente), `get_project_overview`, `list_my_tasks` (filtro `overdue`), `search_tasks` (`project_id`, `workspace_id`, `client`, `priority`, `overdue`, `due_before`, `due_after`, `limit`, `cursor`, `include_subtasks`), `get_task` (aceita URL `#task/<id>`), `list_task_statuses`, `list_assignees`, `list_boards` (`workspace_id`, `search`), `get_board`
+
+O quadro é a coluna visual. O `status` é o campo da tarefa e pode divergir do quadro; as respostas trazem `status_label`.
 
 ### Mutação
-`create_task` / `update_task` (`assignee_id`, datas, `effort_points`, …), `set_task_status`, `set_task_assignee`, `delete_task` (`confirm=true`, **somente staff/admin** na API)
+`create_task` / `update_task` (`assignee_id`, datas, `effort_points`, …), `set_task_status`, `set_task_assignee`, `delete_task` (`confirm=true`, **somente staff/admin** na API), `add_task_comment` (o parâmetro da tool é `body`; a API recebe `content`)
 
 ### Tempo / sprints
 `time_start|pause|resume|manual`, `list_sprints`, `get_sprint`
 
 ### v1.1 (staff)
-`generate_sprint`, `lock_sprint`, `unlock_sprint`, `patch_sprint_item`, `add_task_comment`
+`generate_sprint`, `lock_sprint`, `unlock_sprint`, `patch_sprint_item`
 
 ## Segurança
 

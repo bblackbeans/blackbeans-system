@@ -96,6 +96,18 @@ class BlackBeansClient:
         json_body: dict[str, Any] | None = None,
         tool: str = "",
     ) -> Any:
+        data, _meta = self.request_with_meta(method, path, params=params, json_body=json_body, tool=tool)
+        return data
+
+    def request_with_meta(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        tool: str = "",
+    ) -> tuple[Any, dict[str, Any]]:
         url = f"{self.base_url}/{path.lstrip('/')}"
         safe_args = {
             "method": method,
@@ -162,40 +174,128 @@ class BlackBeansClient:
             json.dumps(safe_args, ensure_ascii=False),
         )
         if isinstance(payload, dict) and "data" in payload:
-            return payload["data"]
-        return payload
+            data = payload["data"]
+        else:
+            data = payload
+        meta = payload.get("meta") if isinstance(payload, dict) and isinstance(payload.get("meta"), dict) else {}
+        return data, meta
+
+
+def app_base_url() -> str:
+    return (os.environ.get("BLACKBEANS_APP_URL") or "https://sistema.blackbeans.com.br").rstrip("/")
+
+
+def task_url(task_id: str) -> str:
+    return f"{app_base_url()}/#task/{task_id}"
+
+
+def project_url(project_id: str) -> str:
+    return f"{app_base_url()}/#project/{project_id}"
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_TASK_HASH_RE = re.compile(r"#task/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.IGNORECASE)
+_PROJECT_HASH_RE = re.compile(
+    r"#project/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
+
+
+def parse_entity_id(value: str, *, expected: str) -> str:
+    """Aceita UUID puro ou URL do sistema (#task/ ou #project/)."""
+    raw = (value or "").strip()
+    task_match = _TASK_HASH_RE.search(raw)
+    project_match = _PROJECT_HASH_RE.search(raw)
+    if expected == "task" and project_match and not task_match:
+        raise BlackBeansApiError("A URL e de um projeto. Use get_project_overview.")
+    if expected == "project" and task_match and not project_match:
+        raise BlackBeansApiError("A URL e de uma tarefa. Use get_task.")
+    if expected == "task" and task_match:
+        return task_match.group(1)
+    if expected == "project" and project_match:
+        return project_match.group(1)
+    if _UUID_RE.match(raw):
+        return raw
+    raise BlackBeansApiError(
+        "Nao encontrado. Informe o ID ou a URL completa (#task/<id> ou #project/<id>).",
+    )
+
+
+def comment_payload(body: str) -> dict[str, str]:
+    return {"content": body}
 
 
 def compact_task(task: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": task.get("id"),
+    task_id = task.get("id")
+    payload = {
+        "id": task_id,
         "title": task.get("title"),
         "status": task.get("status"),
+        "status_label": task.get("status_label"),
         "priority": task.get("priority"),
         "assignee_id": task.get("assignee_id"),
+        "assignee_name": task.get("assignee_name"),
         "board_id": task.get("board_id"),
         "group_id": task.get("group_id"),
+        "group_name": task.get("group_name"),
+        "parent_id": task.get("parent_id"),
+        "parent_title": task.get("parent_title"),
+        "subtasks_count": task.get("subtasks_count"),
         "start_date": task.get("start_date"),
         "end_date": task.get("end_date"),
         "effort_points": task.get("effort_points"),
         "is_recurring": task.get("is_recurring"),
         "always_in_sprint": task.get("always_in_sprint"),
-        "project_name": task.get("project_name") or task.get("project"),
-        "client_name": task.get("client_name") or task.get("client"),
+        "project_id": task.get("project_id"),
+        "project_name": task.get("project_name"),
+        "portfolio_name": task.get("portfolio_name"),
+        "workspace_id": task.get("workspace_id"),
+        "workspace_name": task.get("workspace_name"),
+        "client_name": task.get("client_name"),
     }
+    if task_id:
+        payload["url"] = task_url(str(task_id))
+    return payload
+
+
+def nest_subtasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Agrupa subtarefas dentro da tarefa-mãe. Itens órfãos permanecem na lista."""
+    children: dict[str, list[dict[str, Any]]] = {}
+    roots: list[dict[str, Any]] = []
+    known_ids = {str(task.get("id")) for task in tasks if task.get("id")}
+    for task in tasks:
+        parent_id = task.get("parent_id")
+        if parent_id and str(parent_id) in known_ids:
+            children.setdefault(str(parent_id), []).append(task)
+        else:
+            roots.append(task)
+
+    def attach(node: dict[str, Any]) -> dict[str, Any]:
+        packed = dict(node)
+        packed["subtasks"] = [attach(child) for child in children.get(str(node.get("id")), [])]
+        return packed
+
+    return [attach(root) for root in roots]
 
 
 def is_task_overdue(task: dict[str, Any], *, now_ms: float | None = None) -> bool:
     if not task.get("end_date") or task.get("status") == "done":
         return False
     try:
-        end = task["end_date"]
-        # Support Z suffix
         from datetime import datetime
-        from datetime import timezone
+        from zoneinfo import ZoneInfo
 
-        parsed = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc) if now_ms is None else datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc)
+        parsed = datetime.fromisoformat(str(task["end_date"]).replace("Z", "+00:00"))
+        zone = ZoneInfo("America/Sao_Paulo")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=zone)
+        if now_ms is None:
+            now = datetime.now(zone)
+        else:
+            now = datetime.fromtimestamp(now_ms / 1000, tz=zone)
         start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return parsed < start_today
     except Exception:

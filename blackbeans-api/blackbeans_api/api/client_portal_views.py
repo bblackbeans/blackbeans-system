@@ -35,11 +35,11 @@ from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.clients.models import Client
 from blackbeans_api.governance.models import ClientRequest
 from blackbeans_api.governance.models import ClientRequestAttachment
-from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import TaskComment
 from blackbeans_api.governance.models import Workspace
 from blackbeans_api.governance.notification_service import get_user_display_name
-from blackbeans_api.api.operations_serializers import project_to_representation
+from blackbeans_api.api.operations_serializers import active_status_labels
+from blackbeans_api.api.operations_serializers import status_label_for
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,12 @@ def _portal_display_status(item: ClientRequest, review_status: str) -> str:
     return "new"
 
 
-def portal_request_to_representation(item: ClientRequest, *, include_feedback: bool = False) -> dict:
+def portal_request_to_representation(
+    item: ClientRequest,
+    *,
+    include_feedback: bool = False,
+    status_labels: dict[str, str] | None = None,
+) -> dict:
     base = client_request_to_representation(item)
     task = item.converted_task
     review_status = _effective_review_status(item)
@@ -124,6 +129,7 @@ def portal_request_to_representation(item: ClientRequest, *, include_feedback: b
             "can_review": can_review,
             "review_locked": review_locked,
             "task_status": task.status if task is not None else None,
+            "task_status_label": status_label_for(task.status, status_labels) if task is not None else None,
             "task_title": task.title if task is not None else None,
             "feedback": feedback,
             "feedback_count": (
@@ -305,9 +311,14 @@ class ClientPortalRequestListCreateView(APIView):
         if status_filter:
             qs = qs.filter(status=status_filter)
         rows = list(qs[:200])
+        labels = active_status_labels()
         return success_response(
             correlation_id=correlation_id,
-            data={"requests": [portal_request_to_representation(row) for row in rows]},
+            data={
+                "requests": [
+                    portal_request_to_representation(row, status_labels=labels) for row in rows
+                ]
+            },
             meta={"total": len(rows)},
         )
 
@@ -331,10 +342,8 @@ class ClientPortalRequestListCreateView(APIView):
 
         with transaction.atomic():
             metadata: dict = {}
-            if client.portal_default_project_id:
-                metadata["portal_default_project_id"] = str(client.portal_default_project_id)
-            if client.portal_default_board_id:
-                metadata["portal_default_board_id"] = str(client.portal_default_board_id)
+            if client.portal_portfolio_id:
+                metadata["portal_portfolio_id"] = str(client.portal_portfolio_id)
 
             item = ClientRequest.objects.create(
                 client=client,
@@ -510,48 +519,56 @@ class ClientPortalRequestRevisionView(APIView):
 
 
 class ClientPortalAreaView(APIView):
-    """GET /client-portal/area — workspace + projetos (somente leitura) do cliente vinculado."""
+    """GET /client-portal/area — area, portfolio e tarefas dos pedidos daquele portfolio."""
 
     authentication_classes = [ClientPortalJWTAuthentication]
     permission_classes = [IsClientPortal]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        client = _portal_client(request)
-        workspace = (
-            Workspace.objects.filter(client=client)
-            .order_by("created_at")
-            .first()
-        )
-        projects = (
-            Project.objects.filter(client=client, archived_at__isnull=True)
-            .select_related("portfolio__workspace")
-            .order_by("name")
-        )
-        if workspace is None and projects.exists():
-            first = projects.first()
-            if first is not None:
-                workspace = first.portfolio.workspace
+        client = Client.objects.select_related("portal_portfolio__workspace").get(pk=_portal_client(request).pk)
+        portfolio = client.portal_portfolio
+        workspace = portfolio.workspace if portfolio is not None else None
+        if workspace is None:
+            workspace = Workspace.objects.filter(client=client).order_by("created_at").first()
+
+        tasks: list[dict] = []
+        labels = active_status_labels()
+        if portfolio is not None:
+            linked = (
+                ClientRequest.objects.filter(
+                    client=client,
+                    converted_task__isnull=False,
+                    converted_project__portfolio_id=portfolio.pk,
+                )
+                .select_related("converted_task", "converted_project")
+                .order_by("-updated_at")
+            )
+            for item in linked:
+                task = item.converted_task
+                if task is None:
+                    continue
+                tasks.append(
+                    {
+                        "id": str(task.pk),
+                        "title": task.title,
+                        "status": task.status,
+                        "status_label": status_label_for(task.status, labels),
+                        "request_id": str(item.pk),
+                        "request_title": item.title,
+                        "project_name": item.converted_project.name if item.converted_project_id else "",
+                    },
+                )
 
         return success_response(
             correlation_id=correlation_id,
             data={
                 "workspace": (
-                    {
-                        "id": str(workspace.pk),
-                        "name": workspace.name,
-                    }
-                    if workspace is not None
-                    else None
+                    {"id": str(workspace.pk), "name": workspace.name} if workspace is not None else None
                 ),
-                "projects": [project_to_representation(p) for p in projects],
-                "defaults": {
-                    "project_id": (
-                        str(client.portal_default_project_id) if client.portal_default_project_id else None
-                    ),
-                    "board_id": (
-                        str(client.portal_default_board_id) if client.portal_default_board_id else None
-                    ),
-                },
+                "portfolio": (
+                    {"id": str(portfolio.pk), "name": portfolio.name} if portfolio is not None else None
+                ),
+                "tasks": tasks,
             },
         )

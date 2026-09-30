@@ -69,12 +69,24 @@ type PortalRequest = {
   feedback?: PortalFeedback[];
   feedback_count?: number;
   task_status?: string | null;
+  task_status_label?: string | null;
+  task_title?: string | null;
+};
+
+type PortalAreaTask = {
+  id: string;
+  title: string;
+  status: string;
+  status_label: string;
+  request_id: string;
+  request_title: string;
+  project_name?: string;
 };
 
 type PortalArea = {
   workspace: { id: string; name: string } | null;
-  projects: { id: string; name: string }[];
-  defaults?: { project_id?: string | null; board_id?: string | null };
+  portfolio: { id: string; name: string } | null;
+  tasks: PortalAreaTask[];
 };
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -314,39 +326,50 @@ export default function PortalHomePage() {
           <Card title="Sua area" styles={{ body: { padding: isMobile ? 16 : 20 } }}>
             {areaLoading && !area ? (
               <Typography.Text type="secondary">Carregando area…</Typography.Text>
-            ) : !area?.workspace && (area?.projects?.length ?? 0) === 0 ? (
+            ) : !area?.workspace && !area?.portfolio ? (
               <Typography.Text type="secondary">
-                Nenhuma area de trabalho vinculada ainda. Voce pode criar pedidos normalmente.
+                Nenhuma area ou portfolio vinculado ainda. Pedidos vinculados a esta empresa aparecem na lista abaixo.
               </Typography.Text>
             ) : (
-              <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={12} style={{ width: "100%" }}>
                 <div>
                   <Typography.Text type="secondary">Area de trabalho</Typography.Text>
                   <div>
-                    <Typography.Text strong>
-                      {area?.workspace?.name ?? "—"}
-                    </Typography.Text>
+                    <Typography.Text strong>{area?.workspace?.name ?? "—"}</Typography.Text>
                   </div>
                 </div>
                 <div>
-                  <Typography.Text type="secondary">Projetos</Typography.Text>
-                  {(area?.projects?.length ?? 0) === 0 ? (
+                  <Typography.Text type="secondary">Portfolio</Typography.Text>
+                  <div>
+                    <Typography.Text strong>{area?.portfolio?.name || "—"}</Typography.Text>
+                  </div>
+                </div>
+                <div>
+                  <Typography.Text type="secondary">Tarefas dos pedidos</Typography.Text>
+                  {(area?.tasks?.length ?? 0) === 0 ? (
                     <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-                      Nenhum projeto listado.
+                      Nenhuma tarefa de pedido neste portfolio ainda.
                     </Typography.Paragraph>
                   ) : (
-                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-                      {(area?.projects ?? []).map((project) => (
-                        <li key={project.id}>
-                          <Typography.Text>{project.name}</Typography.Text>
-                        </li>
-                      ))}
-                    </ul>
+                    <Table
+                      size="small"
+                      rowKey="id"
+                      pagination={false}
+                      style={{ marginTop: 8 }}
+                      dataSource={area?.tasks ?? []}
+                      columns={[
+                        { title: "Tarefa", dataIndex: "title" },
+                        { title: "Pedido", dataIndex: "request_title", render: (value: string) => value || "—" },
+                        {
+                          title: "Status",
+                          dataIndex: "status_label",
+                          width: 140,
+                          render: (value: string) => value || "—",
+                        },
+                      ]}
+                    />
                   )}
                 </div>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                  Visualizacao somente leitura — nao e possivel editar quadros ou tarefas neste portal.
-                </Typography.Paragraph>
               </Space>
             )}
           </Card>
@@ -402,6 +425,12 @@ export default function PortalHomePage() {
                             ) : null}
                             {row.can_review ? <Tag color="purple">Aguardando voce</Tag> : null}
                           </Space>
+                          {row.task_title ? (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              Tarefa: {row.task_title}
+                              {row.task_status_label ? ` · ${row.task_status_label}` : ""}
+                            </Typography.Text>
+                          ) : null}
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                             {row.created_at ? new Date(row.created_at).toLocaleString("pt-BR") : "—"}
                           </Typography.Text>
@@ -428,6 +457,14 @@ export default function PortalHomePage() {
                         {value}
                       </Button>
                     ),
+                  },
+                  {
+                    title: "Tarefa",
+                    width: 220,
+                    render: (_: unknown, row: PortalRequest) =>
+                      row.task_title
+                        ? `${row.task_title}${row.task_status_label ? ` · ${row.task_status_label}` : ""}`
+                        : "—",
                   },
                   {
                     title: "Status",

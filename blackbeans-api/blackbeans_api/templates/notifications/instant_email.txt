@@ -4,9 +4,17 @@
 {{ task_title }}
 {% if breadcrumb %}{{ breadcrumb }}{% endif %}
 
+{% if report_items %}
+{% for item in report_items %}
+- {{ item.title }}
+  {{ item.workspace_name }} > {{ item.project_name }} · {{ item.reason_label }} · {{ item.days_idle }} dia(s) · {{ item.assignee_name }}
+  {{ item.deep_link }}
+{% endfor %}
+{% else %}
 {{ message }}
+{% endif %}
 
-Ver tarefa: {{ deep_link }}
+{{ cta_label|default:"Ver tarefa" }}: {{ deep_link }}
 
 Preferencias: {{ preferences_url }}
 Desativar este tipo: {{ unsubscribe_url }}

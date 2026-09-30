@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import logging
+from datetime import datetime
 from datetime import timedelta
 from uuid import UUID
 
@@ -37,8 +39,12 @@ from blackbeans_api.api.operations_serializers import TimeLogUpdateSerializer
 from blackbeans_api.api.operations_serializers import time_log_to_representation
 from blackbeans_api.api.operations_serializers import task_comment_to_representation
 from blackbeans_api.api.operations_serializers import task_attachment_to_representation
+from blackbeans_api.api.operations_serializers import active_status_labels
+from blackbeans_api.api.operations_serializers import filter_folded_contains
+from blackbeans_api.api.operations_serializers import task_status_counts_for_boards
 from blackbeans_api.api.operations_serializers import truthy_query_flag
 from blackbeans_api.api.operations_serializers import validate_active_task_status
+from blackbeans_api.api.operations_serializers import with_task_context
 from blackbeans_api.api.operations_serializers import MAX_ATTACHMENT_BYTES
 from blackbeans_api.api.operations_serializers import portfolio_to_representation
 from blackbeans_api.api.operations_serializers import project_to_representation
@@ -63,6 +69,7 @@ from blackbeans_api.governance.models import Portfolio
 from blackbeans_api.governance.models import Project
 from blackbeans_api.governance.models import Task
 from blackbeans_api.governance.models import TaskActivity
+from blackbeans_api.governance.models import TaskStatusDefinition
 from blackbeans_api.governance.models import TaskAttachment
 from blackbeans_api.governance.models import TaskComment
 from blackbeans_api.governance.models import TaskDependency
@@ -411,12 +418,63 @@ def _sync_task_placement_by_status(task: Task) -> bool:
     return moved_board or moved_group
 
 
+def _encode_cursor(offset: int) -> str:
+    return base64.urlsafe_b64encode(str(offset).encode()).decode().rstrip("=")
+
+
+def _decode_cursor(raw: str | None) -> int:
+    if not raw:
+        return 0
+    padded = raw + ("=" * (-len(raw) % 4))
+    try:
+        offset = int(base64.urlsafe_b64decode(padded.encode()).decode())
+    except Exception as exc:
+        raise ValueError("cursor invalido") from exc
+    if offset < 0:
+        raise ValueError("cursor invalido")
+    return offset
+
+
+def _parse_due_bound(raw: str) -> tuple[datetime, bool]:
+    text = raw.strip()
+    if len(text) == 10:
+        day = datetime.fromisoformat(text)
+        return day, True
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed, False
+
+
+def _done_status_keys() -> set[str]:
+    keys = set(
+        TaskStatusDefinition.objects.filter(is_active=True, is_done_like=True).values_list("key", flat=True),
+    )
+    keys.add(Task.Status.DONE)
+    return keys
+
+
+def _represent_tasks(tasks) -> list[dict]:
+    labels = active_status_labels()
+    return [task_to_representation(task, status_labels=labels) for task in tasks]
+
+
 class WorkspaceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        rows = Workspace.objects.order_by("name")
+        rows = (
+            Workspace.objects.select_related("client")
+            .annotate(
+                projects_count=Count(
+                    "portfolios__projects",
+                    filter=Q(portfolios__projects__archived_at__isnull=True),
+                    distinct=True,
+                ),
+            )
+            .order_by("name")
+        )
         return success_response(
             correlation_id=correlation_id,
             data={"workspaces": [workspace_to_representation(item) for item in rows]},
@@ -621,12 +679,22 @@ class ProjectListCreateView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        rows = Project.objects.select_related("portfolio__workspace").order_by("name")
+        rows = Project.objects.select_related("portfolio__workspace", "client").order_by("name")
         include_archived = truthy_query_flag(request.query_params.get("include_archived")) or truthy_query_flag(
             request.query_params.get("archived"),
         )
         if not include_archived:
             rows = rows.filter(archived_at__isnull=True)
+        workspace_id = (request.query_params.get("workspace_id") or "").strip()
+        if workspace_id:
+            rows = rows.filter(portfolio__workspace_id=workspace_id)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            rows = filter_folded_contains(
+                rows,
+                ["name", "portfolio__name", "portfolio__workspace__name", "client__name"],
+                search,
+            )
         return success_response(
             correlation_id=correlation_id,
             data={"projects": [project_to_representation(item) for item in rows]},
@@ -654,6 +722,23 @@ class ProjectListCreateView(APIView):
 
 class ProjectDetailView(APIView):
     permission_classes = [IsAuthenticated, IsAuthenticatedReadElseStaff]
+
+    def get(self, request: Request, project_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            project = Project.objects.select_related("portfolio__workspace", "client").get(pk=project_id)
+        except Project.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="project_not_found",
+                message="Projeto nao encontrado.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        return success_response(
+            correlation_id=correlation_id,
+            data={"project": project_to_representation(project)},
+        )
 
     def patch(self, request: Request, project_id: UUID):
         correlation_id = get_correlation_id(request)
@@ -961,13 +1046,33 @@ class BoardListCreateView(APIView):
 
     def get(self, request: Request):
         correlation_id = get_correlation_id(request)
-        queryset = boards_queryset_for_user(request.user).order_by("created_at")
+        queryset = (
+            boards_queryset_for_user(request.user)
+            .select_related("project__portfolio__workspace", "project__client")
+            .order_by("created_at")
+        )
         project_id = request.query_params.get("project_id")
         if project_id:
             queryset = queryset.filter(project_id=project_id)
+        workspace_id = (request.query_params.get("workspace_id") or "").strip()
+        if workspace_id:
+            queryset = queryset.filter(project__portfolio__workspace_id=workspace_id)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = filter_folded_contains(
+                queryset,
+                ["project__name", "project__portfolio__name", "project__client__name"],
+                search,
+            )
+        boards = list(queryset)
+        counts = task_status_counts_for_boards([board.pk for board in boards])
         return success_response(
             correlation_id=correlation_id,
-            data={"boards": [board_to_representation(board) for board in queryset]},
+            data={
+                "boards": [
+                    board_to_representation(board, task_counts=counts.get(str(board.pk), {})) for board in boards
+                ],
+            },
         )
 
     def post(self, request: Request):
@@ -1164,13 +1269,12 @@ class BoardDetailView(APIView):
             )
 
         tasks = (
-            Task.objects.filter(board=board, parent__isnull=True)
-            .select_related("group", "assignee")
+            with_task_context(Task.objects.filter(board=board, parent__isnull=True))
             .annotate(subtasks_count=Count("subtasks"))
             .order_by("group__position", "created_at")
         )
         if view == "list":
-            payload = {"view": "list", "tasks": [task_to_representation(t) for t in tasks]}
+            payload = {"view": "list", "tasks": _represent_tasks(tasks)}
         elif view == "kanban":
             canonical = ensure_canonical_groups(board)
             buckets = ("backlog", "progress", "done")
@@ -1183,12 +1287,12 @@ class BoardDetailView(APIView):
                 payload_groups.append(
                     {
                         "group": board_group_to_representation(group),
-                        "tasks": [task_to_representation(t) for t in grouped[key]],
+                        "tasks": _represent_tasks(grouped[key]),
                     },
                 )
             payload = {"view": "kanban", "groups": payload_groups}
         else:
-            payload = {"view": "timeline", "tasks": [task_to_representation(t) for t in tasks]}
+            payload = {"view": "timeline", "tasks": _represent_tasks(tasks)}
 
         return success_response(correlation_id=correlation_id, data={"board": board_to_representation(board), **payload})
 
@@ -1288,31 +1392,57 @@ class TaskListCreateView(APIView):
         correlation_id = get_correlation_id(request)
         require_token_scope(request, "tasks:read")
         queryset = (
-            tasks_queryset_for_user(request.user)
-            .select_related("group", "board", "assignee")
+            with_task_context(tasks_queryset_for_user(request.user))
             .annotate(subtasks_count=Count("subtasks"))
             .order_by("created_at")
         )
         board_id = request.query_params.get("board_id")
         group_id = request.query_params.get("group_id")
         parent_id = request.query_params.get("parent_id")
+        parent_ids_raw = (request.query_params.get("parent_ids") or "").strip()
         status_filter = request.query_params.get("status")
         search = (request.query_params.get("search") or "").strip()
         roots_only = (request.query_params.get("roots_only") or "").strip().lower()
         assignee_id = request.query_params.get("assignee_id")
+        project_id = (request.query_params.get("project_id") or "").strip()
+        workspace_id = (request.query_params.get("workspace_id") or "").strip()
+        priority = (request.query_params.get("priority") or "").strip()
+        client_query = (request.query_params.get("client") or "").strip()
 
         if board_id:
             queryset = queryset.filter(board_id=board_id)
         if group_id:
             queryset = queryset.filter(group_id=group_id)
-        if parent_id:
+        if parent_ids_raw:
+            parent_ids = [part.strip() for part in parent_ids_raw.split(",") if part.strip()]
+            queryset = queryset.filter(parent_id__in=parent_ids)
+        elif parent_id:
             queryset = queryset.filter(parent_id=parent_id)
         elif roots_only in {"1", "true", "yes"}:
             queryset = queryset.filter(parent__isnull=True)
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+        if priority:
+            queryset = queryset.filter(priority=priority)
+        if project_id:
+            queryset = queryset.filter(board__project_id=project_id)
+        if workspace_id:
+            queryset = queryset.filter(board__project__portfolio__workspace_id=workspace_id)
+        if client_query:
+            queryset = filter_folded_contains(queryset, ["board__project__client__name"], client_query)
         if search:
-            queryset = queryset.filter(title__icontains=search)
+            queryset = filter_folded_contains(
+                queryset,
+                [
+                    "title",
+                    "description",
+                    "board__project__name",
+                    "board__project__portfolio__name",
+                    "board__project__portfolio__workspace__name",
+                    "board__project__client__name",
+                ],
+                search,
+            )
         if assignee_id:
             queryset = queryset.filter(assignee_id=assignee_id)
         include_archived = truthy_query_flag(request.query_params.get("include_archived")) or truthy_query_flag(
@@ -1320,10 +1450,77 @@ class TaskListCreateView(APIView):
         )
         if not include_archived:
             queryset = queryset.filter(archived_at__isnull=True)
+        if truthy_query_flag(request.query_params.get("overdue")):
+            start_today = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+            queryset = queryset.filter(end_date__isnull=False, end_date__lt=start_today).exclude(
+                status__in=_done_status_keys(),
+            )
+        due_before = (request.query_params.get("due_before") or "").strip()
+        due_after = (request.query_params.get("due_after") or "").strip()
+        try:
+            if due_before:
+                bound, date_only = _parse_due_bound(due_before)
+                queryset = queryset.filter(end_date__date__lte=bound.date()) if date_only else queryset.filter(
+                    end_date__lte=bound,
+                )
+            if due_after:
+                bound, date_only = _parse_due_bound(due_after)
+                queryset = queryset.filter(end_date__date__gte=bound.date()) if date_only else queryset.filter(
+                    end_date__gte=bound,
+                )
+        except ValueError:
+            return error_response(
+                correlation_id=correlation_id,
+                code="validation_error",
+                message="Data de vencimento invalida. Use AAAA-MM-DD.",
+                details={},
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        total = queryset.count()
+        meta: dict = {"total": total}
+        limit_raw = request.query_params.get("limit")
+        cursor_raw = (request.query_params.get("cursor") or "").strip()
+        if limit_raw not in (None, "") or cursor_raw:
+            try:
+                limit = int(limit_raw) if limit_raw not in (None, "") else 50
+            except ValueError:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="limit deve ser um inteiro entre 1 e 100.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            if limit < 1 or limit > 100:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="limit deve ser um inteiro entre 1 e 100.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                offset = _decode_cursor(cursor_raw)
+            except ValueError:
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="validation_error",
+                    message="cursor invalido.",
+                    details={},
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            page = list(queryset[offset : offset + limit])
+            next_cursor = _encode_cursor(offset + limit) if offset + limit < total else None
+            meta.update({"limit": limit, "next_cursor": next_cursor})
+            tasks_payload = _represent_tasks(page)
+        else:
+            tasks_payload = _represent_tasks(queryset)
 
         return success_response(
             correlation_id=correlation_id,
-            data={"tasks": [task_to_representation(task) for task in queryset]},
+            data={"tasks": tasks_payload},
+            meta=meta,
         )
 
     def post(self, request: Request):
@@ -1398,7 +1595,7 @@ class TaskDetailView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-        task = Task.objects.filter(pk=task.pk).annotate(subtasks_count=Count("subtasks")).get()
+        task = with_task_context(Task.objects.filter(pk=task.pk)).annotate(subtasks_count=Count("subtasks")).get()
         return success_response(correlation_id=correlation_id, data={"task": task_to_representation(task)})
 
     def patch(self, request: Request, task_id: UUID):
@@ -1728,8 +1925,9 @@ class MyTasksView(APIView):
         sub_ids = my_assigned.filter(parent__isnull=False).values_list("pk", flat=True)
         parent_ids_from_subs = my_assigned.filter(parent__isnull=False).values_list("parent_id", flat=True)
         qs = (
-            Task.objects.filter(Q(pk__in=root_ids) | Q(pk__in=sub_ids) | Q(pk__in=parent_ids_from_subs))
-            .select_related("assignee", "group", "board")
+            with_task_context(
+                Task.objects.filter(Q(pk__in=root_ids) | Q(pk__in=sub_ids) | Q(pk__in=parent_ids_from_subs)),
+            )
             .annotate(subtasks_count=Count("subtasks"))
             .distinct()
             .order_by("-updated_at")
@@ -1747,7 +1945,7 @@ class MyTasksView(APIView):
             qs = qs.filter(archived_at__isnull=True)
         return success_response(
             correlation_id=correlation_id,
-            data={"tasks": [task_to_representation(t) for t in qs]},
+            data={"tasks": _represent_tasks(qs)},
             meta={"total": qs.count()},
         )
 
@@ -2796,6 +2994,33 @@ class TaskCommentDetailView(APIView):
 
 class TaskAttachmentsView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, task_id: UUID):
+        correlation_id = get_correlation_id(request)
+        try:
+            task = Task.objects.get(pk=task_id)
+        except Task.DoesNotExist:
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_not_found",
+                message="Tarefa nao encontrada.",
+                details={},
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        attachments = TaskAttachment.objects.filter(task=task).order_by("-created_at")
+        return success_response(
+            correlation_id=correlation_id,
+            data={"attachments": [task_attachment_to_representation(item, request=request) for item in attachments]},
+            meta={"total": attachments.count()},
+        )
 
     def post(self, request: Request, task_id: UUID):
         correlation_id = get_correlation_id(request)

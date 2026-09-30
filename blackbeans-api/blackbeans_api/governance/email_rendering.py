@@ -5,6 +5,7 @@ from django.core import signing
 from django.template.loader import render_to_string
 
 from blackbeans_api.governance.models import Notification
+from blackbeans_api.governance.notification_service import absolutize_app_link
 from blackbeans_api.governance.notification_service import get_frontend_base_url
 from blackbeans_api.governance.notification_service import get_user_display_name
 
@@ -73,15 +74,41 @@ def notification_action_text(notification: Notification) -> str:
     return template.format(actor=actor_name)
 
 
+def _email_report_items(notification: Notification) -> list[dict]:
+    raw_items = notification.metadata.get("report_items") or []
+    if not isinstance(raw_items, list):
+        return []
+    prepared: list[dict] = []
+    for row in raw_items[:15]:
+        if not isinstance(row, dict):
+            continue
+        prepared.append(
+            {
+                **row,
+                "deep_link": absolutize_app_link(str(row.get("deep_link") or "")),
+            },
+        )
+    return prepared
+
+
 def render_notification_email(notification: Notification) -> tuple[str, str, str]:
+    metadata = notification.metadata or {}
+    is_agent = notification.type == Notification.Type.AGENT_REPORT
+    deep_link = absolutize_app_link(
+        metadata.get("deep_link"),
+        fallback_hash=str(metadata.get("deep_link_hash") or ("#agents" if is_agent else "")),
+    )
     context = {
         "app_name": getattr(settings, "NOTIFICATION_APP_NAME", "BlackBeans System"),
         "notification": notification,
         "action_text": notification_action_text(notification),
-        "task_title": notification.metadata.get("task_title") or notification.title,
-        "breadcrumb": notification.metadata.get("breadcrumb", ""),
-        "deep_link": notification.metadata.get("deep_link") or build_preferences_url(),
+        "task_title": metadata.get("task_title") or notification.title,
+        "breadcrumb": metadata.get("breadcrumb", ""),
+        "deep_link": deep_link,
+        "cta_label": "Abrir relatorio" if is_agent else "Ver tarefa",
         "message": notification.message,
+        "summary": metadata.get("summary") or "",
+        "report_items": _email_report_items(notification),
         "preferences_url": build_preferences_url(),
         "unsubscribe_url": build_unsubscribe_url(
             user_id=notification.user_id,
@@ -96,11 +123,24 @@ def render_notification_email(notification: Notification) -> tuple[str, str, str
 
 def render_digest_email(*, user, notifications: list[Notification], digest_mode: str) -> tuple[str, str, str]:
     label = "Resumo diario" if digest_mode == "daily" else "Resumo semanal"
+    prepared = []
+    for item in notifications:
+        metadata = item.metadata or {}
+        prepared.append(
+            {
+                "title": item.title,
+                "message": item.message,
+                "deep_link": absolutize_app_link(
+                    metadata.get("deep_link"),
+                    fallback_hash=str(metadata.get("deep_link_hash") or ""),
+                ),
+            },
+        )
     context = {
         "app_name": getattr(settings, "NOTIFICATION_APP_NAME", "BlackBeans System"),
         "user_name": get_user_display_name(user),
         "digest_label": label,
-        "notifications": notifications,
+        "notifications": prepared,
         "preferences_url": build_preferences_url(),
     }
     html_body = render_to_string("notifications/digest_email.html", context)

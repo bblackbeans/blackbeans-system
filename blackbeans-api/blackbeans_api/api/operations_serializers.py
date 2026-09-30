@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import unicodedata
+import uuid
+
 from django.db import transaction
+from django.db.models import CharField
+from django.db.models import Count
+from django.db.models import Func
 from django.db.models import Max
+from django.db.models import Q
+from django.db.models import Value
+from django.db.models.functions import Lower
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -54,6 +63,87 @@ def link_depends_on_previous_sibling(task: Task) -> TaskDependency | None:
 
 def truthy_query_flag(raw: str | None) -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes"}
+
+
+_ACCENT_FROM = "áàâãäåéèêëíìîïóòôõöúùûüçñ"
+_ACCENT_TO = "aaaaaaeeeeiiiiooooouuuucn"
+_STATUS_LABEL_FALLBACK = {
+    "todo": "A fazer",
+    "in_progress": "Em andamento",
+    "blocked": "Bloqueada",
+    "overdue": "Atrasada",
+    "done": "Concluída",
+}
+TASK_CONTEXT_RELATED = (
+    "group",
+    "parent",
+    "assignee",
+    "board__project__client",
+    "board__project__portfolio__workspace",
+)
+
+
+def fold_search_text(value: str) -> str:
+    """Minúsculas sem acento, alinhado ao translate() usado na busca SQL."""
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.lower().translate(str.maketrans(_ACCENT_FROM, _ACCENT_TO))
+
+
+class _SqlTranslate(Func):
+    function = "TRANSLATE"
+    arity = 3
+    output_field = CharField()
+
+
+def folded_field(field_name: str):
+    return _SqlTranslate(Lower(field_name), Value(_ACCENT_FROM), Value(_ACCENT_TO))
+
+
+def filter_folded_contains(queryset, fields: list[str], raw: str):
+    needle = fold_search_text(raw)
+    if not needle:
+        return queryset
+    token = uuid.uuid4().hex[:8]
+    annotations = {}
+    query = Q()
+    for index, field in enumerate(fields):
+        alias = f"_fold_{token}_{index}"
+        annotations[alias] = folded_field(field)
+        query |= Q(**{f"{alias}__icontains": needle})
+    return queryset.annotate(**annotations).filter(query)
+
+
+def active_status_labels() -> dict[str, str]:
+    labels = dict(_STATUS_LABEL_FALLBACK)
+    for row in TaskStatusDefinition.objects.filter(is_active=True).only("key", "label"):
+        labels[row.key] = row.label
+    return labels
+
+
+def status_label_for(key: str | None, labels: dict[str, str] | None = None) -> str:
+    status_key = (key or "").strip()
+    catalog = labels if labels is not None else active_status_labels()
+    return catalog.get(status_key) or _STATUS_LABEL_FALLBACK.get(status_key) or status_key
+
+
+def task_status_counts_for_boards(board_ids) -> dict[str, dict[str, int]]:
+    ids = list(board_ids)
+    if not ids:
+        return {}
+    rows = (
+        Task.objects.filter(board_id__in=ids, archived_at__isnull=True)
+        .values("board_id", "status")
+        .annotate(total=Count("pk"))
+    )
+    grouped: dict[str, dict[str, int]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["board_id"]), {})[row["status"]] = row["total"]
+    return grouped
+
+
+def with_task_context(queryset):
+    return queryset.select_related(*TASK_CONTEXT_RELATED)
 
 
 def validate_active_task_status(value: str) -> str:
@@ -133,10 +223,19 @@ class WorkspaceWriteSerializer(serializers.ModelSerializer):
 
 
 def workspace_to_representation(workspace: Workspace) -> dict:
+    client = workspace.client if workspace.client_id else None
+    projects_count = getattr(workspace, "projects_count", None)
+    if projects_count is None:
+        projects_count = Project.objects.filter(
+            portfolio__workspace_id=workspace.pk,
+            archived_at__isnull=True,
+        ).count()
     return {
         "id": str(workspace.pk),
         "name": workspace.name,
         "client_id": str(workspace.client_id) if workspace.client_id else None,
+        "client_name": client.name if client is not None else None,
+        "projects_count": int(projects_count),
         "created_at": workspace.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": workspace.updated_at.isoformat().replace("+00:00", "Z"),
     }
@@ -282,11 +381,17 @@ def project_to_representation(project: Project) -> dict:
             return None
         return float(v)
 
+    portfolio = project.portfolio
+    workspace = portfolio.workspace
+    client = project.client if project.client_id else None
     return {
         "id": str(project.pk),
         "portfolio_id": str(project.portfolio_id),
-        "workspace_id": str(project.portfolio.workspace_id),
+        "portfolio_name": portfolio.name or "",
+        "workspace_id": str(portfolio.workspace_id),
+        "workspace_name": workspace.name or "",
         "client_id": str(project.client_id) if project.client_id else None,
+        "client_name": client.name if client is not None else None,
         "contract_line_id": str(project.contract_line_id) if project.contract_line_id else None,
         "name": project.name,
         "description": project.description,
@@ -359,14 +464,26 @@ class BoardUpdateSerializer(serializers.Serializer):
         return cleaned
 
 
-def board_to_representation(board: Board) -> dict:
+def board_to_representation(board: Board, *, task_counts: dict[str, int] | None = None) -> dict:
     keys = board.pull_status_keys if isinstance(getattr(board, "pull_status_keys", None), list) else []
+    project = board.project
+    portfolio = project.portfolio
+    workspace = portfolio.workspace
+    client = project.client if project.client_id else None
+    counts = task_counts
+    if counts is None:
+        counts = task_status_counts_for_boards([board.pk]).get(str(board.pk), {})
     return {
         "id": str(board.pk),
         "project_id": str(board.project_id),
-        "workspace_id": str(board.project.portfolio.workspace_id),
+        "project_name": project.name or "",
+        "portfolio_name": portfolio.name or "",
+        "workspace_id": str(portfolio.workspace_id),
+        "workspace_name": workspace.name or "",
+        "client_name": client.name if client is not None else None,
         "name": board.name,
         "pull_status_keys": keys,
+        "task_counts": counts,
         "created_at": board.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": board.updated_at.isoformat().replace("+00:00", "Z"),
     }
@@ -537,7 +654,7 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         return instance
 
 
-def task_to_representation(task: Task, request=None) -> dict:
+def task_to_representation(task: Task, request=None, *, status_labels: dict[str, str] | None = None) -> dict:
     def _iso(v):
         return v.isoformat().replace("+00:00", "Z") if v else None
 
@@ -567,16 +684,33 @@ def task_to_representation(task: Task, request=None) -> dict:
             except ValueError:
                 assignee_avatar_url = None
 
+    board = task.board
+    project = board.project
+    portfolio = project.portfolio
+    workspace = portfolio.workspace
+    client = project.client if project.client_id else None
+    parent = task.parent if task.parent_id else None
+    group = task.group
+
     return {
         "id": str(task.pk),
         "board_id": str(task.board_id),
         "group_id": str(task.group_id),
+        "group_name": group.name if group is not None else None,
         "parent_id": str(task.parent_id) if task.parent_id else None,
+        "parent_title": parent.title if parent is not None else None,
+        "project_id": str(project.pk),
+        "project_name": project.name or "",
+        "portfolio_name": portfolio.name or "",
+        "workspace_id": str(workspace.pk),
+        "workspace_name": workspace.name or "",
+        "client_name": client.name if client is not None else None,
         "number": getattr(task, "number", None),
         "subtasks_count": int(subtasks_count),
         "title": task.title,
         "description": task.description,
         "status": task.status,
+        "status_label": status_label_for(task.status, status_labels),
         "priority": task.priority,
         "effort_points": float(task.effort_points) if task.effort_points is not None else 1.0,
         "assignee_id": task.assignee_id,

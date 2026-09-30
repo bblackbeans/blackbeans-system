@@ -45,6 +45,13 @@ class Client(models.Model):
         blank=True,
         related_name="portal_default_for_clients",
     )
+    portal_portfolio = ForeignKey(
+        "governance.Portfolio",
+        on_delete=SET_NULL,
+        null=True,
+        blank=True,
+        related_name="portal_clients",
+    )
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

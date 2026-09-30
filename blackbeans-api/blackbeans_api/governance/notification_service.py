@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import time
 from datetime import timedelta
 from typing import Iterable
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -80,8 +81,53 @@ DEFAULT_EMAIL_MODES: dict[str, str] = {
 DEFAULT_IN_APP: dict[str, bool] = {event: True for event in DEFAULT_EMAIL_MODES}
 
 
+PUBLIC_FRONTEND_URL = "https://sistema.blackbeans.com.br"
+
+
+def _is_stale_frontend_host(host: str) -> bool:
+    normalized = (host or "").lower()
+    if normalized in {"", "localhost", "127.0.0.1"}:
+        return True
+    return normalized.endswith(".easypanel.host")
+
+
 def get_frontend_base_url() -> str:
-    return str(getattr(settings, "FRONTEND_BASE_URL", "http://localhost:13000")).rstrip("/")
+    """URL publica do app nos e-mails.
+
+    Hosts antigos (localhost do worker, *.easypanel.host) sao trocados pelo
+    dominio canonico em producao. Em DEBUG, localhost continua valido.
+    """
+    raw = str(getattr(settings, "FRONTEND_BASE_URL", "") or "").strip().rstrip("/")
+    debug = bool(getattr(settings, "DEBUG", False))
+    if not raw:
+        return "http://localhost:13000" if debug else PUBLIC_FRONTEND_URL
+    host = (urlparse(raw).hostname or "").lower()
+    if not debug and _is_stale_frontend_host(host):
+        return PUBLIC_FRONTEND_URL
+    return raw
+
+
+def absolutize_app_link(url: str | None, *, fallback_hash: str = "") -> str:
+    """Reescreve qualquer link do app para a URL publica atual, preservando o hash."""
+    base = get_frontend_base_url()
+    raw = str(url or "").strip()
+    fragment_fallback = str(fallback_hash or "").strip()
+    if fragment_fallback and not fragment_fallback.startswith("#"):
+        fragment_fallback = f"#{fragment_fallback}"
+    if not raw:
+        return f"{base}/{fragment_fallback}" if fragment_fallback else f"{base}/#profile"
+    if raw.startswith("#"):
+        return f"{base}/{raw}"
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        path = raw if raw.startswith("/") else f"/{raw}"
+        return f"{base}{path}"
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    fragment = f"#{parsed.fragment}" if parsed.fragment else fragment_fallback
+    if path in {"", "/"}:
+        return f"{base}/{fragment}" if fragment else base
+    return f"{base}{path}{query}{fragment}"
 
 
 def build_task_deep_link(task_id: str) -> str:

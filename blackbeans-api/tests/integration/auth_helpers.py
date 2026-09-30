@@ -14,7 +14,10 @@ def obtain_admin_access_token(client: APIClient, username: str, password: str) -
         format="json",
     )
     assert step1.status_code == 200, step1.data
-    challenge_id = step1.data["data"]["challenge_id"]
+    payload = step1.data["data"]
+    if payload.get("access_token"):
+        return payload["access_token"]
+    challenge_id = payload["challenge_id"]
     challenge = cache.get(challenge_cache_key(challenge_id))
     assert challenge is not None
     code = challenge["code"]
