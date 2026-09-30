@@ -12021,6 +12021,17 @@ export function AppShell() {
                           render: (v: string) => renderClientRequestStatusTag(v || "new"),
                         },
                         {
+                          title: "Aprovação",
+                          width: 150,
+                          render: (row: Record<string, unknown>) => {
+                            const review = String(row.client_review_status ?? "none");
+                            if (review === "approved") return <Tag color="green">Aprovada</Tag>;
+                            if (review === "revision_requested") return <Tag color="orange">Na fila</Tag>;
+                            if (String(row.status ?? "") === "converted") return <Tag>Ainda não</Tag>;
+                            return "—";
+                          },
+                        },
+                        {
                           title: "Criado em",
                           dataIndex: "created_at",
                           render: (v: string) => formatDate(v),
@@ -16883,6 +16894,27 @@ export function AppShell() {
               <div>
                 {renderClientRequestStatusTag(String(viewRequestModal.status ?? ""))}
               </div>
+            </div>
+            <div>
+              <Typography.Text type="secondary">Aprovação do cliente</Typography.Text>
+              <div style={{ marginTop: 4 }}>
+                {String(viewRequestModal.client_review_status ?? "") === "approved" ? (
+                  <Tag color="green">Aprovada</Tag>
+                ) : (
+                  <Tag>Ainda não</Tag>
+                )}
+                {String(viewRequestModal.client_review_status ?? "") === "revision_requested" ? (
+                  <Tag color="orange">Voltou para a fila</Tag>
+                ) : null}
+              </div>
+              {String(viewRequestModal.task_status_label ?? "").trim() ? (
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                  Tarefa: {String(viewRequestModal.task_status_label)}.
+                  {String(viewRequestModal.client_review_status ?? "") === "revision_requested"
+                    ? " O cliente devolveu para a fila. O pedido não volta a ser novo."
+                    : ""}
+                </Typography.Paragraph>
+              ) : null}
             </div>
             <div>
               <Typography.Text type="secondary">Criado em</Typography.Text>

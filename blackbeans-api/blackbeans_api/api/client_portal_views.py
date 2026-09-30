@@ -33,6 +33,10 @@ from blackbeans_api.api.responses import error_response
 from blackbeans_api.api.responses import success_response
 from blackbeans_api.api.utils import get_correlation_id
 from blackbeans_api.clients.models import Client
+from blackbeans_api.governance.board_status import catalog_key_for_bucket
+from blackbeans_api.governance.board_status import status_bucket_for_task
+from blackbeans_api.governance.board_status import sync_task_board_by_pull_status
+from blackbeans_api.governance.board_status import sync_task_group_by_status
 from blackbeans_api.governance.models import ClientRequest
 from blackbeans_api.governance.models import ClientRequestAttachment
 from blackbeans_api.governance.models import TaskComment
@@ -500,11 +504,14 @@ class ClientPortalRequestRevisionView(APIView):
         item.client_reviewed_at = timezone.now()
         item.save(update_fields=["client_review_status", "client_revision_note", "client_reviewed_at", "updated_at"])
 
-        # Reabre a tarefa para a equipe se ainda estiver done
+        # Devolve a tarefa para a fila (A fazer), sem reabrir o pedido como novo.
         task = item.converted_task
-        if task is not None and str(task.status).lower() == "done":
-            task.status = "in_progress"
+        if task is not None and status_bucket_for_task(task) == "done":
+            task.status = catalog_key_for_bucket("backlog")
             task.save(update_fields=["status", "updated_at"])
+            if sync_task_board_by_pull_status(task):
+                task.refresh_from_db()
+            sync_task_group_by_status(task)
 
         logger.info(
             "client_portal.revision request_id=%s client_id=%s correlation_id=%s",

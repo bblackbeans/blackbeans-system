@@ -17,6 +17,8 @@ from rest_framework.request import Request
 from rest_framework.views import APIView
 
 from blackbeans_api.api.operations_serializers import allocate_next_task_number
+from blackbeans_api.api.operations_serializers import active_status_labels
+from blackbeans_api.api.operations_serializers import status_label_for
 from blackbeans_api.api.operations_serializers import task_to_representation
 from blackbeans_api.api.permissions import HasStaffOrAdminArea
 from blackbeans_api.api.responses import error_response
@@ -115,7 +117,11 @@ def _attachment_to_representation(att: ClientRequestAttachment) -> dict:
     }
 
 
-def client_request_to_representation(item: ClientRequest) -> dict:
+def client_request_to_representation(
+    item: ClientRequest,
+    *,
+    status_labels: dict[str, str] | None = None,
+) -> dict:
     attachments = [
         _attachment_to_representation(att)
         for att in item.attachments.all()
@@ -140,6 +146,12 @@ def client_request_to_representation(item: ClientRequest) -> dict:
         ),
         "converted_task_id": str(item.converted_task_id) if item.converted_task_id else None,
         "converted_project_id": str(item.converted_project_id) if item.converted_project_id else None,
+        "task_status": item.converted_task.status if item.converted_task_id and item.converted_task else None,
+        "task_status_label": (
+            status_label_for(item.converted_task.status, status_labels)
+            if item.converted_task_id and item.converted_task
+            else None
+        ),
         "metadata": getattr(item, "metadata", None) or {},
         "attachments": attachments,
         "created_at": item.created_at.isoformat().replace("+00:00", "Z"),
@@ -304,9 +316,14 @@ class ClientRequestListView(APIView):
         if status_filter:
             qs = qs.filter(status=status_filter)
         rows = list(qs[:200])
+        labels = active_status_labels()
         return success_response(
             correlation_id=correlation_id,
-            data={"requests": [client_request_to_representation(row) for row in rows]},
+            data={
+                "requests": [
+                    client_request_to_representation(row, status_labels=labels) for row in rows
+                ]
+            },
             meta={"total": len(rows)},
         )
 
