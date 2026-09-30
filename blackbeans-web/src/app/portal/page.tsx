@@ -9,6 +9,7 @@ import {
   Empty,
   Form,
   Grid,
+  Image,
   Input,
   Modal,
   Space,
@@ -21,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { usePedidoMediaAttachments } from "@/hooks/usePedidoMediaAttachments";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, resolveMediaUrl } from "@/lib/api";
 import {
   PEDIDO_ACCEPT,
   PEDIDO_MAX_FILE_BYTES,
@@ -38,6 +39,7 @@ type PortalAttachment = {
   id: string;
   filename: string;
   kind?: string;
+  content_type?: string;
   url?: string | null;
 };
 
@@ -101,6 +103,32 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
 };
 
 const pageBg = "#0a0a0a";
+
+function isImageAttachment(att: PortalAttachment) {
+  const type = `${att.content_type || ""} ${att.kind || ""}`.toLowerCase();
+  const name = (att.filename || "").toLowerCase();
+  return type.includes("image") || /\.(png|jpe?g|gif|webp|bmp)$/.test(name);
+}
+
+function feedbackImageUrls(item: PortalFeedback) {
+  const urls: string[] = [];
+  const html = item.content || "";
+  const pattern = /<img[^>]+src=["']([^"']+)["']/gi;
+  for (const match of html.matchAll(pattern)) {
+    const resolved = resolveMediaUrl(match[1]);
+    if (resolved && !urls.includes(resolved)) urls.push(resolved);
+  }
+  for (const att of item.attachments ?? []) {
+    if (!isImageAttachment(att)) continue;
+    const resolved = resolveMediaUrl(att.url);
+    if (resolved && !urls.includes(resolved)) urls.push(resolved);
+  }
+  return urls;
+}
+
+function feedbackFiles(item: PortalFeedback) {
+  return (item.attachments ?? []).filter((att) => !isImageAttachment(att));
+}
 
 export default function PortalHomePage() {
   const router = useRouter();
@@ -280,6 +308,11 @@ export default function PortalHomePage() {
   };
 
   const statusMeta = (row: PortalRequest) => {
+    if (row.display_status === "approved" || row.review_locked) return STATUS_LABEL.approved;
+    if (row.display_status === "completed") return STATUS_LABEL.completed;
+    if (row.task_status_label) {
+      return { label: row.task_status_label, color: "default" as const };
+    }
     const key = row.display_status || row.status;
     return STATUS_LABEL[key] ?? { label: key, color: "default" };
   };
@@ -428,7 +461,6 @@ export default function PortalHomePage() {
                           {row.task_title ? (
                             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                               Tarefa: {row.task_title}
-                              {row.task_status_label ? ` · ${row.task_status_label}` : ""}
                             </Typography.Text>
                           ) : null}
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -461,10 +493,7 @@ export default function PortalHomePage() {
                   {
                     title: "Tarefa",
                     width: 220,
-                    render: (_: unknown, row: PortalRequest) =>
-                      row.task_title
-                        ? `${row.task_title}${row.task_status_label ? ` · ${row.task_status_label}` : ""}`
-                        : "—",
+                    render: (_: unknown, row: PortalRequest) => row.task_title || "—",
                   },
                   {
                     title: "Status",
@@ -501,7 +530,7 @@ export default function PortalHomePage() {
           setRevisionOpen(false);
           setRevisionNote("");
         }}
-        size={isMobile ? "100%" : 520}
+        size={isMobile ? "100%" : 640}
       >
         {detail ? (
           <Space orientation="vertical" style={{ width: "100%" }} size={14}>
@@ -512,8 +541,13 @@ export default function PortalHomePage() {
               <Typography.Text type="secondary">Status</Typography.Text>
               <div style={{ marginTop: 4 }}>
                 <Tag color={statusMeta(detail).color}>{statusMeta(detail).label}</Tag>
-                {detail.review_locked ? <Tag color="success">Travado</Tag> : null}
+                {detail.review_locked ? null : <Tag>Ainda não aprovada</Tag>}
               </div>
+              {detail.client_review_status === "revision_requested" ? (
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                  Você devolveu esta demanda para a fila. Ela segue como {detail.task_status_label || "A fazer"}, sem virar um pedido novo.
+                </Typography.Paragraph>
+              ) : null}
             </div>
             <div>
               <Typography.Text type="secondary">Descricao</Typography.Text>
@@ -555,40 +589,60 @@ export default function PortalHomePage() {
                 </Typography.Text>
               ) : (
                 <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-                  {(detail.feedback ?? []).map((item) => (
-                    <div
-                      key={item.id}
-                      style={{
-                        borderLeft: "3px solid #DA9330",
-                        paddingLeft: 10,
-                      }}
-                    >
-                      <Space size={8} wrap>
-                        <Typography.Text strong>{item.author_name || "Equipe"}</Typography.Text>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {item.created_at ? new Date(item.created_at).toLocaleString("pt-BR") : ""}
-                        </Typography.Text>
-                      </Space>
-                      <Typography.Paragraph style={{ marginBottom: 4, marginTop: 4 }}>
-                        {item.content_text || item.content || "—"}
-                      </Typography.Paragraph>
-                      {(item.attachments ?? []).length > 0 ? (
-                        <ul style={{ paddingLeft: 18, margin: 0 }}>
-                          {(item.attachments ?? []).map((att) => (
-                            <li key={att.id}>
-                              {att.url ? (
-                                <a href={att.url} target="_blank" rel="noreferrer">
-                                  {att.filename}
-                                </a>
-                              ) : (
-                                att.filename
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </div>
-                  ))}
+                  {(detail.feedback ?? []).map((item) => {
+                    const images = feedbackImageUrls(item);
+                    const files = feedbackFiles(item);
+                    return (
+                      <Card key={item.id} size="small" styles={{ body: { padding: 12 } }}>
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{item.author_name || "Equipe"}</Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {item.created_at ? new Date(item.created_at).toLocaleString("pt-BR") : ""}
+                          </Typography.Text>
+                        </Space>
+                        <Typography.Paragraph style={{ marginBottom: images.length || files.length ? 8 : 0, marginTop: 8, whiteSpace: "pre-wrap" }}>
+                          {item.content_text || "—"}
+                        </Typography.Paragraph>
+                        {images.length > 0 ? (
+                          <Image.PreviewGroup>
+                            <Space wrap size={8}>
+                              {images.map((src) => (
+                                <Image
+                                  key={src}
+                                  src={src}
+                                  alt="Anexo da devolutiva"
+                                  width={148}
+                                  style={{
+                                    maxHeight: 148,
+                                    objectFit: "cover",
+                                    borderRadius: 8,
+                                  }}
+                                />
+                              ))}
+                            </Space>
+                          </Image.PreviewGroup>
+                        ) : null}
+                        {files.length > 0 ? (
+                          <ul style={{ paddingLeft: 18, margin: images.length ? "8px 0 0" : 0 }}>
+                            {files.map((att) => {
+                              const href = resolveMediaUrl(att.url);
+                              return (
+                                <li key={att.id}>
+                                  {href ? (
+                                    <a href={href} target="_blank" rel="noreferrer">
+                                      {att.filename}
+                                    </a>
+                                  ) : (
+                                    att.filename
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : null}
+                      </Card>
+                    );
+                  })}
                 </Space>
               )}
             </Card>
