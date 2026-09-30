@@ -145,8 +145,8 @@ export default function PortalHomePage() {
         }
         setArea({
           workspace: response.data?.workspace ?? null,
-          projects: Array.isArray(response.data?.projects) ? response.data.projects : [],
-          defaults: response.data?.defaults,
+          portfolio: response.data?.portfolio ?? null,
+          tasks: Array.isArray(response.data?.tasks) ? response.data.tasks : [],
         });
       } finally {
         setAreaLoading(false);
