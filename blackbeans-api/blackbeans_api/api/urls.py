@@ -9,6 +9,11 @@ from blackbeans_api.api.auth_views import Auth2FAEnrollStartView
 from blackbeans_api.api.auth_views import Auth2FASettingsView
 from blackbeans_api.api.password_reset_views import PasswordResetConfirmView
 from blackbeans_api.api.password_reset_views import PasswordResetRequestView
+from blackbeans_api.api.automations_views import AutomationCatalogView
+from blackbeans_api.api.automations_views import AutomationDetailView
+from blackbeans_api.api.automations_views import AutomationListCreateView
+from blackbeans_api.api.automations_views import AutomationRunNowView
+from blackbeans_api.api.automations_views import AutomationRunsView
 from blackbeans_api.api.agents_views import AgentListView
 from blackbeans_api.api.agents_views import AgentRunDetailView
 from blackbeans_api.api.agents_views import AgentRunListView
@@ -238,6 +243,12 @@ urlpatterns = [
     path("notifications/unsubscribe", NotificationUnsubscribeView.as_view(), name="notifications-unsubscribe"),
     path("notifications/<uuid:notification_id>/read", NotificationReadView.as_view(), name="notifications-read"),
     path("notifications/deadline-scan", NotificationsDeadlineScanView.as_view(), name="notifications-deadline-scan"),
+    path("automations", AutomationListCreateView.as_view(), name="automations-list"),
+    path("automations/catalog", AutomationCatalogView.as_view(), name="automations-catalog"),
+    path("automations/runs", AutomationRunsView.as_view(), name="automations-runs-all"),
+    path("automations/<uuid:automation_id>", AutomationDetailView.as_view(), name="automations-detail"),
+    path("automations/<uuid:automation_id>/runs", AutomationRunsView.as_view(), name="automations-runs"),
+    path("automations/<uuid:automation_id>/run", AutomationRunNowView.as_view(), name="automations-run-now"),
     path("agents", AgentListView.as_view(), name="agents-list"),
     path("agents/<slug:slug>/runs", AgentRunListView.as_view(), name="agents-runs"),
     path("agents/<slug:slug>/runs/<uuid:run_id>", AgentRunDetailView.as_view(), name="agents-run-detail"),

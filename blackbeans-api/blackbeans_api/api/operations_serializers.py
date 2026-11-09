@@ -731,6 +731,13 @@ def task_to_representation(task: Task, request=None, *, status_labels: dict[str,
 class TaskAssigneeSerializer(serializers.Serializer):
     assignee_id = serializers.IntegerField(min_value=1)
 
+    def validate_assignee_id(self, value):
+        from django.contrib.auth import get_user_model
+
+        if not get_user_model().objects.filter(pk=value, is_active=True).exists():
+            raise serializers.ValidationError("Usuario nao encontrado ou inativo.")
+        return value
+
 
 class TaskDependencyCreateSerializer(serializers.Serializer):
     depends_on_task_id = serializers.UUIDField(required=False)

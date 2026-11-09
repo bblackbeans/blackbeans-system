@@ -36,7 +36,7 @@ def unseed_rd_reconcile(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("integrations", "0001_initial"),
-        ("django_celery_beat", "0001_initial"),
+        ("django_celery_beat", "0006_auto_20180322_0932"),
     ]
 
     operations = [

@@ -152,6 +152,7 @@ ADMIN_AREA_KEYS = frozenset(
         "stats",
         "problems",
         "agents",
+        "automations",
         "leads",
     },
 )

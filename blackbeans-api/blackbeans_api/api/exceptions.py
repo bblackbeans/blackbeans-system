@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.exceptions import NotAuthenticated
 from rest_framework.exceptions import PermissionDenied
@@ -38,6 +39,16 @@ def custom_exception_handler(exc, context):
             code="validation_error",
             message="Dados invalidos.",
             details=exc.detail,
+            http_status=400,
+        )
+
+    if isinstance(exc, DjangoValidationError):
+        # Filtros de query-string com UUID/data invalidos chegam aqui vindos do ORM: 400, nao 500.
+        return error_response(
+            correlation_id=correlation_id,
+            code="validation_error",
+            message="Parametro invalido.",
+            details={"detail": list(getattr(exc, "messages", [str(exc)]))},
             http_status=400,
         )
 

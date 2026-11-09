@@ -1549,6 +1549,16 @@ class TaskListCreateView(APIView):
                 details={},
                 http_status=status.HTTP_403_FORBIDDEN,
             )
+        if parent_id and group_id:
+            parent_board = Task.objects.select_related("board").filter(pk=parent_id).first()
+            if parent_board is not None and not user_can_access_board(request.user, parent_board.board):
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="board_forbidden",
+                    message="Sem acesso ao quadro da tarefa pai.",
+                    details={},
+                    http_status=status.HTTP_403_FORBIDDEN,
+                )
         task = serializer.save()
         _sync_task_placement_by_status(task)
         actor_name = get_user_display_name(request.user)
@@ -1621,6 +1631,19 @@ class TaskDetailView(APIView):
             )
         serializer = TaskWriteSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        new_group_id = serializer.validated_data.get("group_id")
+        if new_group_id and not (request.user.is_staff or request.user.is_superuser):
+            destination = BoardGroup.objects.select_related("board").filter(pk=new_group_id).first()
+            if destination is not None and destination.board_id != task.board_id and not user_can_access_board(
+                request.user, destination.board,
+            ):
+                return error_response(
+                    correlation_id=correlation_id,
+                    code="board_forbidden",
+                    message="Sem acesso ao quadro de destino.",
+                    details={},
+                    http_status=status.HTTP_403_FORBIDDEN,
+                )
         before_status = task.status
         before_description = task.description or ""
         before_assignee_id = task.assignee_id
@@ -2248,6 +2271,14 @@ class TaskTimePauseView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
         time_log = _resolve_time_log_for_user(
             task=task,
             user=request.user,
@@ -2308,6 +2339,14 @@ class TaskTimeResumeView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         if TimeLog.objects.filter(task=task, user=request.user, status=TimeLog.Status.ACTIVE).exists():
             return error_response(
@@ -2384,6 +2423,14 @@ class TaskTimeManualView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
 
         serializer = TimeLogManualCreateSerializer(data=request.data)
@@ -2651,6 +2698,14 @@ class TaskTimeSummaryView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
         logs = TimeLog.objects.filter(task=task).exclude(status=TimeLog.Status.DELETED).select_related("user")
         if not is_admin:
             logs = logs.filter(user=request.user)
@@ -2861,6 +2916,14 @@ class TaskCommentsView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
         comments = (
             TaskComment.objects.filter(task=task)
             .select_related("author")
@@ -2884,6 +2947,14 @@ class TaskCommentsView(APIView):
                 message="Tarefa nao encontrada.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         serializer = TaskCommentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -3034,6 +3105,14 @@ class TaskAttachmentsView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
 
         uploaded = request.FILES.get("file")
         comment = None
@@ -3132,6 +3211,14 @@ class TaskActivityView(APIView):
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        if not user_can_access_task(request.user, task):
+            return error_response(
+                correlation_id=correlation_id,
+                code="task_forbidden",
+                message="Sem acesso a esta tarefa.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
         activities = TaskActivity.objects.filter(task=task).order_by("-created_at")
         return success_response(
             correlation_id=correlation_id,
@@ -3166,6 +3253,14 @@ class BoardProgressView(APIView):
                 message="Board nao encontrado.",
                 details={},
                 http_status=status.HTTP_404_NOT_FOUND,
+            )
+        if not user_can_access_board(request.user, board):
+            return error_response(
+                correlation_id=correlation_id,
+                code="board_forbidden",
+                message="Sem acesso a este quadro.",
+                details={},
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         qs = Task.objects.filter(board=board)
         total = qs.count()

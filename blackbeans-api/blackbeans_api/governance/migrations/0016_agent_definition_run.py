@@ -61,7 +61,7 @@ class Migration(migrations.Migration):
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ("governance", "0015_taskattachment_file_comment"),
-        ("django_celery_beat", "0001_initial"),
+        ("django_celery_beat", "0006_auto_20180322_0932"),
     ]
 
     operations = [

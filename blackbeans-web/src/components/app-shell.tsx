@@ -29,6 +29,7 @@ import {
   PaperClipOutlined,
   RightOutlined,
   RobotOutlined,
+  ThunderboltOutlined,
   SettingOutlined,
   ShopOutlined,
   ShoppingCartOutlined,
@@ -65,6 +66,7 @@ import {
   Select,
   Segmented,
   Space,
+  Skeleton,
   Spin,
   Statistic,
   Switch,
@@ -94,6 +96,7 @@ import { toBrowserMediaSrc } from "@/lib/media";
 import { isEmptyRichHtml, toEditorHtml } from "@/lib/rich-content";
 import { installReportProblemCollectors } from "@/lib/report-problem";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
+import { AutomationsPanel } from "@/components/automations/AutomationsPanel";
 import { ApiTokensPanel } from "@/components/account/ApiTokensPanel";
 import { TaskIntakePanel } from "@/components/intake/TaskIntakePanel";
 import { LeadsPanel } from "@/components/leads/LeadsPanel";
@@ -104,6 +107,7 @@ import MondayComposer, {
   type MondayMentionOption,
 } from "@/components/rich-editor/MondayComposer";
 import { RichHtmlView } from "@/components/rich-editor/RichHtmlView";
+import { copyToClipboard, htmlToPlainText } from "@/lib/clipboard";
 import { ProblemReportsPanel } from "@/components/report-problem/ProblemReportsPanel";
 import { ReportProblemWidget } from "@/components/report-problem/ReportProblemWidget";
 import { WhatsNewModal } from "@/components/whats-new/WhatsNewModal";
@@ -565,6 +569,7 @@ type MenuKey =
   | "stats"
   | "problems"
   | "agents"
+  | "automations"
   | "leads"
   | "task-intake"
   | "sprint"
@@ -588,6 +593,7 @@ const MENU_KEYS: MenuKey[] = [
   "stats",
   "problems",
   "agents",
+  "automations",
   "leads",
   "task-intake",
   "sprint",
@@ -607,6 +613,7 @@ const RESTRICTED_ADMIN_KEYS: MenuKey[] = [
   "stats",
   "problems",
   "agents",
+  "automations",
   "leads",
   "task-intake",
   "workspaces",
@@ -624,6 +631,7 @@ const GRANTABLE_ADMIN_AREA_OPTIONS: { value: MenuKey; label: string }[] = [
   { value: "stats", label: "Estatisticas" },
   { value: "problems", label: "Problemas" },
   { value: "agents", label: "Agentes" },
+  { value: "automations", label: "Automacoes" },
   { value: "leads", label: "Banco de leads" },
 ];
 const GRANTABLE_ADMIN_AREA_KEYS = new Set<MenuKey>(
@@ -1198,6 +1206,19 @@ function TimeSessionFields({ form }: { form: FormInstance }) {
 
 type MentionOption = { value: string; label: ReactNode };
 
+/** Copia conteudo rico (descricao/comentario) como texto + HTML e avisa o resultado. */
+async function copyRichContent(html: string, successLabel: string, header?: string) {
+  const body = htmlToPlainText(html);
+  if (!body) {
+    message.info("Nada para copiar.");
+    return;
+  }
+  const text = header ? `${header}\n${body}` : body;
+  const ok = await copyToClipboard({ text, html });
+  if (ok) message.success(successLabel);
+  else message.error("Nao foi possivel copiar. Selecione o texto e use Ctrl+C.");
+}
+
 /** Descricao: leitura HTML + composer TipTap (rascunho ate Salvar do drawer). */
 function RichDescriptionField({
   value,
@@ -1226,6 +1247,13 @@ function RichDescriptionField({
     return (
       <div className="bb-rich-description bb-rich-description--readonly">
         {hasContent ? (
+          <div className="bb-rich-description__bar">
+            <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copyRichContent(text, "Descricao copiada.")} aria-label="Copiar descricao">
+              Copiar
+            </Button>
+          </div>
+        ) : null}
+        {hasContent ? (
           <RichHtmlView html={text} />
         ) : (
           <Typography.Text type="secondary">Sem descricao.</Typography.Text>
@@ -1238,6 +1266,11 @@ function RichDescriptionField({
     return (
       <div className="bb-rich-description">
         <div className="bb-rich-description__bar">
+          {hasContent ? (
+            <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => void copyRichContent(text, "Descricao copiada.")} aria-label="Copiar descricao">
+              Copiar
+            </Button>
+          ) : null}
           <Button
             type="text"
             size="small"
@@ -2563,6 +2596,8 @@ export function AppShell() {
   >([]);
   const [taskComments, setTaskComments] = useState<TaskCommentItem[]>([]);
   const [taskSubtasks, setTaskSubtasks] = useState<TaskItem[]>([]);
+  const [taskDetailsLoading, setTaskDetailsLoading] = useState(false);
+  const openTaskSeqRef = useRef(0);
   const [subtasksByParentId, setSubtasksByParentId] = useState<Record<string, TaskItem[]>>({});
   const [expandedTaskKeysByBoardId, setExpandedTaskKeysByBoardId] = useState<Record<string, string[]>>({});
   const [boardListTablePageByBoardId, setBoardListTablePageByBoardId] = useState<Record<string, number>>({});
@@ -2862,6 +2897,9 @@ export function AppShell() {
           : null,
         canAccessAdminArea("agents")
           ? { key: "agents", icon: <RobotOutlined />, label: menuLabel("Agentes", HELP_TIPS.menuAgents) }
+          : null,
+        canAccessAdminArea("automations")
+          ? { key: "automations", icon: <ThunderboltOutlined />, label: "Automacoes" }
           : null,
         canAccessAdminArea("leads")
           ? { key: "leads", icon: <ContactsOutlined />, label: menuLabel("Banco de leads", HELP_TIPS.menuLeads) }
@@ -5854,6 +5892,11 @@ export function AppShell() {
     setTaskCommentDraft("");
     setTaskCommentFiles([]);
     setTaskSubtasks([]);
+    setTaskComments([]);
+    setTaskActivity([]);
+    setTaskSummary({ total_seconds: 0, logs: [] });
+    const openSeq = ++openTaskSeqRef.current;
+    setTaskDetailsLoading(true);
     taskDetailsForm.setFieldsValue({
       title: task.title,
       description: task.description ?? "",
@@ -5878,6 +5921,9 @@ export function AppShell() {
         ? Promise.resolve({ ok: true, status: 200, data: { tasks: [] as TaskItem[] } })
         : apiRequest<{ tasks: TaskItem[] }>(`/tasks?parent_id=${encodeURIComponent(task.id)}`, { token }),
     ]);
+    // Outra tarefa foi aberta enquanto esta carregava: descarta a resposta antiga.
+    if (openSeq !== openTaskSeqRef.current) return;
+    setTaskDetailsLoading(false);
     setTaskActivity(activityResp.data?.activities ?? []);
     const summaryTotal = summaryResp.data?.total_seconds ?? 0;
     const summaryLogs = summaryResp.data?.logs ?? [];
@@ -6964,15 +7010,40 @@ export function AppShell() {
   async function copyTaskDeepLink(taskId: string) {
     const hash = `#task/${taskId}`;
     const url = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}${hash}` : hash;
-    if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", hash);
-    }
-    try {
-      await navigator.clipboard.writeText(url);
+    if (await copyToClipboard({ text: url })) {
       apiMessage.success("Link copiado.");
-    } catch {
+    } else {
       apiMessage.info(`Link: ${url}`);
     }
+  }
+  async function copyTaskAsText(task: TaskItem) {
+    const authorName = (authorId: number) =>
+      taskAssigneePickList.find((u) => u.id === authorId)?.name ??
+      adminUsersCache.find((u) => u.id === authorId)?.name ??
+      (authorId === currentUserId ? currentUserIdentity.displayName : `Usuario ${authorId}`);
+    const statusLabel = TASK_STATUS_LABEL_PT[task.status] ?? task.status;
+    const lines: string[] = [
+      `${task.number != null ? `#${task.number} ` : ""}${task.title}`,
+      `Status: ${statusLabel} | Prioridade: ${task.priority} | Responsavel: ${task.assignee_name ?? "-"}`,
+      `Inicio: ${formatDate(task.start_date)} | Prazo: ${formatDate(task.end_date)}`,
+      "",
+      "DESCRICAO",
+      htmlToPlainText(task.description) || "(sem descricao)",
+    ];
+    if (taskSubtasks.length > 0) {
+      lines.push("", "SUBTAREFAS", ...taskSubtasks.map((sub) => `- [${sub.status === "done" ? "x" : " "}] ${sub.title}`));
+    }
+    const ordered = [...taskComments].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    if (ordered.length > 0) {
+      lines.push("", "COMENTARIOS");
+      for (const comment of ordered) {
+        const clean = parseCommentReplyMeta(comment.content).cleanContent;
+        lines.push(`${authorName(comment.author_id)} - ${formatDate(comment.created_at)}`, htmlToPlainText(clean), "");
+      }
+    }
+    lines.push(`Link: ${typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#task/${task.id}` : ""}`);
+    if (await copyToClipboard({ text: lines.join("\n").trim() })) apiMessage.success("Tarefa copiada como texto.");
+    else apiMessage.error("Nao foi possivel copiar.");
   }
   async function createTask(payload: Record<string, unknown>, successMessage = "Tarefa criada.") {
     const response = await apiRequest("/tasks", {
@@ -11903,6 +11974,9 @@ export function AppShell() {
                   <ProblemReportsPanel token={token} />
                 ) : null}
 
+                {activeKey === "automations" && canAccessAdminArea("automations") && token ? (
+                  <AutomationsPanel token={token} />
+                ) : null}
                 {activeKey === "agents" && canAccessAdminArea("agents") && token ? (
                   <AgentsPanel token={token} />
                 ) : null}
@@ -15789,13 +15863,14 @@ export function AppShell() {
         }
         extra={
           selectedTask ? (
-            <Button
-              size="small"
-              icon={<LinkOutlined />}
-              onClick={() => void copyTaskDeepLink(selectedTask.id)}
-            >
-              Copiar link
-            </Button>
+            <Space size={8}>
+              <Button size="small" icon={<CopyOutlined />} onClick={() => void copyTaskAsText(selectedTask)}>
+                Copiar tudo
+              </Button>
+              <Button size="small" icon={<LinkOutlined />} onClick={() => void copyTaskDeepLink(selectedTask.id)}>
+                Copiar link
+              </Button>
+            </Space>
           ) : null
         }
         open={Boolean(selectedTask)}
@@ -16336,6 +16411,7 @@ export function AppShell() {
                           );
                           repliesByParent.set(parentId, replies);
                         }
+                        if (taskDetailsLoading) return <Skeleton active paragraph={{ rows: 3 }} />;
                         if (roots.length === 0) return <Empty description="Ainda nao ha atualizacoes nesta tarefa." />;
                         return roots.map((root) => {
                           const rootComment = root.comment;
@@ -16353,6 +16429,16 @@ export function AppShell() {
                                     <Tag>Atualizacao</Tag>
                                   </Space>
                                   <Space>
+                                    <Button
+                                      size="small"
+                                      icon={<CopyOutlined />}
+                                      aria-label={`Copiar comentario de ${rootAuthor}`}
+                                      onClick={() =>
+                                        void copyRichContent(root.cleanContent, "Comentario copiado.", `${rootAuthor} - ${formatDate(rootComment.created_at)}`)
+                                      }
+                                    >
+                                      Copiar
+                                    </Button>
                                     <Button
                                       size="small"
                                       onClick={() => {
@@ -16464,6 +16550,16 @@ export function AppShell() {
                                             <Tag color="processing">Resposta</Tag>
                                           </Space>
                                           <Space>
+                                            <Button
+                                              size="small"
+                                              icon={<CopyOutlined />}
+                                              aria-label={`Copiar resposta de ${replyAuthor}`}
+                                              onClick={() =>
+                                                void copyRichContent(reply.cleanContent, "Resposta copiada.", `${replyAuthor} - ${formatDate(reply.comment.created_at)}`)
+                                              }
+                                            >
+                                              Copiar
+                                            </Button>
                                             <Button
                                               size="small"
                                               onClick={() => {

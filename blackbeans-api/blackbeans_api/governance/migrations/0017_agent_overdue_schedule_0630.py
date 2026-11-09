@@ -61,7 +61,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("governance", "0016_agent_definition_run"),
-        ("django_celery_beat", "0001_initial"),
+        ("django_celery_beat", "0006_auto_20180322_0932"),
     ]
 
     operations = [
