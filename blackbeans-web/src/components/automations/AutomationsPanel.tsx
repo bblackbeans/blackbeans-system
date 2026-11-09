@@ -379,7 +379,7 @@ export function AutomationsPanel({ token }: { token: string }) {
           );
         case "recipients":
           return (
-            <Select key={spec.key} {...common} mode="multiple" value={(current as (string | number)[]) ?? []} onChange={set}
+            <Select key={spec.key} {...common} mode="multiple" value={Array.isArray(current) ? (current as (string | number)[]) : current ? [current as string | number] : []} onChange={set}
               options={[
                 { value: "assignee", label: "Responsavel da tarefa" },
                 { value: "owner", label: "Criador da automacao" },
